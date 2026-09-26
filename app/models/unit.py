@@ -10,6 +10,7 @@ from app.db.base import Base
 from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
+    from app.models.custody_event import CustodyEvent
     from app.models.location import Location
     from app.models.lot import Lot
 
