@@ -11,6 +11,8 @@ venv/
 
 # Local configuration
 .env
+.env.example
+.env.local
 
 # Editors and operating systems
 .idea/

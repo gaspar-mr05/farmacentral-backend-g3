@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import AnyHttpUrl, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     app_name: str = "Farmacentral Backend"
     app_env: str = "local"
     database_url: str = Field(min_length=1)
+    farma_central_base_url: AnyHttpUrl
+    farma_central_api_secret: SecretStr
+    farma_central_ftp: str = Field(min_length=1)
 
 
 @lru_cache
