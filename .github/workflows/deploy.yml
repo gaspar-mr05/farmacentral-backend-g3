@@ -1,0 +1,31 @@
+name: Deploy production
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure deployment SSH key
+        env:
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' 'choripan3.ing.uc.cl ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINfaqDL752QpAVPqyq464LDB6CqSv1HM927P834FKqvD' > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy current main branch
+        run: |
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes integracion@choripan3.ing.uc.cl \
+            'cd /opt/farmacentral-backend && git pull --ff-only origin main && ./deploy/release.sh'
