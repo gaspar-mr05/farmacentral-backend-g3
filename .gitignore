@@ -11,6 +11,7 @@ venv/
 
 # Local configuration
 .env
+.env.local
 
 # Editors and operating systems
 .idea/
@@ -20,3 +21,10 @@ venv/
 # Coverage
 .coverage
 htmlcov/
+
+# Archivos
+IIC3103_Entrega1_Backend_Paso_a_Paso.pdf
+
+# Tests locales temporales
+tests/test_farma_central_client.py
+tests/test_config.py
