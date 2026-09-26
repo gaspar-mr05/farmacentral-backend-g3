@@ -11,7 +11,7 @@ async def test_health_returns_ok() -> None:
         transport=transport,
         base_url="http://testserver",
     ) as client:
-        response = await client.get("/health")
+        response = await client.get("/api/health")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}

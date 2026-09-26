@@ -61,7 +61,7 @@ alembic revision --autogenerate -m "descripcion del cambio"
 uvicorn app.main:app --reload
 ```
 
-El estado de la aplicación queda disponible en `GET /health` y la documentación
+El estado de la aplicación queda disponible en `GET /api/health` y la documentación
 interactiva en `/docs`.
 
 ## Verificaciones
@@ -85,6 +85,23 @@ Para aplicar automáticamente el formato:
 ruff format .
 ```
 
+## Despliegue
+
+Los archivos de `deploy/` preparan la aplicación para un servidor Ubuntu:
+
+- `farmacentral-backend.service` ejecuta Uvicorn mediante systemd y lo reinicia
+  ante fallos.
+- `nginx.conf` publica la aplicación mediante un proxy inverso y deja Uvicorn
+  accesible solo desde el servidor local.
+
+Las credenciales y la configuración del ambiente desplegado deben guardarse en
+`/opt/farmacentral-backend/.env`; ese archivo no se versiona.
+
+Cada `push` a `main` ejecuta `.github/workflows/deploy.yml`. El workflow se
+conecta al servidor con la clave guardada en el secreto `SERVER_SSH_KEY`,
+actualiza el clon con `git pull --ff-only`, instala las dependencias, aplica las
+migraciones, reinicia el servicio y comprueba `GET /api/health`.
+
 ## Estructura
 
 - `app/api`: composición del router y endpoints HTTP.
@@ -97,6 +114,7 @@ ruff format .
 - `app/services`: futuros servicios y casos de uso.
 - `alembic`: entorno y futuras versiones de migraciones.
 - `tests`: pruebas automáticas.
+- `deploy`: configuración versionable de systemd y Nginx para el servidor.
 
 Las dependencias apuntan desde la capa HTTP hacia contratos y, cuando existan,
 hacia servicios. El acceso a datos quedará encapsulado en repositorios. Por ahora
