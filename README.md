@@ -49,6 +49,16 @@ Aplicar las migraciones existentes:
 alembic upgrade head
 ```
 
+Sincronizar el catálogo, los espacios y el inventario real de Farma Central:
+
+```bash
+python -m scripts.sync_inventory
+```
+
+La sincronización es idempotente: actualiza los registros usando los identificadores
+externos estables y marca como no disponibles las unidades previamente disponibles que
+ya no aparecen en el inventario informado por Farma Central.
+
 Cuando se agreguen modelos, crear una migración revisable con:
 
 ```bash
@@ -106,12 +116,12 @@ migraciones, reinicia el servicio y comprueba `GET /api/health`.
 
 - `app/api`: composición del router y endpoints HTTP.
 - `app/core`: configuración transversal de la aplicación.
-- `app/db`: base declarativa, engine y fábrica de sesiones de SQLAlchemy.
-- `app/integrations`: futuros clientes y adaptadores de sistemas externos.
-- `app/models`: futuros modelos persistentes de SQLAlchemy.
-- `app/repositories`: futuras consultas y operaciones de persistencia.
-- `app/schemas`: contratos de validación y serialización de la API.
-- `app/services`: futuros servicios y casos de uso.
+- `app/clients`: comunicación con sistemas externos como Farma Central.
+- `app/db`: conexión y operaciones de persistencia con PostgreSQL.
+- `app/models`: modelos persistentes de SQLAlchemy.
+- `app/schemas`: contratos y estructuras de datos validadas.
+- `app/services`: flujos de negocio, como la sincronización de inventario.
+- `scripts`: comandos manuales de desarrollo y operación.
 - `alembic`: entorno y futuras versiones de migraciones.
 - `tests`: pruebas automáticas.
 - `deploy`: configuración versionable de systemd y Nginx para el servidor.

@@ -1,5 +1,6 @@
 # app/models/location.py
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, String
 from sqlalchemy.dialects.postgresql import UUID
@@ -7,6 +8,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.mixins import TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.unit import Unit
 
 
 class Location(Base, TimestampMixin):

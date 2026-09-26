@@ -6,8 +6,10 @@ from app.models import Location, Lot, LotOrigin, Product, ProductCategory, Unit
 
 
 def test_can_create_and_traverse_inventory_relationships(db_session):
+    test_id = uuid.uuid4().hex[:8]
+    sku = f"API-AMOXI-500-{test_id}"
     product = Product(
-        sku="API-AMOXI-500",
+        sku=sku,
         name="Amoxicilina 500mg (principio activo)",
         category=ProductCategory.INSUMO,
         batch_size=50,
@@ -54,7 +56,7 @@ def test_can_create_and_traverse_inventory_relationships(db_session):
     assert fetched_unit.id == unit.id
 
     # navegar hacia atrás: unidad -> lote -> producto
-    assert fetched_unit.lot.product.sku == "API-AMOXI-500"
+    assert fetched_unit.lot.product.sku == sku
 
     # navegar hacia la ubicación actual
     assert fetched_unit.current_location.code == "BODEGA_PRINCIPAL"

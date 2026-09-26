@@ -1,6 +1,7 @@
 # app/models/product.py
-import enum
 import uuid
+from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, Enum, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
@@ -9,8 +10,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 from app.models.mixins import TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.lot import Lot
 
-class ProductCategory(str, enum.Enum):
+
+class ProductCategory(StrEnum):
     INSUMO = "insumo"
     ACONDICIONADO = "acondicionado"
     KIT = "kit"

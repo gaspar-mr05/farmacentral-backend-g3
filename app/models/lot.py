@@ -1,7 +1,8 @@
 # app/models/lot.py
-import enum
 import uuid
 from datetime import datetime
+from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, Enum, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
@@ -10,8 +11,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 from app.models.mixins import TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.product import Product
+    from app.models.unit import Unit
 
-class LotOrigin(str, enum.Enum):
+
+class LotOrigin(StrEnum):
     OWN_PRODUCTION = "own_production"
     FARMA_CENTRAL = "farma_central"
     OTHER_DISTRIBUTOR = "other_distributor"
