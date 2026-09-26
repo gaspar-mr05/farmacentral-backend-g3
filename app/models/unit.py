@@ -31,3 +31,4 @@ class Unit(Base, TimestampMixin):
 
     lot: Mapped["Lot"] = relationship(back_populates="units")
     current_location: Mapped["Location"] = relationship(back_populates="units")
+    custody_events: Mapped[list["CustodyEvent"]] = relationship(back_populates="unit")

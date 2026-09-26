@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Location, Lot, Product, Unit
+from app.models import Location, Lot, Product, Unit, CustodyEventType
+from app.services import custody_service
 from app.schemas.inventory import (
     InventoryData,
     LocationData,
@@ -143,6 +144,7 @@ def _upsert_units(
         lot = lots[record.lot_external_id]
         location = locations[record.location_code]
         unit = units.get(record.external_unit_id)
+
         if unit is None:
             unit = Unit(
                 external_unit_id=record.external_unit_id,
@@ -151,23 +153,44 @@ def _upsert_units(
                 status=record.status,
             )
             session.add(unit)
+            session.flush()  # asegura unit.id antes de crear el evento
             units[record.external_unit_id] = unit
             created += 1
+
+            custody_service.log_custody_event(
+                session,
+                unit_id=unit.id,
+                event_type=CustodyEventType.RECEIVED,
+                from_location_id=None,
+                to_location_id=location.id,
+            )
         else:
-            updated += _update(
+            previous_location_id = unit.current_location_id  # captúralo ANTES de _update
+
+            changed = _update(
                 unit,
                 lot_id=lot.id,
                 current_location_id=location.id,
                 status=record.status,
             )
+            updated += changed
+
+            if previous_location_id != location.id:
+                custody_service.log_custody_event(
+                    session,
+                    unit_id=unit.id,
+                    event_type=CustodyEventType.MOVED,
+                    from_location_id=previous_location_id,
+                    to_location_id=location.id,
+                )
 
     visible_ids = {record.external_unit_id for record in records}
     for external_id, unit in units.items():
         if external_id not in visible_ids and unit.status == "available":
             unit.status = "unavailable"
             updated += 1
-    return EntityChanges(created, updated)
 
+    return EntityChanges(created, updated)
 
 def _update(entity: object, **values: object) -> int:
     changed = False
