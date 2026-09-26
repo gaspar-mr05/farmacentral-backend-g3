@@ -20,3 +20,6 @@ venv/
 # Coverage
 .coverage
 htmlcov/
+
+# Archivos
+IIC3103_Entrega1_Backend_Paso_a_Paso.pdf
