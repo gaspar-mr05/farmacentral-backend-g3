@@ -49,3 +49,8 @@ def upsert_products(
         updated += int(changed)
 
     return ProductUpsertResult(created, updated, products)
+
+
+def list_products(session: Session) -> list[Product]:
+    statement = select(Product).order_by(Product.name, Product.sku)
+    return session.scalars(statement).all()
