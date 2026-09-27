@@ -27,6 +27,18 @@ class UnitUpsertResult:
     location_changes: tuple[UnitLocationChange, ...]
 
 
+def get_unit_by_external_id(
+    session: Session,
+    external_unit_id: str,
+    *,
+    for_update: bool = False,
+) -> Unit | None:
+    statement = select(Unit).where(Unit.external_unit_id == external_unit_id)
+    if for_update:
+        statement = statement.with_for_update()
+    return session.scalar(statement)
+
+
 def upsert_units(
     session: Session,
     records: Iterable[UnitData],

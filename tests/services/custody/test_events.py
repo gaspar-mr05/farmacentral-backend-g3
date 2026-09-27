@@ -12,7 +12,7 @@ from app.schemas.locations import LocationData
 from app.schemas.lots import LotData
 from app.schemas.products import ProductData
 from app.schemas.units import UnitData
-from app.services.inventory_sync import sync_inventory
+from app.services.inventory.sync import sync_inventory
 
 
 def _build_inventory_data(
@@ -61,7 +61,7 @@ def test_sync_creates_received_event_for_new_unit(db_session: Session) -> None:
 
     sync_inventory(db_session, data)
 
-    unit = db_session.query(Unit).one()
+    unit = db_session.query(Unit).filter_by(external_unit_id="UNIT-001").one()
     events = db_session.query(CustodyEvent).filter_by(unit_id=unit.id).all()
 
     assert len(events) == 1
@@ -77,7 +77,7 @@ def test_sync_creates_moved_event_when_location_changes(db_session: Session) -> 
     data_v2 = _build_inventory_data(unit_location="CAMARA_FRIO")
     sync_inventory(db_session, data_v2)
 
-    unit = db_session.query(Unit).one()
+    unit = db_session.query(Unit).filter_by(external_unit_id="UNIT-001").one()
     events = (
         db_session.query(CustodyEvent)
         .filter_by(unit_id=unit.id)
@@ -99,7 +99,7 @@ def test_sync_does_not_duplicate_events_when_nothing_changes(
     sync_inventory(db_session, data)
     sync_inventory(db_session, data)
 
-    unit = db_session.query(Unit).one()
+    unit = db_session.query(Unit).filter_by(external_unit_id="UNIT-001").one()
     events = db_session.query(CustodyEvent).filter_by(unit_id=unit.id).all()
 
     assert len(events) == 1

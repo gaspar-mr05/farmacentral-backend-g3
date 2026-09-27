@@ -7,7 +7,7 @@ from app.clients.farma_central_exceptions import (
     FarmaCentralInvalidResponseError,
     FarmaCentralTimeoutError,
 )
-from tests.farma_central_support import make_settings
+from tests.support.farma_central import make_settings
 
 
 @pytest.mark.anyio

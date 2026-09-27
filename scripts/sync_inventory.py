@@ -2,7 +2,7 @@ import asyncio
 
 from app.clients.farma_central import FarmaCentralClient
 from app.db.session import SessionLocal
-from app.services.inventory_sync import InventorySyncService
+from app.services.inventory.sync import InventorySyncService
 
 
 async def run() -> None:
