@@ -20,6 +20,7 @@ async def test_read_operations_use_expected_endpoints_and_reuse_token() -> None:
         assert request.headers["Authorization"] == "Bearer test-token"
         if request.url.path == "/api/spaces/store-1/products":
             assert request.url.params["sku"] == "SKU-1"
+            assert request.url.params["limit"] == "200"
         return httpx.Response(200, json={"path": request.url.path})
 
     async with httpx.AsyncClient(
@@ -31,7 +32,11 @@ async def test_read_operations_use_expected_endpoints_and_reuse_token() -> None:
         available_response = await client.get_available_products()
         spaces_response = await client.get_spaces()
         inventory_response = await client.get_space_inventory("store-1")
-        products_response = await client.get_space_products("store-1", "SKU-1")
+        products_response = await client.get_space_products(
+            "store-1",
+            "SKU-1",
+            limit=200,
+        )
 
     assert available_response == {"path": "/api/products/available"}
     assert spaces_response == {"path": "/api/spaces"}
@@ -85,3 +90,41 @@ async def test_move_product_patches_destination_store_and_accepts_empty_response
         result = await client.move_product("unit-1", "store-2")
 
     assert result is None
+
+
+@pytest.mark.anyio
+async def test_supply_operations_use_expected_payloads() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/auth":
+            return httpx.Response(200, json={"token": "test-token"})
+        if request.url.path == "/api/fabrication/challenge":
+            assert request.method == "POST"
+            assert json.loads(request.content) == {"sku": "SUPPLY-1", "quantity": 10}
+            return httpx.Response(201, json={"challengeId": "challenge-1"})
+
+        assert request.method == "POST"
+        assert request.url.path == "/api/products"
+        assert json.loads(request.content) == {
+            "sku": "SUPPLY-1",
+            "quantity": 10,
+            "challengeId": "challenge-1",
+            "nonce": "42",
+        }
+        return httpx.Response(201, json={"availableAt": "2099-01-01T00:00:00Z"})
+
+    async with httpx.AsyncClient(
+        base_url="https://example.test/api/",
+        transport=httpx.MockTransport(handler),
+    ) as http_client:
+        client = FarmaCentralClient(settings=make_settings(), http_client=http_client)
+
+        challenge = await client.request_fabrication_challenge("SUPPLY-1", 10)
+        result = await client.request_products(
+            sku="SUPPLY-1",
+            quantity=10,
+            challenge_id="challenge-1",
+            nonce="42",
+        )
+
+    assert challenge == {"challengeId": "challenge-1"}
+    assert result == {"availableAt": "2099-01-01T00:00:00Z"}

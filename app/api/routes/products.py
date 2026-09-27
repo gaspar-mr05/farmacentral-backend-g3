@@ -5,7 +5,10 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_farma_central_client
 from app.clients.farma_central import FarmaCentralClient
-from app.clients.farma_central_exceptions import FarmaCentralError
+from app.clients.farma_central_exceptions import (
+    FarmaCentralError,
+    FarmaCentralHTTPError,
+)
 from app.db.session import get_session
 from app.schemas.movements import ProductMovementRequest, ProductMovementResponse
 from app.schemas.products import ProductResponse
@@ -56,6 +59,11 @@ async def move_product(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
+        ) from exc
+    except FarmaCentralHTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Farma Central rejected the movement (HTTP {exc.status_code})",
         ) from exc
     except FarmaCentralError as exc:
         raise HTTPException(

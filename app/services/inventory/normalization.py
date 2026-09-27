@@ -70,18 +70,19 @@ def _normalize_stock(
     units: dict[str, UnitData] = {}
     for unit in external_units:
         _validate_references(unit, product_skus, location_codes)
-        lot = LotData(unit.batch, unit.sku, unit.expires_at, LotOrigin.FARMA_CENTRAL)
-        existing_lot = lots.get(unit.batch)
+        lot_id = unit.batch or f"unreported:{unit.external_id}"
+        lot = LotData(lot_id, unit.sku, unit.expires_at, LotOrigin.FARMA_CENTRAL)
+        existing_lot = lots.get(lot_id)
         if existing_lot is not None and existing_lot.product_sku != unit.sku:
             raise FarmaCentralInvalidResponseError(
-                f"Lot {unit.batch} has inconsistent product data"
+                f"Lot {lot_id} has inconsistent product data"
             )
         if existing_lot is None or lot.expires_at < existing_lot.expires_at:
-            lots[unit.batch] = lot
+            lots[lot_id] = lot
 
         normalized_unit = UnitData(
             unit.external_id,
-            unit.batch,
+            lot_id,
             unit.store_id,
             "available",
         )

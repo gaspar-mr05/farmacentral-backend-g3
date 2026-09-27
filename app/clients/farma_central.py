@@ -11,6 +11,10 @@ from app.clients.farma_central_exceptions import (
     FarmaCentralTimeoutError,
 )
 from app.core.config import Settings, get_settings
+from app.schemas.farma_central import (
+    FarmaCentralChallengeRequest,
+    FarmaCentralProductRequest,
+)
 
 JSONResponse = dict[str, Any] | list[Any]
 
@@ -53,8 +57,17 @@ class FarmaCentralClient:
     async def get_space_inventory(self, store_id: str) -> JSONResponse:
         return await self.get(f"/spaces/{store_id}/inventory")
 
-    async def get_space_products(self, store_id: str, sku: str) -> JSONResponse:
-        return await self.get(f"/spaces/{store_id}/products", params={"sku": sku})
+    async def get_space_products(
+        self,
+        store_id: str,
+        sku: str,
+        *,
+        limit: int | None = None,
+    ) -> JSONResponse:
+        params: dict[str, Any] = {"sku": sku}
+        if limit is not None:
+            params["limit"] = limit
+        return await self.get(f"/spaces/{store_id}/products", params=params)
 
     async def move_product(self, product_id: str, store_id: str) -> None:
         await self._request(
@@ -62,6 +75,36 @@ class FarmaCentralClient:
             f"/products/{product_id}",
             json={"store": store_id},
             allow_empty=True,
+        )
+
+    async def request_fabrication_challenge(
+        self,
+        sku: str,
+        quantity: int,
+    ) -> JSONResponse:
+        request = FarmaCentralChallengeRequest(sku=sku, quantity=quantity)
+        return await self.post(
+            "/fabrication/challenge",
+            request.model_dump(by_alias=True),
+        )
+
+    async def request_products(
+        self,
+        *,
+        sku: str,
+        quantity: int,
+        challenge_id: str,
+        nonce: str,
+    ) -> JSONResponse:
+        request = FarmaCentralProductRequest(
+            sku=sku,
+            quantity=quantity,
+            challengeId=challenge_id,
+            nonce=nonce,
+        )
+        return await self.post(
+            "/products",
+            request.model_dump(by_alias=True),
         )
 
     async def get(

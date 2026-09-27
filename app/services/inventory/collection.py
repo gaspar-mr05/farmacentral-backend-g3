@@ -53,7 +53,11 @@ class InventoryCollector:
         ]
         product_payloads = await asyncio.gather(
             *(
-                self._client.get_space_products(space.external_id, item.sku)
+                self._client.get_space_products(
+                    space.external_id,
+                    item.sku,
+                    limit=min(item.quantity, 200),
+                )
                 for space, item in requests
             )
         )

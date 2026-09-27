@@ -19,6 +19,8 @@ class FakeInventorySource:
         self.product_name = "Amoxicilina 500 mg"
         self.unit_store: str | None = self.store_1
         self.expires_at = datetime.now(UTC) + timedelta(days=30)
+        self.include_batch = True
+        self.requested_limits: list[int | None] = []
 
     async def get_available_products(self):
         return [
@@ -41,18 +43,25 @@ class FakeInventorySource:
         quantity = int(store_id == self.unit_store)
         return [{"sku": self.sku, "quantity": quantity}]
 
-    async def get_space_products(self, store_id: str, sku: str):
+    async def get_space_products(
+        self,
+        store_id: str,
+        sku: str,
+        *,
+        limit: int | None = None,
+    ):
+        self.requested_limits.append(limit)
         if store_id != self.unit_store:
             return []
-        return [
-            {
-                "_id": self.unit_id,
-                "sku": sku,
-                "store": store_id,
-                "expiresAt": self.expires_at.isoformat(),
-                "batch": self.lot_id,
-            }
-        ]
+        unit = {
+            "_id": self.unit_id,
+            "sku": sku,
+            "store": store_id,
+            "expiresAt": self.expires_at.isoformat(),
+        }
+        if self.include_batch:
+            unit["batch"] = self.lot_id
+        return [unit]
 
 
 @pytest.mark.anyio
@@ -111,6 +120,20 @@ async def test_sync_is_idempotent_and_updates_external_changes(db_session) -> No
     db_session.refresh(unit)
     assert missing.units.updated == 1
     assert unit.status == "unavailable"
+
+
+@pytest.mark.anyio
+async def test_sync_accepts_missing_external_batch(db_session) -> None:
+    client = FakeInventorySource()
+    client.include_batch = False
+
+    result = await InventorySyncService(client, db_session).synchronize()
+
+    fallback_lot_id = f"unreported:{client.unit_id}"
+    assert result.lots.created == 1
+    assert result.units.created == 1
+    assert _count(db_session, Lot, Lot.external_lot_id == fallback_lot_id) == 1
+    assert client.requested_limits == [1]
 
 
 def _count(db_session, model, criterion) -> int:

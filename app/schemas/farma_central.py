@@ -41,4 +41,33 @@ class FarmaCentralUnit(BaseModel):
     sku: str = Field(min_length=1)
     store_id: str = Field(alias="store", min_length=1)
     expires_at: datetime = Field(alias="expiresAt")
-    batch: str = Field(min_length=1)
+    batch: str | None = Field(default=None, min_length=1)
+
+
+class FarmaCentralChallengeRequest(BaseModel):
+    sku: str = Field(min_length=1)
+    quantity: int = Field(ge=1, le=5000)
+
+
+class FarmaCentralChallengeResponse(BaseModel):
+    challenge_id: str = Field(alias="challengeId", min_length=1)
+    prefix: str = Field(min_length=1)
+    algorithm: Literal["sha256-leading-zero-bits"]
+    difficulty: int = Field(ge=0)
+    sku: str = Field(min_length=1)
+    quantity: int = Field(ge=1, le=5000)
+    expires_at: datetime = Field(alias="expiresAt")
+
+
+class FarmaCentralProductRequest(BaseModel):
+    sku: str = Field(min_length=1)
+    quantity: int = Field(ge=1, le=5000)
+    challenge_id: str = Field(alias="challengeId", min_length=1)
+    nonce: str = Field(min_length=1)
+
+
+class FarmaCentralSupplyResponse(BaseModel):
+    sku: str = Field(min_length=1)
+    group: int
+    quantity: int = Field(ge=1, le=5000)
+    available_at: datetime = Field(alias="availableAt")

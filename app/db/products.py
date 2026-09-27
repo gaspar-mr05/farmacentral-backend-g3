@@ -15,6 +15,10 @@ class ProductUpsertResult:
     by_sku: dict[str, Product]
 
 
+def get_product_by_sku(session: Session, sku: str) -> Product | None:
+    return session.scalar(select(Product).where(Product.sku == sku))
+
+
 def upsert_products(
     session: Session, records: Iterable[ProductData]
 ) -> ProductUpsertResult:
