@@ -12,7 +12,7 @@ from app.schemas.locations import LocationData
 from app.schemas.lots import LotData
 from app.schemas.products import ProductData
 from app.schemas.units import UnitData
-from app.services.inventory_sync import sync_inventory
+from app.services.inventory.sync import sync_inventory
 
 
 def _build_inventory_data(

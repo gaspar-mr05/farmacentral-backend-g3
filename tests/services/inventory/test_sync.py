@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models import Location, Lot, Product, ProductCategory, Unit
-from app.services.inventory_sync import InventorySyncService
+from app.services.inventory.sync import InventorySyncService
 
 
 class FakeInventorySource:

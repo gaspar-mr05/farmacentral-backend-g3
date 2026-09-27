@@ -1,1 +1,1 @@
-"""Application services and use cases will live in this package."""
+"""Business use cases grouped by domain."""

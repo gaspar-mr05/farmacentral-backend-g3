@@ -56,17 +56,34 @@ class FarmaCentralClient:
     async def get_space_products(self, store_id: str, sku: str) -> JSONResponse:
         return await self.get(f"/spaces/{store_id}/products", params={"sku": sku})
 
+    async def move_product(self, product_id: str, store_id: str) -> None:
+        await self._request(
+            "PATCH",
+            f"/products/{product_id}",
+            json={"store": store_id},
+            allow_empty=True,
+        )
+
     async def get(
         self, path: str, params: dict[str, Any] | None = None
     ) -> JSONResponse:
-        return await self._request("GET", path, params=params)
+        payload = await self._request("GET", path, params=params)
+        return self._require_payload(payload)
 
     async def post(
         self, path: str, payload: dict[str, Any] | None = None
     ) -> JSONResponse:
-        return await self._request("POST", path, json=payload)
+        response_payload = await self._request("POST", path, json=payload)
+        return self._require_payload(response_payload)
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> JSONResponse:
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        allow_empty: bool = False,
+        **kwargs: Any,
+    ) -> JSONResponse | None:
         token = await self._get_token()
         response = await self._send(
             method, path, headers=self._authorization_headers(token), **kwargs
@@ -78,6 +95,8 @@ class FarmaCentralClient:
             )
 
         self._raise_for_status(response)
+        if allow_empty and not response.content:
+            return None
         return self._decode_json(response)
 
     async def _get_token(self) -> str:
@@ -145,5 +164,13 @@ class FarmaCentralClient:
         if not isinstance(payload, dict | list):
             raise FarmaCentralInvalidResponseError(
                 "Farma Central returned an unexpected JSON value"
+            )
+        return payload
+
+    @staticmethod
+    def _require_payload(payload: JSONResponse | None) -> JSONResponse:
+        if payload is None:
+            raise FarmaCentralInvalidResponseError(
+                "Farma Central returned an empty response"
             )
         return payload

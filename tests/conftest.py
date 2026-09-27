@@ -40,7 +40,10 @@ def db_session():
     """Sesión de DB envuelta en una transacción que se revierte al final del test."""
     connection = engine.connect()
     transaction = connection.begin()
-    session = TestingSessionLocal(bind=connection)
+    session = TestingSessionLocal(
+        bind=connection,
+        join_transaction_mode="create_savepoint",
+    )
 
     yield session
 

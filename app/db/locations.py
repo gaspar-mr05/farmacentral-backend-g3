@@ -15,6 +15,11 @@ class LocationUpsertResult:
     by_code: dict[str, Location]
 
 
+def get_location_by_code(session: Session, code: str) -> Location | None:
+    statement = select(Location).where(Location.code == code)
+    return session.scalar(statement)
+
+
 def upsert_locations(
     session: Session, records: Iterable[LocationData]
 ) -> LocationUpsertResult:
