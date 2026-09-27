@@ -1,25 +1,42 @@
 import asyncio
+from dataclasses import dataclass
 
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
 from app.clients.farma_central import FarmaCentralClient, JSONResponse
 from app.clients.farma_central_exceptions import FarmaCentralInvalidResponseError
-from app.db.inventory import InventorySyncResult, sync_inventory
-from app.models import LotOrigin, ProductCategory
+from app.db.locations import upsert_locations
+from app.db.lots import upsert_lots
+from app.db.products import upsert_products
+from app.db.units import UnitLocationChange, upsert_units
+from app.models import CustodyEventType, LotOrigin, ProductCategory
 from app.schemas.farma_central import (
     FarmaCentralInventoryItem,
     FarmaCentralProduct,
     FarmaCentralSpace,
     FarmaCentralUnit,
 )
-from app.schemas.inventory import (
-    InventoryData,
-    LocationData,
-    LotData,
-    ProductData,
-    UnitData,
-)
+from app.schemas.inventory import InventoryData
+from app.schemas.locations import LocationData
+from app.schemas.lots import LotData
+from app.schemas.products import ProductData
+from app.schemas.units import UnitData
+from app.services import custody_service
+
+
+@dataclass(frozen=True)
+class EntityChanges:
+    created: int = 0
+    updated: int = 0
+
+
+@dataclass(frozen=True)
+class InventorySyncResult:
+    products: EntityChanges
+    locations: EntityChanges
+    lots: EntityChanges
+    units: EntityChanges
 
 
 class InventorySyncService:
@@ -83,6 +100,47 @@ class InventorySyncService:
             _validate_units(space, item, space_units)
             units.extend(space_units)
         return units
+
+
+def sync_inventory(session: Session, data: InventoryData) -> InventorySyncResult:
+    products = upsert_products(session, data.products)
+    locations = upsert_locations(session, data.locations)
+    session.flush()
+
+    lots = upsert_lots(session, data.lots, products.by_sku)
+    session.flush()
+
+    units = upsert_units(
+        session,
+        data.units,
+        lots.by_external_id,
+        locations.by_code,
+    )
+    _record_custody_changes(session, units.location_changes)
+    session.flush()
+
+    return InventorySyncResult(
+        products=EntityChanges(products.created, products.updated),
+        locations=EntityChanges(locations.created, locations.updated),
+        lots=EntityChanges(lots.created, lots.updated),
+        units=EntityChanges(units.created, units.updated),
+    )
+
+
+def _record_custody_changes(
+    session: Session, changes: tuple[UnitLocationChange, ...]
+) -> None:
+    for change in changes:
+        event_type = (
+            CustodyEventType.RECEIVED if change.is_received else CustodyEventType.MOVED
+        )
+        custody_service.log_custody_event(
+            session,
+            unit_id=change.unit.id,
+            event_type=event_type,
+            from_location_id=change.from_location_id,
+            to_location_id=change.to_location_id,
+        )
 
 
 def _parse_list[Schema: BaseModel](

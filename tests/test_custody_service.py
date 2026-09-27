@@ -1,13 +1,19 @@
-from app.models import ProductCategory, CustodyEvent, CustodyEventType, Unit, LotOrigin
 from sqlalchemy.orm import Session
-from app.schemas.inventory import (
-    InventoryData,
-    LocationData,
-    LotData,
-    ProductData,
-    UnitData,
+
+from app.models import (
+    CustodyEvent,
+    CustodyEventType,
+    LotOrigin,
+    ProductCategory,
+    Unit,
 )
-from app.db.inventory import sync_inventory
+from app.schemas.inventory import InventoryData
+from app.schemas.locations import LocationData
+from app.schemas.lots import LotData
+from app.schemas.products import ProductData
+from app.schemas.units import UnitData
+from app.services.inventory_sync import sync_inventory
+
 
 def _build_inventory_data(
     unit_location: str = "RECEPCION",
@@ -36,7 +42,7 @@ def _build_inventory_data(
                 external_lot_id="LOT-001",
                 product_sku="PROD-001",
                 expires_at=None,
-                origin=LotOrigin.FARMA_CENTRAL,  # <--- CAMBIO AQUÍ (usar Enum o "farma_central")
+                origin=LotOrigin.FARMA_CENTRAL,
             )
         ],
         units=[
@@ -48,6 +54,8 @@ def _build_inventory_data(
             )
         ],
     )
+
+
 def test_sync_creates_received_event_for_new_unit(db_session: Session) -> None:
     data = _build_inventory_data(unit_location="RECEPCION")
 
@@ -73,7 +81,7 @@ def test_sync_creates_moved_event_when_location_changes(db_session: Session) -> 
     events = (
         db_session.query(CustodyEvent)
         .filter_by(unit_id=unit.id)
-        .order_by(CustodyEvent.occurred_at)  # <--- Cambia created_at por occurred_at
+        .order_by(CustodyEvent.occurred_at)
         .all()
     )
 
@@ -88,13 +96,11 @@ def test_sync_does_not_duplicate_events_when_nothing_changes(
 ) -> None:
     data = _build_inventory_data(unit_location="RECEPCION")
 
-    # Corremos la sincronización dos veces consecutivas con los mismos datos
     sync_inventory(db_session, data)
     sync_inventory(db_session, data)
 
     unit = db_session.query(Unit).one()
     events = db_session.query(CustodyEvent).filter_by(unit_id=unit.id).all()
 
-    # No se deben haber duplicado eventos de custodia
     assert len(events) == 1
     assert events[0].event_type == CustodyEventType.RECEIVED

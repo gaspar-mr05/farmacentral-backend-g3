@@ -1,9 +1,11 @@
 # tests/conftest.py
 import os
+from collections.abc import Generator
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 os.environ.setdefault(
     "DATABASE_URL",
@@ -15,6 +17,8 @@ os.environ.setdefault("FARMA_CENTRAL_FTP", "unused-ftp")
 os.environ.setdefault("FARMA_CENTRAL_GROUP", "3")
 
 import app.models  # noqa: F401  — registra los modelos en Base.metadata
+from app.db.session import get_session
+from app.main import app
 
 # Apunta al Postgres real de docker compose (mismo que usas en desarrollo,
 # por ahora no hay una DB de test separada).
@@ -43,3 +47,16 @@ def db_session():
     session.close()
     transaction.rollback()
     connection.close()
+
+
+@pytest.fixture
+def api_client(db_session: Session) -> Generator[TestClient, None, None]:
+    def override_session() -> Generator[Session, None, None]:
+        yield db_session
+
+    app.dependency_overrides[get_session] = override_session
+    try:
+        with TestClient(app) as client:
+            yield client
+    finally:
+        app.dependency_overrides.clear()
