@@ -2,7 +2,7 @@
 
 set -Eeuo pipefail
 
-readonly APP_DIR="/opt/farmacentral-backend"
+readonly APP_DIR="/home/integracion/farmacentral-backend"
 
 cd "$APP_DIR"
 

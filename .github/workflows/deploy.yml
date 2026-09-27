@@ -28,4 +28,4 @@ jobs:
       - name: Deploy current main branch
         run: |
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes integracion@choripan3.ing.uc.cl \
-            'cd /opt/farmacentral-backend && git pull --ff-only origin main && ./deploy/release.sh'
+            'cd /home/integracion/farmacentral-backend && git pull --ff-only origin main && ./deploy/release.sh'

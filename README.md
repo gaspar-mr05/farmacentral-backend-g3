@@ -1,131 +1,155 @@
 # Farmacentral Backend
 
-Esqueleto inicial del backend construido con Python 3.12, FastAPI, PostgreSQL,
-SQLAlchemy 2 y Alembic. No contiene todavía lógica ni modelos del dominio.
+API de integración construida con Python 3.12, FastAPI, PostgreSQL, SQLAlchemy
+y Alembic.
 
-## Requisitos
+## Configuración
 
-- Python 3.12
-- Docker con Docker Compose (para PostgreSQL local)
-
-## Configuración local
-
-Crear y activar un entorno virtual:
-
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-```
-
-Instalar la aplicación y las herramientas de desarrollo:
-
-```bash
-python -m pip install --upgrade pip
-python -m pip install -e '.[dev]'
-```
-
-Crear la configuración local a partir del ejemplo y reemplazar la contraseña de
-ejemplo por una credencial local propia:
+La aplicación lee `.env` y luego `.env.local`. Copia el ejemplo y completa sus
+valores antes de iniciar:
 
 ```bash
 cp .env.example .env
 ```
 
-`DATABASE_URL` es obligatoria. La aplicación muestra un error de validación al
-iniciar si no está definida. Las variables `POSTGRES_*` son utilizadas solo por
-Docker Compose y deben coincidir con la URL de conexión.
+Variables importantes:
 
-## PostgreSQL y migraciones
+- `DATABASE_URL`: conexión SQLAlchemy a PostgreSQL. En local normalmente usa
+  `localhost:5432`.
+- `POSTGRES_DB`, `POSTGRES_USER` y `POSTGRES_PASSWORD`: crean el contenedor de
+  PostgreSQL local y deben coincidir con `DATABASE_URL`.
+- `FARMA_CENTRAL_BASE_URL`: URL base HTTPS entregada para Farma Central.
+- `FARMA_CENTRAL_API_SECRET`: secreto del grupo. No debe versionarse.
+- `FARMA_CENTRAL_FTP` y `FARMA_CENTRAL_GROUP`: datos asignados al grupo.
 
-Levantar únicamente PostgreSQL:
+## Ejecutar en local
+
+Requisitos: Python 3.12 y Docker con Docker Compose.
+
+Desde la raíz del repositorio:
 
 ```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]'
+
+cp .env.example .env
+# Editar .env antes de continuar.
+
 docker compose up -d postgres
-```
-
-Aplicar las migraciones existentes:
-
-```bash
+docker compose exec postgres pg_isready
 alembic upgrade head
-```
-
-Sincronizar el catálogo, los espacios y el inventario real de Farma Central:
-
-```bash
-python -m scripts.sync_inventory
-```
-
-La sincronización es idempotente: actualiza los registros usando los identificadores
-externos estables y marca como no disponibles las unidades previamente disponibles que
-ya no aparecen en el inventario informado por Farma Central.
-
-Cuando se agreguen modelos, crear una migración revisable con:
-
-```bash
-alembic revision --autogenerate -m "descripcion del cambio"
-```
-
-## Servidor de desarrollo
-
-```bash
 uvicorn app.main:app --reload
 ```
 
-El estado de la aplicación queda disponible en `GET /api/health` y la documentación
-interactiva en `/docs`.
+La API queda disponible en:
 
-## Verificaciones
+- Salud: `http://127.0.0.1:8000/api/health`
+- Documentación: `http://127.0.0.1:8000/docs`
 
-Ejecutar los tests:
+Para detener PostgreSQL local:
+
+```bash
+docker compose down
+```
+
+## Ejecutar en el servidor proporcionado
+
+El proyecto vive en `/home/integracion/farmacentral-backend`. En el servidor,
+PostgreSQL es un servicio del sistema: no se usa Docker.
+
+### Primera instalación
+
+Con el repositorio ya clonado en esa ruta:
+
+```bash
+cd /home/integracion/farmacentral-backend
+
+python3.12 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install .
+
+cp .env.example .env
+chmod 600 .env
+# Editar .env con las credenciales del servidor.
+
+sudo systemctl enable --now postgresql
+sudo -u postgres pg_isready
+.venv/bin/alembic upgrade head
+
+sudo cp deploy/farmacentral-backend.service /etc/systemd/system/
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/farmacentral-backend
+sudo ln -sfn /etc/nginx/sites-available/farmacentral-backend \
+  /etc/nginx/sites-enabled/farmacentral-backend
+sudo nginx -t
+sudo systemctl daemon-reload
+sudo systemctl enable --now farmacentral-backend.service
+sudo systemctl reload nginx
+```
+
+Verificar:
+
+```bash
+sudo systemctl status farmacentral-backend.service --no-pager
+curl --fail http://127.0.0.1:8000/api/health
+```
+
+### Actualizar el servidor
+
+Cada `push` a `main` despliega mediante GitHub Actions. Para actualizar
+manualmente:
+
+```bash
+cd /home/integracion/farmacentral-backend
+git pull --ff-only origin main
+./deploy/release.sh
+```
+
+El script instala dependencias, ejecuta migraciones, reinicia el backend y
+comprueba su estado.
+
+Comandos útiles:
+
+```bash
+sudo systemctl restart farmacentral-backend.service
+sudo journalctl -u farmacentral-backend.service -n 100 --no-pager
+```
+
+## Sincronizar inventario
+
+Con PostgreSQL activo y las variables de Farma Central configuradas:
+
+```bash
+# Local, con el entorno virtual activado:
+python -m scripts.sync_inventory
+
+# Servidor:
+cd /home/integracion/farmacentral-backend
+.venv/bin/python -m scripts.sync_inventory
+```
+
+La sincronización es idempotente: actualiza catálogo, espacios e inventario sin
+duplicar los registros existentes.
+
+Si aparece `FarmaCentralConnectionError`, el problema ocurre antes de acceder a
+PostgreSQL: el backend no pudo abrir una conexión con
+`FARMA_CENTRAL_BASE_URL`. Comprueba que la URL de `.env` sea la entregada para
+el proyecto y que el servidor pueda resolver y alcanzar su host:
+
+```bash
+.venv/bin/python -c \
+  'from app.core.config import get_settings; print(get_settings().farma_central_base_url)'
+getent hosts HOST_DE_FARMA_CENTRAL
+curl --verbose --connect-timeout 10 https://HOST_DE_FARMA_CENTRAL
+```
+
+No publiques `.env` ni el secreto de la API al compartir la salida.
+
+## Verificaciones de desarrollo
 
 ```bash
 pytest
+ruff check app scripts tests
+ruff format --check app scripts tests
 ```
-
-Revisar estilo y formato:
-
-```bash
-ruff check .
-ruff format --check .
-```
-
-Para aplicar automáticamente el formato:
-
-```bash
-ruff format .
-```
-
-## Despliegue
-
-Los archivos de `deploy/` preparan la aplicación para un servidor Ubuntu:
-
-- `farmacentral-backend.service` ejecuta Uvicorn mediante systemd y lo reinicia
-  ante fallos.
-- `nginx.conf` publica la aplicación mediante un proxy inverso y deja Uvicorn
-  accesible solo desde el servidor local.
-
-Las credenciales y la configuración del ambiente desplegado deben guardarse en
-`/opt/farmacentral-backend/.env`; ese archivo no se versiona.
-
-Cada `push` a `main` ejecuta `.github/workflows/deploy.yml`. El workflow se
-conecta al servidor con la clave guardada en el secreto `SERVER_SSH_KEY`,
-actualiza el clon con `git pull --ff-only`, instala las dependencias, aplica las
-migraciones, reinicia el servicio y comprueba `GET /api/health`.
-
-## Estructura
-
-- `app/api`: composición del router y endpoints HTTP.
-- `app/core`: configuración transversal de la aplicación.
-- `app/clients`: comunicación con sistemas externos como Farma Central.
-- `app/db`: conexión y operaciones de persistencia con PostgreSQL.
-- `app/models`: modelos persistentes de SQLAlchemy.
-- `app/schemas`: contratos y estructuras de datos validadas.
-- `app/services`: flujos de negocio, como la sincronización de inventario.
-- `scripts`: comandos manuales de desarrollo y operación.
-- `alembic`: entorno y futuras versiones de migraciones.
-- `tests`: pruebas automáticas.
-- `deploy`: configuración versionable de systemd y Nginx para el servidor.
-
-Las dependencias apuntan desde la capa HTTP hacia contratos y, cuando existan,
-hacia servicios. El acceso a datos quedará encapsulado en repositorios. Por ahora
-no se agregan interfaces ni clases sin una necesidad concreta.
