@@ -81,10 +81,11 @@ def _normalize_stock(
             lots[lot_id] = lot
 
         normalized_unit = UnitData(
-            unit.external_id,
-            lot_id,
-            unit.store_id,
-            "available",
+            external_unit_id=unit.external_id,
+            lot_external_id=lot_id,
+            location_code=unit.store_id,
+            status="available",
+            effective_expires_at=unit.expires_at,
         )
         if unit.external_id in units and units[unit.external_id] != normalized_unit:
             raise FarmaCentralInvalidResponseError(

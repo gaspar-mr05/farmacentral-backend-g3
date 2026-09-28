@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -20,6 +22,7 @@ def _build_inventory_data(
     external_unit_id: str = "UNIT-001",
 ) -> InventoryData:
     """Helper para construir un objeto InventoryData válido en las pruebas."""
+    expires_at = datetime.now(UTC) + timedelta(days=30)
     return InventoryData(
         products=[
             ProductData(
@@ -51,6 +54,7 @@ def _build_inventory_data(
                 lot_external_id="LOT-001",
                 location_code=unit_location,
                 status="available",
+                effective_expires_at=expires_at,
             )
         ],
     )

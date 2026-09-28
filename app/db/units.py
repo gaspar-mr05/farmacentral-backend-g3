@@ -63,6 +63,7 @@ def upsert_units(
                 lot_id=lot.id,
                 current_location_id=location.id,
                 status=record.status,
+                effective_expires_at=record.effective_expires_at,
             )
             session.add(unit)
             session.flush()
@@ -76,10 +77,12 @@ def upsert_units(
             unit.lot_id != lot.id
             or unit.current_location_id != location.id
             or unit.status != record.status
+            or unit.effective_expires_at != record.effective_expires_at
         )
         unit.lot_id = lot.id
         unit.current_location_id = location.id
         unit.status = record.status
+        unit.effective_expires_at = record.effective_expires_at
         updated += int(changed)
 
         if previous_location_id != location.id:

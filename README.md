@@ -79,6 +79,8 @@ sudo -u postgres pg_isready
 .venv/bin/alembic upgrade head
 
 sudo cp deploy/farmacentral-backend.service /etc/systemd/system/
+sudo cp deploy/farmacentral-inventory-sync.service /etc/systemd/system/
+sudo cp deploy/farmacentral-inventory-sync.timer /etc/systemd/system/
 sudo cp deploy/nginx.conf /etc/nginx/sites-available/farmacentral-backend
 sudo ln -sfn /etc/nginx/sites-available/farmacentral-backend \
   /etc/nginx/sites-enabled/farmacentral-backend
@@ -114,6 +116,8 @@ Comandos útiles:
 ```bash
 sudo systemctl restart farmacentral-backend.service
 sudo journalctl -u farmacentral-backend.service -n 100 --no-pager
+sudo systemctl list-timers farmacentral-inventory-sync.timer
+sudo journalctl -u farmacentral-inventory-sync.service -n 100 --no-pager
 ```
 
 ## Sincronizar inventario
@@ -131,6 +135,41 @@ cd /home/integracion/farmacentral-backend
 
 La sincronización es idempotente: actualiza catálogo, espacios e inventario sin
 duplicar los registros existentes.
+
+En el servidor, `farmacentral-inventory-sync.timer` inicia la primera
+sincronización unos 30 segundos después de activarse y programa la siguiente
+aproximadamente un minuto después de que termine la anterior. De esta forma no
+se superponen dos ejecuciones del mismo servicio. Cada ejecución también mueve
+las unidades refrigeradas expuestas y vuelve a consultar su vencimiento
+efectivo cuando hubo movimientos.
+
+El timer no selecciona dev o prod por sí mismo: usa `FARMA_CENTRAL_BASE_URL`,
+las credenciales y `DATABASE_URL` del `.env` cargado por el servicio. No se debe
+apuntar una base de datos productiva a Farma Central dev. Para ejecutar esta
+automatización contra dev se debe usar una instalación y una base de datos dev
+separadas.
+
+Antes de habilitarlo por primera vez, comprobar la URL sin mostrar el secreto y
+ejecutar una sincronización inmediata:
+
+```bash
+cd /home/integracion/farmacentral-backend
+.venv/bin/python -c \
+  'from app.core.config import get_settings; print(get_settings().farma_central_base_url)'
+sudo systemctl start farmacentral-inventory-sync.service
+sudo journalctl -u farmacentral-inventory-sync.service -n 100 --no-pager
+```
+
+Si la ejecución termina correctamente y el ambiente es el esperado, habilitar
+la programación periódica:
+
+```bash
+sudo systemctl enable --now farmacentral-inventory-sync.timer
+sudo systemctl status farmacentral-inventory-sync.timer --no-pager
+```
+
+Los despliegues posteriores actualizan las unidades y reinician el timer solo
+si ya estaba habilitado; no lo activan automáticamente en un ambiente nuevo.
 
 Si aparece `FarmaCentralConnectionError`, el problema ocurre antes de acceder a
 PostgreSQL: el backend no pudo abrir una conexión con

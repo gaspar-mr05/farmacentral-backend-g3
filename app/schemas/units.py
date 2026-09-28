@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 
 from pydantic import BaseModel
 
@@ -9,6 +10,7 @@ class UnitData:
     lot_external_id: str
     location_code: str
     status: str
+    effective_expires_at: datetime
 
 
 class UnitResponse(BaseModel):

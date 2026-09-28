@@ -40,6 +40,7 @@ def test_can_create_and_traverse_inventory_relationships(db_session):
         lot_id=lot.id,
         current_location_id=location.id,
         status="available",
+        effective_expires_at=lot.expires_at,
     )
     db_session.add(unit)
     db_session.flush()
@@ -61,3 +62,4 @@ def test_can_create_and_traverse_inventory_relationships(db_session):
     # navegar hacia la ubicación actual
     assert fetched_unit.current_location.code == "BODEGA_PRINCIPAL"
     assert fetched_unit.current_location.is_refrigerated is False
+    assert fetched_unit.effective_expires_at == lot.expires_at
