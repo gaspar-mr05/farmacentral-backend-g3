@@ -54,6 +54,7 @@ def create_movement_scenario(session: Session) -> MovementScenario:
         lot_id=lot.id,
         current_location_id=origin.id,
         status="available",
+        effective_expires_at=lot.expires_at,
     )
     session.add(unit)
     session.commit()

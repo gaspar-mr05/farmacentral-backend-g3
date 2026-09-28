@@ -113,6 +113,7 @@ async def test_sync_is_idempotent_and_updates_external_changes(db_session) -> No
     assert lot.expires_at == client.expires_at
     assert unit is not None
     assert unit.current_location.code == client.store_2
+    assert unit.effective_expires_at == client.expires_at
 
     client.unit_store = None
     missing = await service.synchronize()

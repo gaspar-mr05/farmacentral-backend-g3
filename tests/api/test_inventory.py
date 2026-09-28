@@ -68,18 +68,21 @@ def inventory_scenario(db_session: Session) -> InventoryScenario:
                 lot_id=lot.id,
                 current_location_id=location.id,
                 status="available",
+                effective_expires_at=expires_at,
             ),
             Unit(
                 external_unit_id=unavailable_unit_id,
                 lot_id=lot.id,
                 current_location_id=location.id,
                 status="unavailable",
+                effective_expires_at=expires_at,
             ),
             Unit(
                 external_unit_id=other_location_unit_id,
                 lot_id=lot.id,
                 current_location_id=other_location.id,
                 status="available",
+                effective_expires_at=expires_at,
             ),
         ]
     )

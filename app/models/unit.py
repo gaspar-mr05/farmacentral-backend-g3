@@ -1,8 +1,8 @@
-# app/models/unit.py
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,3 +33,8 @@ class Unit(Base, TimestampMixin):
     lot: Mapped["Lot"] = relationship(back_populates="units")
     current_location: Mapped["Location"] = relationship(back_populates="units")
     custody_events: Mapped[list["CustodyEvent"]] = relationship(back_populates="unit")
+
+    effective_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
