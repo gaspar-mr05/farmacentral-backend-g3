@@ -168,8 +168,12 @@ sudo systemctl enable --now farmacentral-inventory-sync.timer
 sudo systemctl status farmacentral-inventory-sync.timer --no-pager
 ```
 
-Los despliegues posteriores actualizan las unidades y reinician el timer solo
-si ya estaba habilitado; no lo activan automáticamente en un ambiente nuevo.
+La instalación de los archivos de systemd es un paso manual único porque el
+workflow de despliegue no tiene permisos para escribir en
+`/etc/systemd/system`. Si esos archivos cambian, deben copiarse nuevamente y
+ejecutarse `sudo systemctl daemon-reload`. Los despliegues posteriores reinician
+el timer solo si ya estaba habilitado; no lo activan automáticamente en un
+ambiente nuevo.
 
 Si aparece `FarmaCentralConnectionError`, el problema ocurre antes de acceder a
 PostgreSQL: el backend no pudo abrir una conexión con

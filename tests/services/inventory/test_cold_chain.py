@@ -56,6 +56,7 @@ def create_cold_chain_scenario(
 ) -> ColdChainScenario:
     suffix = uuid4().hex
     expires_at = datetime.now(UTC) + timedelta(days=30)
+    session.execute(update(Unit).values(status="unavailable"))
     session.execute(update(Location).values(is_refrigerated=False))
     product = Product(
         sku=f"COLD-CHAIN-{suffix}",
