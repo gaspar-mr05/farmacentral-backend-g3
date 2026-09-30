@@ -34,3 +34,10 @@ def finish_production_run(
         output_product_id=output_product_id,
         completed_at=completed_at,
     )
+
+def link_production_run_to_existing_lot(
+    session: Session, *, run: ProductionRun, output_lot_id: uuid.UUID, completed_at: datetime
+) -> None:
+    run.output_lot_id = output_lot_id
+    run.completed_at = completed_at
+    session.flush()
