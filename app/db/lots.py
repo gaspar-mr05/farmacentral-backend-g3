@@ -1,5 +1,6 @@
+# app/db/lots.py
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,6 +14,7 @@ class LotUpsertResult:
     created: int
     updated: int
     by_external_id: dict[str, Lot]
+    created_lots: tuple[Lot, ...] = field(default_factory=tuple)
 
 
 def upsert_lots(
@@ -22,6 +24,7 @@ def upsert_lots(
 ) -> LotUpsertResult:
     lots = {lot.external_lot_id: lot for lot in session.scalars(select(Lot))}
     created = updated = 0
+    created_lots: list[Lot] = []
 
     for record in records:
         product = products_by_sku[record.product_sku]
@@ -35,6 +38,7 @@ def upsert_lots(
             )
             session.add(lot)
             lots[record.external_lot_id] = lot
+            created_lots.append(lot)
             created += 1
             continue
 
@@ -48,4 +52,4 @@ def upsert_lots(
         lot.origin = record.origin
         updated += int(changed)
 
-    return LotUpsertResult(created, updated, lots)
+    return LotUpsertResult(created, updated, lots, tuple(created_lots))
