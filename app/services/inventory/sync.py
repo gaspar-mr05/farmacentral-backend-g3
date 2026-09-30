@@ -5,9 +5,13 @@ from sqlalchemy.orm import Session
 from app.clients.farma_central import FarmaCentralClient
 from app.db.locations import upsert_locations
 from app.db.lots import upsert_lots
+from app.db.production_runs import find_pending_run_for_sku
+from app.services.production.runs import finish_production_run
 from app.db.products import upsert_products
 from app.db.units import UnitLocationChange, upsert_units
 from app.models import CustodyEventType
+from app.models.lot import LotOrigin
+from app.models.lot import Lot
 from app.schemas.inventory import InventoryData
 from app.services.custody import events as custody_events
 from app.services.inventory.collection import InventoryCollector
@@ -87,3 +91,15 @@ def _record_custody_changes(
             from_location_id=change.from_location_id,
             to_location_id=change.to_location_id,
         )
+
+
+def _handle_new_output_lots(session: Session, new_lots: list[Lot]) -> None:
+    """Para cada lote nuevo de origen propio, vincula la ProductionRun pendiente."""
+    for lot in new_lots:
+        if lot.origin != LotOrigin.OWN_PRODUCTION:
+            continue
+        run = find_pending_run_for_sku(session, sku=lot.product.sku)
+        if run is not None:
+            run.output_lot_id = lot.id
+            run.completed_at = datetime.now(timezone.utc)
+            session.flush()

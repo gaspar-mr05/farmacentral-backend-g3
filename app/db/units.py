@@ -101,3 +101,6 @@ def upsert_units(
 
 def set_current_location(unit: Unit, location_id: uuid.UUID) -> None:
     unit.current_location_id = location_id
+
+def set_status(unit: Unit, status: str) -> None:
+    unit.status = status

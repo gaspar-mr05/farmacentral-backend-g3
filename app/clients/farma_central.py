@@ -194,6 +194,8 @@ class FarmaCentralClient:
         if response.status_code in (401, 403):
             raise FarmaCentralAuthenticationError(response.status_code)
         if response.is_error:
+            print("ERROR STATUS:", response.status_code)
+            print("ERROR BODY:", response.text)
             raise FarmaCentralHTTPError(response.status_code)
 
     @staticmethod

@@ -17,7 +17,9 @@ if TYPE_CHECKING:
 class CustodyEventType(StrEnum):
     RECEIVED = "received"
     MOVED = "moved"
-    # a futuro: PRODUCTION_CONSUMED, PRODUCED, SOLD, DISPATCHED — se agregan
+    PRODUCTION_CONSUMED = "production_consumed"
+    PRODUCED = "produced"
+    # a futuro: SOLD, DISPATCHED — se agregan
     # solo cuando esas features realmente existan (Pasos 12, 18, 19)
 
 

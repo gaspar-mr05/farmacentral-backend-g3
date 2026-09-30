@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey
+from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,3 +31,4 @@ class ProductionRun(Base, TimestampMixin):
     inputs: Mapped[list["ProductionInput"]] = relationship(
         back_populates="production_run", cascade="all, delete-orphan"
     )
+    expected_sku: Mapped[str] = mapped_column(String, nullable=False)

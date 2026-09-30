@@ -58,6 +58,7 @@ def test_production_run_links_multiple_input_lots_to_one_output_lot(db_session):
 
     run = ProductionRun(
         output_lot_id=output_lot.id,
+        expected_sku="KIT-RESP-ADULTO",
         requested_at=now,
         completed_at=now,
     )
