@@ -46,10 +46,11 @@ class CustodyEvent(Base):
         ForeignKey("locations.id"), nullable=True
     )
 
-    # Referencias opcionales a futuro (Paso 11+ y Paso 16+). Nullable a propósito:
-    # no forzamos estas FKs hasta que ProductionRun y Order existan de verdad.
+    # Referencias opcionales a los procesos que originan el evento.
     production_run_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
-    order_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    order_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("orders.id"), nullable=True
+    )
 
     unit: Mapped["Unit"] = relationship(back_populates="custody_events")
     from_location: Mapped["Location | None"] = relationship(
