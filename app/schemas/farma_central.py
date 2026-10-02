@@ -13,12 +13,18 @@ class FarmaCentralStorage(BaseModel):
     cold: bool = False
 
 
+class FarmaCentralComponent(BaseModel):
+    sku: str = Field(min_length=1)
+    required_per_unit: int = Field(alias="req", gt=0)
+
+
 class FarmaCentralProduct(BaseModel):
     sku: str = Field(min_length=1)
     name: str = Field(min_length=1)
     production: FarmaCentralProduction
     sellable: bool
     storage: FarmaCentralStorage = Field(default_factory=FarmaCentralStorage)
+    components: tuple[FarmaCentralComponent, ...] = ()
 
 
 class FarmaCentralSpace(BaseModel):

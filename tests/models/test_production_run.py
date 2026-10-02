@@ -1,30 +1,66 @@
 # tests/models/test_production_run.py
-import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.models import (
-    Lot, LotOrigin, Location, Product, ProductCategory,
-    ProductionInput, ProductionInputUnit, ProductionRun, Unit,
+    Location,
+    Lot,
+    LotOrigin,
+    Product,
+    ProductCategory,
+    ProductionInput,
+    ProductionInputUnit,
+    ProductionRun,
+    Unit,
 )
 
 
 def test_production_run_links_multiple_input_lots_to_one_output_lot(db_session):
-    location = Location(code="ACONDICIONAMIENTO", name="Área de acondicionamiento", is_refrigerated=False)
+    location = Location(
+        code="ACONDICIONAMIENTO",
+        name="Área de acondicionamiento",
+        is_refrigerated=False,
+    )
     db_session.add(location)
     db_session.flush()
 
-    api_product = Product(sku="API-AMOXI-500", name="API Amoxicilina", category=ProductCategory.INSUMO, batch_size=50, requires_refrigeration=False)
-    exc_product = Product(sku="EXC-LACTOSA-DC", name="Excipiente lactosa", category=ProductCategory.INSUMO, batch_size=50, requires_refrigeration=False)
-    output_product = Product(sku="BLI-AMOXI-500", name="Blíster amoxicilina", category=ProductCategory.ACONDICIONADO, batch_size=3, requires_refrigeration=False)
+    api_product = Product(
+        sku="API-AMOXI-500",
+        name="API Amoxicilina",
+        category=ProductCategory.INSUMO,
+        batch_size=50,
+        requires_refrigeration=False,
+    )
+    exc_product = Product(
+        sku="EXC-LACTOSA-DC",
+        name="Excipiente lactosa",
+        category=ProductCategory.INSUMO,
+        batch_size=50,
+        requires_refrigeration=False,
+    )
+    output_product = Product(
+        sku="BLI-AMOXI-500",
+        name="Blíster amoxicilina",
+        category=ProductCategory.ACONDICIONADO,
+        batch_size=3,
+        requires_refrigeration=False,
+    )
     db_session.add_all([api_product, exc_product, output_product])
     db_session.flush()
 
-    api_lot = Lot(external_lot_id="L-API-001", product_id=api_product.id, origin=LotOrigin.FARMA_CENTRAL)
-    exc_lot = Lot(external_lot_id="L-EXC-001", product_id=exc_product.id, origin=LotOrigin.FARMA_CENTRAL)
+    api_lot = Lot(
+        external_lot_id="L-API-001",
+        product_id=api_product.id,
+        origin=LotOrigin.FARMA_CENTRAL,
+    )
+    exc_lot = Lot(
+        external_lot_id="L-EXC-001",
+        product_id=exc_product.id,
+        origin=LotOrigin.FARMA_CENTRAL,
+    )
     db_session.add_all([api_lot, exc_lot])
     db_session.flush()
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     far_future = now + timedelta(days=365)
 
     api_units = [
@@ -51,26 +87,43 @@ def test_production_run_links_multiple_input_lots_to_one_output_lot(db_session):
     db_session.flush()
 
     output_lot = Lot(
-        external_lot_id="L-BLI-001", product_id=output_product.id, origin=LotOrigin.OWN_PRODUCTION
+        external_lot_id="L-BLI-001",
+        product_id=output_product.id,
+        origin=LotOrigin.OWN_PRODUCTION,
     )
     db_session.add(output_lot)
     db_session.flush()
 
     run = ProductionRun(
         output_lot_id=output_lot.id,
+        expected_sku="KIT-RESP-ADULTO",
         requested_at=now,
         completed_at=now,
     )
     db_session.add(run)
     db_session.flush()
 
-    api_input = ProductionInput(production_run_id=run.id, input_lot_id=api_lot.id, quantity_consumed=12)
-    exc_input = ProductionInput(production_run_id=run.id, input_lot_id=exc_lot.id, quantity_consumed=8)
+    api_input = ProductionInput(
+        production_run_id=run.id, input_lot_id=api_lot.id, quantity_consumed=12
+    )
+    exc_input = ProductionInput(
+        production_run_id=run.id, input_lot_id=exc_lot.id, quantity_consumed=8
+    )
     db_session.add_all([api_input, exc_input])
     db_session.flush()
 
-    db_session.add_all([ProductionInputUnit(production_input_id=api_input.id, unit_id=u.id) for u in api_units])
-    db_session.add_all([ProductionInputUnit(production_input_id=exc_input.id, unit_id=u.id) for u in exc_units])
+    db_session.add_all(
+        [
+            ProductionInputUnit(production_input_id=api_input.id, unit_id=u.id)
+            for u in api_units
+        ]
+    )
+    db_session.add_all(
+        [
+            ProductionInputUnit(production_input_id=exc_input.id, unit_id=u.id)
+            for u in exc_units
+        ]
+    )
     db_session.flush()
 
     db_session.refresh(output_lot)

@@ -25,6 +25,7 @@ class UnitUpsertResult:
     created: int
     updated: int
     location_changes: tuple[UnitLocationChange, ...]
+    created_units: tuple[Unit, ...]
 
 
 def get_unit_by_external_id(
@@ -50,17 +51,18 @@ def upsert_units(
         unit.external_unit_id: unit for unit in session.scalars(select(Unit)).all()
     }
     location_changes: list[UnitLocationChange] = []
+    created_units: list[Unit] = []
     created = updated = 0
 
     for record in records:
-        lot = lots_by_external_id[record.lot_external_id]
+        incoming_lot = lots_by_external_id[record.lot_external_id]
         location = locations_by_code[record.location_code]
         unit = units.get(record.external_unit_id)
 
         if unit is None:
             unit = Unit(
                 external_unit_id=record.external_unit_id,
-                lot_id=lot.id,
+                lot_id=incoming_lot.id,
                 current_location_id=location.id,
                 status=record.status,
                 effective_expires_at=record.effective_expires_at,
@@ -68,10 +70,16 @@ def upsert_units(
             session.add(unit)
             session.flush()
             units[record.external_unit_id] = unit
+            created_units.append(unit)
             location_changes.append(UnitLocationChange(unit, None, location.id))
             created += 1
             continue
 
+        lot = (
+            unit.lot
+            if record.lot_external_id.startswith("unreported:")
+            else incoming_lot
+        )
         previous_location_id = unit.current_location_id
         changed = (
             unit.lot_id != lot.id
@@ -96,8 +104,17 @@ def upsert_units(
             unit.status = "unavailable"
             updated += 1
 
-    return UnitUpsertResult(created, updated, tuple(location_changes))
+    return UnitUpsertResult(
+        created,
+        updated,
+        tuple(location_changes),
+        tuple(created_units),
+    )
 
 
 def set_current_location(unit: Unit, location_id: uuid.UUID) -> None:
     unit.current_location_id = location_id
+
+
+def set_status(unit: Unit, status: str) -> None:
+    unit.status = status

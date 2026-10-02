@@ -189,6 +189,33 @@ curl --verbose --connect-timeout 10 https://HOST_DE_FARMA_CENTRAL
 
 No publiques `.env` ni el secreto de la API al compartir la salida.
 
+## Producción de kits
+
+El flujo descubre las fórmulas y todos los kits vendibles directamente desde
+Farma Central. Produce dependencias de forma recursiva, respeta los tamaños de
+lote y la capacidad del área de acondicionamiento, y registra las unidades
+consumidas y los lotes de salida.
+
+Para probar un kit en dev se puede usar el abastecimiento sandbox:
+
+```bash
+python -m scripts.complete_kit_production \
+  --sku KIT-RESP-ADULTO \
+  --quantity 1 \
+  --raw-material-source sandbox
+```
+
+Para producir 30 unidades de todos los kits usando abastecimiento normal:
+
+```bash
+python -m scripts.complete_kit_production --quantity 30
+python -m scripts.verify_kit_production --minimum 30
+```
+
+El comando rechaza una URL de producción salvo que se agregue explícitamente
+`--allow-production`. Dev y producción deben usar instalaciones y bases de datos
+separadas para no mezclar sus linajes.
+
 ## Verificaciones de desarrollo
 
 ```bash

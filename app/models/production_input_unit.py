@@ -1,11 +1,16 @@
 # app/models/production_input_unit.py
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy import ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.models.production_input import ProductionInput
+    from app.models.unit import Unit
 
 
 class ProductionInputUnit(Base):
