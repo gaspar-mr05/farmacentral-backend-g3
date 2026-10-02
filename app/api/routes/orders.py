@@ -10,6 +10,12 @@ from app.clients.market_prices import MarketPriceClient
 from app.db.session import get_session
 from app.schemas.orders import OrderCreate, OrderResponse
 from app.services.catalog import CatalogPriceUnavailableError
+from app.services.order_fulfillment import (
+    InsufficientFulfillmentStockError,
+    InvalidFulfillmentStateError,
+    OrderFulfillmentService,
+    OrderNotPaidError,
+)
 from app.services.orders import (
     InsufficientStockError,
     OrderNotFoundError,
@@ -60,4 +66,26 @@ def read_order(
     except OrderNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+@router.post("/orders/{order_id}/fulfillment", response_model=OrderResponse)
+def fulfill_order(
+    order_id: UUID,
+    session: Annotated[Session, Depends(get_session)],
+) -> OrderResponse:
+    try:
+        order = OrderFulfillmentService(session).fulfill(order_id)
+        return OrderResponse.model_validate(order)
+    except OrderNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except (
+        InsufficientFulfillmentStockError,
+        InvalidFulfillmentStateError,
+        OrderNotPaidError,
+    ) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
         ) from exc

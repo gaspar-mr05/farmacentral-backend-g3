@@ -80,16 +80,21 @@ def upsert_units(
             if record.lot_external_id.startswith("unreported:")
             else incoming_lot
         )
+        synchronized_status = (
+            "reserved"
+            if unit.status == "reserved" and record.status == "available"
+            else record.status
+        )
         previous_location_id = unit.current_location_id
         changed = (
             unit.lot_id != lot.id
             or unit.current_location_id != location.id
-            or unit.status != record.status
+            or unit.status != synchronized_status
             or unit.effective_expires_at != record.effective_expires_at
         )
         unit.lot_id = lot.id
         unit.current_location_id = location.id
-        unit.status = record.status
+        unit.status = synchronized_status
         unit.effective_expires_at = record.effective_expires_at
         updated += int(changed)
 

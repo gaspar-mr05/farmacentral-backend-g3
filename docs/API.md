@@ -36,6 +36,7 @@ La documentación interactiva generada por FastAPI está disponible en:
 | `GET` | `/api/traceability/{lot_id}` | Consultar el linaje completo de un lote. |
 | `POST` | `/api/orders` | Crear un pedido usando precio y stock vigentes. |
 | `GET` | `/api/orders/{order_id}` | Consultar un pedido. |
+| `POST` | `/api/orders/{order_id}/fulfillment` | Asignar unidades a un pedido pagado. |
 | `POST` | `/api/orders/{order_id}/payments` | Iniciar un pago para un pedido. |
 | `GET` | `/api/payments/{payment_id}/return/{result}` | Confirmar el resultado de un pago. |
 
@@ -406,7 +407,8 @@ Respuesta `201 Created`:
       "sku": "KIT-RESP-ADULTO",
       "quantity": 2,
       "unit_price": 9990,
-      "line_total": 19980
+      "line_total": 19980,
+      "assigned_units": []
     }
   ],
   "created_at": "2026-10-02T15:00:00Z"
@@ -442,6 +444,45 @@ Ejemplo:
 ```bash
 curl http://127.0.0.1:8000/api/orders/03de4a0c-b143-4481-9377-3076cbdb2a8b
 ```
+
+### `POST /api/orders/{order_id}/fulfillment`
+
+Asigna unidades físicas a los items de un pedido pagado. La selección usa FEFO:
+prioriza las unidades con vencimiento efectivo más cercano, siempre que estén
+vigentes, disponibles y en una ubicación vendible. Cada unidad queda con estado
+`reserved` para prepararla para despacho.
+
+La operación es transaccional e idempotente. Bloquea el pedido y las unidades
+candidatas durante la selección, y la base de datos impide que una misma unidad
+sea asignada a más de un pedido. Repetir la solicitud conserva la asignación
+original.
+
+Respuesta `200 OK`: usa el mismo formato de `GET /api/orders/{order_id}`. Cada
+item incluye sus unidades concretas con esta estructura:
+
+```json
+{
+  "sku": "KIT-RESP-ADULTO",
+  "quantity": 2,
+  "unit_price": 9990,
+  "line_total": 19980,
+  "assigned_units": [
+    {
+      "unit_id": "2423037a-e1fe-4acd-873d-ebf83c09879e",
+      "external_unit_id": "UNIT-12345",
+      "lot_id": "55d4c013-f4a0-4879-b77d-803630080c6e",
+      "assigned_at": "2026-10-02T15:03:00Z"
+    }
+  ]
+}
+```
+
+Errores:
+
+- `404 Not Found`: no existe el pedido.
+- `409 Conflict`: el pedido no está pagado, no hay stock suficiente o la
+  asignación persistida es inconsistente.
+- `422 Unprocessable Entity`: `order_id` no es un UUID válido.
 
 ## Pagos
 

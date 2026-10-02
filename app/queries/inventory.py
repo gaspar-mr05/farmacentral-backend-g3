@@ -1,9 +1,9 @@
 from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import Location, Lot, Product, Unit
+from app.models import Location, Lot, OrderUnit, Product, Unit
 
 
 def list_available_inventory(
@@ -21,7 +21,10 @@ def list_available_inventory(
             joinedload(Unit.lot).joinedload(Lot.product),
             joinedload(Unit.current_location),
         )
-        .where(Unit.status == "available")
+        .where(
+            Unit.status == "available",
+            ~exists().where(OrderUnit.unit_id == Unit.id),
+        )
         .order_by(
             Product.sku,
             Lot.expires_at,

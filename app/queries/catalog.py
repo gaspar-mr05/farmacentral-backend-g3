@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, exists, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Location, Lot, Product, ProductCategory, Unit
+from app.models import Location, Lot, OrderUnit, Product, ProductCategory, Unit
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,7 @@ def list_sellable_catalog(
                 Unit.lot_id == Lot.id,
                 Unit.status == "available",
                 Unit.effective_expires_at > as_of,
+                ~exists().where(OrderUnit.unit_id == Unit.id),
             ),
         )
         .outerjoin(

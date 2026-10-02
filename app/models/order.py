@@ -10,6 +10,7 @@ from app.db.base import Base
 from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
+    from app.models.order_unit import OrderUnit
     from app.models.payment import Payment
 
 
@@ -56,6 +57,9 @@ class OrderItem(Base):
     unit_price: Mapped[int] = mapped_column(Integer, nullable=False)
 
     order: Mapped["Order"] = relationship(back_populates="items")
+    assigned_units: Mapped[list["OrderUnit"]] = relationship(
+        back_populates="order_item", cascade="all, delete-orphan"
+    )
 
     @property
     def line_total(self) -> int:

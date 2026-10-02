@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from app.models.custody_event import CustodyEvent
     from app.models.location import Location
     from app.models.lot import Lot
+    from app.models.order_unit import OrderUnit
 
 
 class Unit(Base, TimestampMixin):
@@ -33,6 +34,9 @@ class Unit(Base, TimestampMixin):
     lot: Mapped["Lot"] = relationship(back_populates="units")
     current_location: Mapped["Location"] = relationship(back_populates="units")
     custody_events: Mapped[list["CustodyEvent"]] = relationship(back_populates="unit")
+    order_assignment: Mapped["OrderUnit | None"] = relationship(
+        back_populates="unit", uselist=False
+    )
 
     effective_expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
