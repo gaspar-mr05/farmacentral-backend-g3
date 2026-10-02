@@ -25,6 +25,15 @@ class OrderCreate(BaseModel):
         return self
 
 
+class OrderUnitResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    unit_id: UUID
+    external_unit_id: str
+    lot_id: UUID
+    assigned_at: datetime
+
+
 class OrderItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -32,6 +41,7 @@ class OrderItemResponse(BaseModel):
     quantity: int
     unit_price: int
     line_total: int
+    assigned_units: list[OrderUnitResponse]
 
 
 class OrderResponse(BaseModel):

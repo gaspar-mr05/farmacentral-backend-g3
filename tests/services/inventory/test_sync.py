@@ -4,7 +4,9 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
-from app.models import Location, Lot, Product, ProductCategory, Unit
+from app.db.units import upsert_units
+from app.models import Location, Lot, LotOrigin, Product, ProductCategory, Unit
+from app.schemas.units import UnitData
 from app.services.inventory.sync import InventorySyncService
 
 
@@ -135,6 +137,61 @@ async def test_sync_accepts_missing_external_batch(db_session) -> None:
     assert result.units.created == 1
     assert _count(db_session, Lot, Lot.external_lot_id == fallback_lot_id) == 1
     assert client.requested_limits == [1]
+
+
+def test_sync_preserves_local_reservation_while_unit_remains_available(
+    db_session,
+) -> None:
+    suffix = uuid4().hex
+    product = Product(
+        sku=f"RESERVED-{suffix}",
+        name="Reserved kit",
+        category=ProductCategory.KIT,
+        batch_size=1,
+        requires_refrigeration=False,
+    )
+    location = Location(
+        code=f"RESERVED-LOCATION-{suffix}",
+        name="Sellable warehouse",
+        is_refrigerated=False,
+    )
+    db_session.add_all([product, location])
+    db_session.flush()
+    expires_at = datetime.now(UTC) + timedelta(days=30)
+    lot = Lot(
+        external_lot_id=f"RESERVED-LOT-{suffix}",
+        product_id=product.id,
+        expires_at=expires_at,
+        origin=LotOrigin.OWN_PRODUCTION,
+    )
+    db_session.add(lot)
+    db_session.flush()
+    unit = Unit(
+        external_unit_id=f"RESERVED-UNIT-{suffix}",
+        lot_id=lot.id,
+        current_location_id=location.id,
+        status="reserved",
+        effective_expires_at=expires_at,
+    )
+    db_session.add(unit)
+    db_session.flush()
+
+    upsert_units(
+        db_session,
+        (
+            UnitData(
+                external_unit_id=unit.external_unit_id,
+                lot_external_id=lot.external_lot_id,
+                location_code=location.code,
+                status="available",
+                effective_expires_at=expires_at,
+            ),
+        ),
+        {lot.external_lot_id: lot},
+        {location.code: location},
+    )
+
+    assert unit.status == "reserved"
 
 
 def _count(db_session, model, criterion) -> int:

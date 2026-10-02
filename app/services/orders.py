@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.clients.market_prices import MarketPriceClient
-from app.models import Order, OrderItem, OrderStatus
+from app.models import Order, OrderItem, OrderStatus, OrderUnit
 from app.schemas.orders import OrderCreate
 from app.services.catalog import CatalogService
 
@@ -66,7 +66,13 @@ class OrderService:
 
 def get_order(session: Session, order_id: uuid.UUID) -> Order:
     statement = (
-        select(Order).options(selectinload(Order.items)).where(Order.id == order_id)
+        select(Order)
+        .options(
+            selectinload(Order.items)
+            .selectinload(OrderItem.assigned_units)
+            .selectinload(OrderUnit.unit)
+        )
+        .where(Order.id == order_id)
     )
     order = session.scalar(statement)
     if order is None:
