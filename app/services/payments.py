@@ -35,7 +35,7 @@ class PaymentService:
         self._settings = settings or get_settings()
 
     async def start(self, order: Order) -> PaymentStartResponse:
-        if order.status == OrderStatus.PAID:
+        if order.status in {OrderStatus.PAID, OrderStatus.DISPATCHED}:
             raise OrderAlreadyPaidError("The order has already been paid")
         if self._has_pending_payment(order.id):
             raise PaymentAlreadyPendingError("The order already has a pending payment")

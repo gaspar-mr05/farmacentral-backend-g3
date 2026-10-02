@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 class OrderStatus(StrEnum):
     PENDING_PAYMENT = "pending_payment"
     PAID = "paid"
+    DISPATCHED = "dispatched"
     CANCELLED = "cancelled"
     PAYMENT_ERROR = "payment_error"
 

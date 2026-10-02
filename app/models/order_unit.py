@@ -28,6 +28,10 @@ class OrderUnit(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
+    dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     order_item: Mapped["OrderItem"] = relationship(back_populates="assigned_units")
     unit: Mapped["Unit"] = relationship(back_populates="order_assignment")
 

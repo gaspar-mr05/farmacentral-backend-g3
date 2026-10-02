@@ -32,6 +32,7 @@ class OrderUnitResponse(BaseModel):
     external_unit_id: str
     lot_id: UUID
     assigned_at: datetime
+    dispatched_at: datetime | None
 
 
 class OrderItemResponse(BaseModel):

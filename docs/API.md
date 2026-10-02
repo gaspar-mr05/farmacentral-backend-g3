@@ -37,6 +37,7 @@ La documentación interactiva generada por FastAPI está disponible en:
 | `POST` | `/api/orders` | Crear un pedido usando precio y stock vigentes. |
 | `GET` | `/api/orders/{order_id}` | Consultar un pedido. |
 | `POST` | `/api/orders/{order_id}/fulfillment` | Asignar unidades a un pedido pagado. |
+| `POST` | `/api/orders/{order_id}/dispatch` | Despachar unidades asignadas y cerrar la venta. |
 | `POST` | `/api/orders/{order_id}/payments` | Iniciar un pago para un pedido. |
 | `GET` | `/api/payments/{payment_id}/return/{result}` | Confirmar el resultado de un pago. |
 
@@ -588,3 +589,45 @@ Un error de negocio normalmente contiene:
 
 Los errores de validación `422` contienen una lista en `detail` indicando la
 ubicación y causa de cada dato inválido.
+
+
+### `POST /api/orders/{order_id}/dispatch`
+
+Despacha las unidades concretas asignadas mediante `fulfillment`. El pedido debe
+estar pagado, tener todas sus unidades asignadas y conservar las unidades
+pendientes en estado `reserved`, sin vencer. Antes del primer despacho, ejecutar
+las migraciones y `python -m scripts.sync_inventory` para tener las ubicaciones
+locales. El servicio consulta `checkOut` directamente en Farma Central y requiere
+un único sector de despacho que exista en la base local.
+
+```bash
+curl --fail -X POST http://127.0.0.1:8000/api/orders/ORDER_ID/dispatch
+```
+
+Devuelve `200 OK` con `OrderResponse`. Al completar todas las entregas, `status`
+es `dispatched`; cada elemento de `items[].assigned_units` incluye `dispatched_at`
+(fecha UTC, o `null` mientras no se despache).
+
+El servicio comprueba si cada unidad ya está en despacho antes de moverla y
+confirma su ID externo en el inventario del destino después del movimiento.
+Registra el movimiento, el evento de custodia `DISPATCHED` asociado al pedido,
+el estado de la unidad y su fecha en una transacción local por unidad. El estado
+final del pedido se guarda junto con la última entrega. Las solicitudes concurrentes
+se serializan mediante bloqueos del pedido y las unidades.
+
+La API externa y PostgreSQL no comparten una transacción: si falla una unidad,
+las entregas anteriores permanecen registradas y el pedido sigue `paid`.
+Repetir el endpoint retoma las pendientes; una respuesta perdida después del
+movimiento se reconcilia consultando el destino antes de volver a mover.
+Repetir un pedido completo devuelve su estado sin nuevos movimientos ni eventos.
+
+Errores: `404` para un pedido inexistente, `409` para estado/asignaciones/unidades
+o ubicación de despacho inválidos, `503` para conexión o timeout de Farma Central
+y `502` para rechazo externo o confirmación inválida.
+
+`GET /api/traceability/{lot_id}` incluye además `deliveries` para las unidades
+entregadas del lote consultado y sus descendientes. Cada registro representa una
+unidad (`quantity: 1`) e incluye `lot_id`, `order_id`, `buyer_name`, `buyer_email`,
+`sku`, `external_unit_id` y `dispatched_at`. Las entregas parciales confirmadas
+aparecen incluso si quedan otras unidades pendientes del pedido. Las unidades
+despachadas conservan su historial y no vuelven al stock disponible al sincronizar.

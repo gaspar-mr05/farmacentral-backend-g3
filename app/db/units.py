@@ -81,8 +81,9 @@ def upsert_units(
             else incoming_lot
         )
         synchronized_status = (
-            "reserved"
-            if unit.status == "reserved" and record.status == "available"
+            unit.status
+            if unit.status == "dispatched"
+            or (unit.status == "reserved" and record.status == "available")
             else record.status
         )
         previous_location_id = unit.current_location_id
