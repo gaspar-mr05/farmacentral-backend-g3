@@ -227,3 +227,20 @@ pytest
 ruff check app scripts tests
 ruff format --check app scripts tests
 ```
+
+### Paso 20: recorrido completo de Entrega 1
+
+```bash
+pytest tests/e2e/test_entrega1.py -q
+```
+
+Estas tres pruebas parten con un insumo disponible, registran recepción y
+movimiento, producen un intermedio y un kit, consultan catálogo, crean un pedido
+y verifican pagos exitosos, cancelados y con error. El pago exitoso continúa con
+asignación, despacho y trazabilidad desde el kit hasta los insumos y desde el
+insumo hasta el cliente. Los otros pagos no permiten asignar ni despachar.
+
+Usan PostgreSQL configurado por `TEST_DATABASE_URL` (el mismo valor predeterminado
+de las demás pruebas), revierten sus datos al terminar y simulan Farma Central,
+precios y checkout. Este recorrido automatizado no verifica las APIs externas
+reales; esa validación debe hacerse en dev.
