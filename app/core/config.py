@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     farma_central_ftp: str = Field(min_length=1)
     farma_central_group: int = Field(gt=0)
     farma_central_timeout_seconds: float = Field(default=10, gt=0)
+    checkout_base_url: AnyHttpUrl = AnyHttpUrl(
+        "https://dev.proyecto.2026-2.tallerdeintegracion.cl/"
+    )
+    app_public_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:8000/")
 
 
 @lru_cache

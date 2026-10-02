@@ -21,6 +21,9 @@ Variables importantes:
 - `FARMA_CENTRAL_BASE_URL`: URL base HTTPS entregada para Farma Central.
 - `FARMA_CENTRAL_API_SECRET`: secreto del grupo. No debe versionarse.
 - `FARMA_CENTRAL_FTP` y `FARMA_CENTRAL_GROUP`: datos asignados al grupo.
+- `CHECKOUT_BASE_URL`: URL base de la pasarela de pagos (`dev` o `prod`).
+- `APP_PUBLIC_URL`: URL pública del backend, usada por checkout para retornar el
+  resultado del pago. En producción debe usar HTTPS y el dominio asignado.
 
 ## Ejecutar en local
 
@@ -47,6 +50,7 @@ La API queda disponible en:
 
 - Salud: `http://127.0.0.1:8000/api/health`
 - Documentación: `http://127.0.0.1:8000/docs`
+- Guía de endpoints del repositorio: [`docs/API.md`](docs/API.md)
 
 Para detener PostgreSQL local:
 

@@ -4,6 +4,8 @@ from app.db.base import Base
 from app.models.custody_event import CustodyEvent, CustodyEventType
 from app.models.location import Location
 from app.models.lot import Lot, LotOrigin
+from app.models.order import Order, OrderItem, OrderSource, OrderStatus
+from app.models.payment import Payment, PaymentStatus
 from app.models.product import Product, ProductCategory
 from app.models.production_input import ProductionInput
 from app.models.production_input_unit import ProductionInputUnit
@@ -17,6 +19,12 @@ __all__ = [
     "Location",
     "Lot",
     "LotOrigin",
+    "Order",
+    "OrderItem",
+    "OrderSource",
+    "OrderStatus",
+    "Payment",
+    "PaymentStatus",
     "Unit",
     "CustodyEvent",
     "CustodyEventType",
