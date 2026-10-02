@@ -2,6 +2,7 @@
 """Flujo completo de prueba: siembra insumos en sandbox, los mueve a
 acondicionamiento, y dispara una producción real contra Farma Central dev.
 Todo en una sola ejecución continua para minimizar riesgo de vencimiento."""
+
 import asyncio
 
 from app.clients.farma_central import FarmaCentralClient
@@ -27,7 +28,7 @@ async def main():
                 created_ids[sku].append(result["productId"])
         print("Insumos sembrados.")
 
-        for sku, ids in created_ids.items():
+        for _sku, ids in created_ids.items():
             for product_id in ids:
                 await client.move_product(product_id, packaging_space["_id"])
         print("Insumos movidos a acondicionamiento.")
@@ -38,7 +39,6 @@ async def main():
             client=client,
             sku="BLI-AMOXI-500",
             quantity=3,
-            input_units_by_lot={},  # TODO: pasar unidades reales una vez sincronizadas
         )
         print("ProductionRun:", run.id, "requested_at:", run.requested_at)
         print("Supply response:", supply)

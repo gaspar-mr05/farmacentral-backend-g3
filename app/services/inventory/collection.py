@@ -69,6 +69,27 @@ class InventoryCollector:
             units.extend(space_units)
         return units
 
+    async def collect_units_for_skus(
+        self,
+        spaces: list[FarmaCentralSpace],
+        skus: set[str],
+    ) -> list[FarmaCentralUnit]:
+        requests = [(space, sku) for space in spaces for sku in sorted(skus)]
+        payloads = await asyncio.gather(
+            *(
+                self._client.get_space_products(
+                    space.external_id,
+                    sku,
+                    limit=200,
+                )
+                for space, sku in requests
+            )
+        )
+        units = []
+        for payload in payloads:
+            units.extend(_parse_list(payload, FarmaCentralUnit, "space products"))
+        return units
+
 
 def _parse_list[Schema: BaseModel](
     payload: JSONResponse,

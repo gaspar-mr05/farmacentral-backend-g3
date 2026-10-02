@@ -1,4 +1,5 @@
 import json
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -65,6 +66,32 @@ async def test_get_refreshes_rejected_token_once() -> None:
         response = await client.get("/products")
 
     assert response == {"status": "ok"}
+
+
+@pytest.mark.anyio
+async def test_get_retries_rate_limit_response() -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        if request.url.path == "/api/auth":
+            return httpx.Response(200, json={"token": "test-token"})
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(429, headers={"Retry-After": "1"})
+        return httpx.Response(200, json={"status": "ok"})
+
+    async with httpx.AsyncClient(
+        base_url="https://example.test/api/",
+        transport=httpx.MockTransport(handler),
+    ) as http_client:
+        client = FarmaCentralClient(settings=make_settings(), http_client=http_client)
+        with patch("app.clients.farma_central.asyncio.sleep", new=AsyncMock()) as sleep:
+            response = await client.get("/products")
+
+    assert response == {"status": "ok"}
+    assert attempts == 2
+    sleep.assert_awaited_once_with(1.0)
 
 
 @pytest.mark.anyio

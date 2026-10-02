@@ -3,6 +3,7 @@
 
 para el KIT-RESP-ADULTO antes de fabricar las 30 unidades del Kit.
 """
+
 import asyncio
 
 from app.clients.farma_central import FarmaCentralClient
@@ -12,9 +13,9 @@ from scripts.farma_central_common import get_buffer_and_packaging
 
 # Insumos directos de sandbox necesarios para armar los blísteres y frascos requeridos
 REQUIRED_RAW_MATERIALS = {
-    "API-AMOXI-500": 36,     # Para fabricar los blísteres de amoxicilina faltantes
-    "API-IBUPRO-400": 60,     # Para fabricar los blísteres de ibuprofeno
-    "API-SALBUTA-120": 30,    # Para los frascos de salbutamol
+    "API-AMOXI-500": 36,  # Para fabricar los blísteres de amoxicilina faltantes
+    "API-IBUPRO-400": 60,  # Para fabricar los blísteres de ibuprofeno
+    "API-SALBUTA-120": 30,  # Para los frascos de salbutamol
     "LAM-BLISTER-PVC": 30,
     "EXC-LACTOSA-DC": 30,
 }
@@ -43,9 +44,7 @@ async def main():
             ("FRA-SALBUTA-120", 30),
         ]:
             print(f"   Fabricando {qty} unidades de {comp_sku}...")
-            await produce(
-                session, client=client, sku=comp_sku, quantity=qty
-            )
+            await produce(session, client=client, sku=comp_sku, quantity=qty)
 
         print("4. Componentes intermedios fabricados con éxito.")
 

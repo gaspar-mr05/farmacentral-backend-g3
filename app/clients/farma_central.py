@@ -128,14 +128,21 @@ class FarmaCentralClient:
         **kwargs: Any,
     ) -> JSONResponse | None:
         token = await self._get_token()
-        response = await self._send(
-            method, path, headers=self._authorization_headers(token), **kwargs
-        )
-        if response.status_code in (401, 403):
-            token = await self._refresh_token(token)
+        for attempt in range(3):
             response = await self._send(
                 method, path, headers=self._authorization_headers(token), **kwargs
             )
+            if response.status_code in (401, 403):
+                token = await self._refresh_token(token)
+                response = await self._send(
+                    method,
+                    path,
+                    headers=self._authorization_headers(token),
+                    **kwargs,
+                )
+            if response.status_code != 429 or attempt == 2:
+                break
+            await asyncio.sleep(self._retry_after_seconds(response))
 
         self._raise_for_status(response)
         if allow_empty and not response.content:
@@ -190,12 +197,20 @@ class FarmaCentralClient:
         return {"Authorization": f"Bearer {token}"}
 
     @staticmethod
+    def _retry_after_seconds(response: httpx.Response) -> float:
+        value = response.headers.get("Retry-After")
+        if value is not None:
+            try:
+                return max(float(value), 1)
+            except ValueError:
+                pass
+        return 65
+
+    @staticmethod
     def _raise_for_status(response: httpx.Response) -> None:
         if response.status_code in (401, 403):
             raise FarmaCentralAuthenticationError(response.status_code)
         if response.is_error:
-            print("ERROR STATUS:", response.status_code)
-            print("ERROR BODY:", response.text)
             raise FarmaCentralHTTPError(response.status_code)
 
     @staticmethod

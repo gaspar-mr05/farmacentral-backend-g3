@@ -1,73 +1,140 @@
-# tests/services/production/test_orchestration.py
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
-from app.models import Location, Lot, LotOrigin, Product, ProductCategory, ProductionRun, Unit
-from app.services.production.orchestration import produce
+from app.models import Location, Lot, LotOrigin, Product, ProductCategory, Unit
+from app.services.production.orchestration import (
+    InvalidProductionQuantityError,
+    ProductionInputsUnavailableError,
+    produce,
+)
 
 
-@pytest.mark.anyio
-async def test_produce_runs_full_flow_and_persists_locally(db_session):
-    location = Location(code="ACONDICIONAMIENTO", name="Acondicionamiento", is_refrigerated=False)
-    db_session.add(location)
-    db_session.flush()
-
-    product = Product(sku="API-AMOXI-500", name="API Amoxicilina", category=ProductCategory.INSUMO, batch_size=50, requires_refrigeration=False)
-    db_session.add(product)
-    db_session.flush()
-
-    lot = Lot(external_lot_id="L-API-001", product_id=product.id, origin=LotOrigin.FARMA_CENTRAL)
-    db_session.add(lot)
-    db_session.flush()
-
-    now = datetime.now(timezone.utc)
-    units = [
-        Unit(
-            external_unit_id=f"U-{i}",
-            lot_id=lot.id,
-            current_location_id=location.id,
-            status="available",
-            effective_expires_at=now + timedelta(days=100),
-        )
-        for i in range(12)
+def _production_client(
+    *, target_sku: str, component_sku: str, now: datetime
+) -> AsyncMock:
+    client = AsyncMock()
+    client.get_available_products.return_value = [
+        {
+            "sku": target_sku,
+            "name": "Output",
+            "production": {"batch": 3, "at": "packaging"},
+            "sellable": False,
+            "components": [{"sku": component_sku, "req": 2}],
+        }
     ]
-    db_session.add_all(units)
-    db_session.flush()
-
-    fake_client = AsyncMock()
-    fake_client.request_fabrication_challenge.return_value = {
-        "challengeId": "chal-123",
+    client.get_spaces.return_value = [{"_id": "PACKAGING", "packaging": True}]
+    client.request_fabrication_challenge.return_value = {
+        "challengeId": "challenge-123",
         "prefix": "abc123",
         "algorithm": "sha256-leading-zero-bits",
-        "difficulty": 4,
-        "sku": "BLI-AMOXI-500",
+        "difficulty": 0,
+        "sku": target_sku,
         "quantity": 3,
         "expiresAt": (now + timedelta(minutes=5)).isoformat(),
     }
-    fake_client.request_products.return_value = {
-        "sku": "BLI-AMOXI-500",
+    client.request_products.return_value = {
+        "sku": target_sku,
         "group": 3,
         "quantity": 3,
         "availableAt": (now + timedelta(minutes=10)).isoformat(),
     }
+    return client
+
+
+def _create_inputs(db_session, *, component_sku: str, count: int) -> list[Unit]:
+    location = Location(
+        code="PACKAGING", name="Acondicionamiento", is_refrigerated=False
+    )
+    product = Product(
+        sku=component_sku,
+        name="Input",
+        category=ProductCategory.INSUMO,
+        batch_size=10,
+        requires_refrigeration=False,
+    )
+    db_session.add_all([location, product])
+    db_session.flush()
+    lot = Lot(
+        external_lot_id=f"LOT-{uuid4().hex}",
+        product_id=product.id,
+        origin=LotOrigin.FARMA_CENTRAL,
+    )
+    db_session.add(lot)
+    db_session.flush()
+    units = [
+        Unit(
+            external_unit_id=f"UNIT-{uuid4().hex}",
+            lot_id=lot.id,
+            current_location_id=location.id,
+            status="available",
+            effective_expires_at=datetime.now(UTC) + timedelta(days=100),
+        )
+        for _ in range(count)
+    ]
+    db_session.add_all(units)
+    db_session.flush()
+    return units
+
+
+@pytest.mark.anyio
+async def test_produce_consumes_formula_requirement_per_output_unit(db_session):
+    now = datetime.now(UTC)
+    suffix = uuid4().hex
+    target_sku = f"OUTPUT-{suffix}"
+    component_sku = f"INPUT-{suffix}"
+    units = _create_inputs(db_session, component_sku=component_sku, count=6)
+    client = _production_client(
+        target_sku=target_sku, component_sku=component_sku, now=now
+    )
 
     run, supply = await produce(
         db_session,
-        client=fake_client,
-        sku="BLI-AMOXI-500",
+        client=client,
+        sku=target_sku,
         quantity=3,
-        input_units_by_lot={lot.id: units},
     )
 
-    assert isinstance(run, ProductionRun)
-    assert supply.sku == "BLI-AMOXI-500"
-    assert supply.available_at > now
+    assert run.expected_sku == target_sku
+    assert run.expected_quantity == 3
+    assert run.available_at == supply.available_at
+    assert sum(item.quantity_consumed for item in run.inputs) == 6
+    assert all(unit.status == "consumed" for unit in units)
+    client.request_products.assert_awaited_once()
 
-    fake_client.request_fabrication_challenge.assert_awaited_once_with("BLI-AMOXI-500", 3)
-    fake_client.request_products.assert_awaited_once()
 
-    for unit in units:
-        db_session.refresh(unit)
-        assert unit.status == "consumed"
+@pytest.mark.anyio
+async def test_produce_rejects_missing_inputs_before_requesting_challenge(db_session):
+    now = datetime.now(UTC)
+    suffix = uuid4().hex
+    target_sku = f"OUTPUT-{suffix}"
+    component_sku = f"INPUT-{suffix}"
+    _create_inputs(db_session, component_sku=component_sku, count=5)
+    client = _production_client(
+        target_sku=target_sku, component_sku=component_sku, now=now
+    )
+
+    with pytest.raises(ProductionInputsUnavailableError) as exc_info:
+        await produce(db_session, client=client, sku=target_sku, quantity=3)
+
+    assert exc_info.value.missing_by_sku == {component_sku: 1}
+    client.request_fabrication_challenge.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_produce_rejects_quantity_outside_batch_size(db_session):
+    now = datetime.now(UTC)
+    suffix = uuid4().hex
+    target_sku = f"OUTPUT-{suffix}"
+    component_sku = f"INPUT-{suffix}"
+    client = _production_client(
+        target_sku=target_sku, component_sku=component_sku, now=now
+    )
+
+    with pytest.raises(InvalidProductionQuantityError):
+        await produce(db_session, client=client, sku=target_sku, quantity=2)
+
+    client.get_spaces.assert_not_awaited()
+    client.request_fabrication_challenge.assert_not_awaited()

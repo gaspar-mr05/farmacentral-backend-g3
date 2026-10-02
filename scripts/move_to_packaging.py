@@ -2,6 +2,7 @@
 """Mueve todas las unidades de los SKUs indicados desde buffer hacia el
 área de acondicionamiento. Correr inmediatamente después de seed_sandbox_materials.py
 para minimizar el riesgo de vencimiento."""
+
 import asyncio
 
 from app.clients.farma_central import FarmaCentralClient

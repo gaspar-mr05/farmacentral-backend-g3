@@ -1,6 +1,7 @@
 # scripts/seed_sandbox_materials.py
 """Crea unidades de insumo vía el endpoint sandbox, respetando el rate-limit
 general de 250 requests/60s."""
+
 import asyncio
 
 from app.clients.farma_central import FarmaCentralClient
@@ -15,8 +16,8 @@ REQUIRED_MATERIALS = {
     "FRA-VIDRIO-120": 3,
 }
 
-BATCH_SIZE = 200        # requests por tanda, con margen bajo el límite de 250
-PAUSE_SECONDS = 65      # más que la ventana de 60s, para asegurar el reset
+BATCH_SIZE = 200  # requests por tanda, con margen bajo el límite de 250
+PAUSE_SECONDS = 65  # más que la ventana de 60s, para asegurar el reset
 
 
 async def main():
@@ -29,7 +30,9 @@ async def main():
                 request_count += 1
 
                 if request_count % BATCH_SIZE == 0:
-                    print(f"\nPausa de {PAUSE_SECONDS}s para respetar el rate-limit...\n")
+                    print(
+                        f"\nPausa de {PAUSE_SECONDS}s para respetar el rate-limit...\n"
+                    )
                     await asyncio.sleep(PAUSE_SECONDS)
 
 

@@ -1,21 +1,30 @@
 import uuid
 from datetime import datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Lot, LotOrigin, ProductionRun, Product
-
-from sqlalchemy import select
-
+from app.models import Lot, LotOrigin, ProductionRun
 
 
 def create_production_run(
-    session: Session, *, requested_at: datetime, expected_sku: str
+    session: Session,
+    *,
+    requested_at: datetime,
+    expected_sku: str,
+    expected_quantity: int,
+    available_at: datetime,
 ) -> ProductionRun:
-    run = ProductionRun(requested_at=requested_at, expected_sku=expected_sku)
+    run = ProductionRun(
+        requested_at=requested_at,
+        expected_sku=expected_sku,
+        expected_quantity=expected_quantity,
+        available_at=available_at,
+    )
     session.add(run)
     session.flush()
     return run
+
 
 def complete_production_run(
     session: Session,
@@ -39,28 +48,10 @@ def complete_production_run(
     return output_lot
 
 
-def find_pending_run_for_sku(session: Session, *, sku: str) -> ProductionRun | None:
-
-    statement = (
-        select(ProductionRun)
-        .where(ProductionRun.completed_at.is_(None))
-        .order_by(ProductionRun.requested_at.asc())
-    )
-    return session.scalars(statement).first()
-
-
-def find_pending_run_for_sku(session: Session, *, sku: str) -> ProductionRun | None:
+def find_pending_runs_for_sku(session: Session, *, sku: str) -> list[ProductionRun]:
     statement = (
         select(ProductionRun)
         .where(ProductionRun.completed_at.is_(None), ProductionRun.expected_sku == sku)
         .order_by(ProductionRun.requested_at.asc())
     )
-    """Busca la corrida de producción más antigua sin completar cuyo
-    lote de salida (aún no vinculado) corresponde a este SKU.
-
-    Nota: como ProductionRun no guarda el SKU directamente (solo se sabe
-    una vez que existe el output_lot), esta función depende de que quien
-    la llame haya registrado el SKU esperado en algún lugar accesible.
-    Ver nota de diseño abajo.
-    """
-    return session.scalars(statement).first()
+    return list(session.scalars(statement))

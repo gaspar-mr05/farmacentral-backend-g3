@@ -8,17 +8,17 @@ Create Date: 2026-09-29 18:13:46.852726
 from collections.abc import Sequence
 
 from alembic import op
-import sqlalchemy as sa
 
-
-revision: str = '137e813427da'
-down_revision: str | Sequence[str] | None = 'e277bc243b63'
+revision: str = "137e813427da"
+down_revision: str | Sequence[str] | None = "e277bc243b63"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute("ALTER TYPE custodyeventtype ADD VALUE IF NOT EXISTS 'PRODUCTION_CONSUMED'")
+    op.execute(
+        "ALTER TYPE custodyeventtype ADD VALUE IF NOT EXISTS 'PRODUCTION_CONSUMED'"
+    )
     op.execute("ALTER TYPE custodyeventtype ADD VALUE IF NOT EXISTS 'PRODUCED'")
 
 

@@ -3,7 +3,10 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app.db.production_inputs import create_production_input, create_production_input_unit
+from app.db.production_inputs import (
+    create_production_input,
+    create_production_input_unit,
+)
 from app.db.units import set_status
 from app.models import CustodyEventType, ProductionInput, Unit
 from app.services.custody.events import log_custody_event

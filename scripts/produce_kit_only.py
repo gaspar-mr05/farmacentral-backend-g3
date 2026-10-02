@@ -7,6 +7,7 @@ Correr esto SOLO después de que los intermedios hayan pasado su propio
 available_at y estén movidos a packaging (usa check_inventory.py para
 confirmar antes de correr este script).
 """
+
 import asyncio
 
 from app.clients.farma_central import FarmaCentralClient

@@ -25,6 +25,8 @@ def create_production_input(
 def create_production_input_unit(
     session: Session, *, production_input_id: uuid.UUID, unit_id: uuid.UUID
 ) -> ProductionInputUnit:
-    input_unit = ProductionInputUnit(production_input_id=production_input_id, unit_id=unit_id)
+    input_unit = ProductionInputUnit(
+        production_input_id=production_input_id, unit_id=unit_id
+    )
     session.add(input_unit)
     return input_unit

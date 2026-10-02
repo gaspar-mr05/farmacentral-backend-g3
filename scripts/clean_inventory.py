@@ -1,6 +1,7 @@
 """Script para reiniciar completamente el inventario:
 
-1. Obtiene los productos almacenados en los espacios de Farma Central y los elimina vía API.
+1. Obtiene los productos almacenados en los espacios de Farma Central y los
+   elimina vía API.
 2. Trunca las tablas locales en PostgreSQL.
 """
 
@@ -11,14 +12,19 @@ from sqlalchemy import text
 from app.clients.farma_central import FarmaCentralClient
 from app.db.session import SessionLocal
 
-
-
 ALL_SKUS = [
     # Insumos primarios
-    "API-AMOXI-500", "API-IBUPRO-400", "API-SALBUTA",
-    "EXC-LACTOSA-DC", "LAM-BLISTER-PVC", "EXC-JARABE-BASE", "FRA-VIDRIO-120",
+    "API-AMOXI-500",
+    "API-IBUPRO-400",
+    "API-SALBUTA",
+    "EXC-LACTOSA-DC",
+    "LAM-BLISTER-PVC",
+    "EXC-JARABE-BASE",
+    "FRA-VIDRIO-120",
     # Intermedios
-    "BLI-AMOXI-500", "BLI-IBUPRO-400", "FRA-SALBUTA-120",
+    "BLI-AMOXI-500",
+    "BLI-IBUPRO-400",
+    "FRA-SALBUTA-120",
     # Kits
     "KIT-RESP-ADULTO",
 ]
@@ -57,7 +63,8 @@ def reset_local_database() -> None:
     try:
         db.execute(
             text(
-                "TRUNCATE units, lots, production_runs, production_inputs, custody_events CASCADE;"
+                "TRUNCATE units, lots, production_runs, production_inputs, "
+                "custody_events CASCADE;"
             )
         )
         db.commit()

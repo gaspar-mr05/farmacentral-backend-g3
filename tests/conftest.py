@@ -22,8 +22,9 @@ from app.main import app
 
 # Apunta al Postgres real de docker compose (mismo que usas en desarrollo,
 # por ahora no hay una DB de test separada).
-TEST_DATABASE_URL = (
-    "postgresql+psycopg://farmacentral:change-me@localhost:5432/farmacentral"
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql+psycopg://farmacentral:change-me@localhost:5432/farmacentral",
 )
 
 engine = create_engine(TEST_DATABASE_URL)

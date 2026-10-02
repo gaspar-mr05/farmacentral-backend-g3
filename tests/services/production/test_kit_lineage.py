@@ -1,95 +1,115 @@
-# tests/services/production/test_kit_lineage.py
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import (
-    Location,
-    Lot,
-    LotOrigin,
-    Product,
-    ProductCategory,
-    ProductionInput,
-    ProductionRun,
-    Unit,
-)
+from app.models import Location, Lot, LotOrigin, Product, ProductCategory, Unit
 from app.services.production.consumption import consume_units_for_run
-from app.services.production.runs import start_production_run
-from tests.conftest import db_session
+from app.services.production.runs import finish_production_run, start_production_run
 
 
 def test_kit_production_records_multilevel_lineage(db_session: Session) -> None:
+    suffix = uuid4().hex
     now = datetime.now(UTC)
-
-    # 1. Crear ubicación obligatoria para las unidades
     location = Location(
-        code="PKG-01",
-        name="Área de Acondicionamiento",
+        code=f"PACKAGING-{suffix}",
+        name="Área de acondicionamiento",
+        is_refrigerated=False,
     )
-    db_session.add(location)
-    db_session.flush()
-
-    # 2. Crear producto intermedio (Blíster) y Kit final
-    blister_product = Product(
-        sku="BLI-AMOXI-500",
-        name="Blíster amoxicilina",
+    raw_product = Product(
+        sku=f"RAW-{suffix}",
+        name="Raw material",
+        category=ProductCategory.INSUMO,
+        batch_size=1,
+        requires_refrigeration=False,
+    )
+    intermediate_product = Product(
+        sku=f"INTERMEDIATE-{suffix}",
+        name="Intermediate",
         category=ProductCategory.ACONDICIONADO,
-        batch_size=3,
+        batch_size=1,
         requires_refrigeration=False,
     )
     kit_product = Product(
-        sku="KIT-RESP-ADULTO",
-        name="Kit Respiratorio Adulto",
+        sku=f"KIT-{suffix}",
+        name="Kit",
         category=ProductCategory.KIT,
         batch_size=1,
         requires_refrigeration=False,
     )
-    db_session.add_all([blister_product, kit_product])
+    db_session.add_all([location, raw_product, intermediate_product, kit_product])
     db_session.flush()
 
-    # 3. Crear lote usando LotOrigin.FARMA_CENTRAL
-    blister_lot = Lot(
-        product_id=blister_product.id,
-        external_lot_id="L-BLI-001",
+    raw_lot = Lot(
+        product_id=raw_product.id,
+        external_lot_id=f"RAW-LOT-{suffix}",
         origin=LotOrigin.FARMA_CENTRAL,
-        expires_at=now,
+        expires_at=now + timedelta(days=30),
     )
-    db_session.add(blister_lot)
+    db_session.add(raw_lot)
     db_session.flush()
-
-    # 4. Crear unidad con location y effective_expires_at
-    blister_unit = Unit(
-        external_unit_id="U-BLI-001",
-        lot_id=blister_lot.id,
+    raw_unit = Unit(
+        external_unit_id=f"RAW-UNIT-{suffix}",
+        lot_id=raw_lot.id,
         current_location_id=location.id,
         status="available",
-        effective_expires_at=now,
+        effective_expires_at=raw_lot.expires_at,
     )
-    db_session.add(blister_unit)
+    db_session.add(raw_unit)
     db_session.flush()
 
-    # 5. Registrar ejecución de producción del Kit
-    run = start_production_run(
-        db_session, requested_at=now, expected_sku="KIT-RESP-ADULTO"
+    intermediate_run = start_production_run(
+        db_session,
+        requested_at=now,
+        expected_sku=intermediate_product.sku,
+        expected_quantity=1,
+        available_at=now,
     )
     consume_units_for_run(
         db_session,
-        production_run_id=run.id,
-        input_units_by_lot={blister_lot.id: [blister_unit]},
+        production_run_id=intermediate_run.id,
+        input_units_by_lot={raw_lot.id: [raw_unit]},
     )
-    db_session.commit()
-
-    # 6. Verificar trazabilidad/linaje
-    saved_run = db_session.scalar(
-        select(ProductionRun).where(ProductionRun.id == run.id)
+    intermediate_lot = finish_production_run(
+        db_session,
+        run=intermediate_run,
+        output_lot_external_id=f"INTERMEDIATE-LOT-{suffix}",
+        output_product_id=intermediate_product.id,
+        completed_at=now,
     )
-    assert saved_run is not None
-    assert saved_run.expected_sku == "KIT-RESP-ADULTO"
+    intermediate_unit = Unit(
+        external_unit_id=f"INTERMEDIATE-UNIT-{suffix}",
+        lot_id=intermediate_lot.id,
+        current_location_id=location.id,
+        status="available",
+        effective_expires_at=now + timedelta(days=20),
+    )
+    db_session.add(intermediate_unit)
+    db_session.flush()
 
-    inputs = db_session.scalars(
-        select(ProductionInput).where(ProductionInput.production_run_id == run.id)
-    ).all()
-    assert len(inputs) == 1
-    assert inputs[0].input_lot_id == blister_lot.id
-    assert len(inputs[0].units) == 1  # <--- Cambiado a .units
+    kit_run = start_production_run(
+        db_session,
+        requested_at=now,
+        expected_sku=kit_product.sku,
+        expected_quantity=1,
+        available_at=now,
+    )
+    consume_units_for_run(
+        db_session,
+        production_run_id=kit_run.id,
+        input_units_by_lot={intermediate_lot.id: [intermediate_unit]},
+    )
+    kit_lot = finish_production_run(
+        db_session,
+        run=kit_run,
+        output_lot_external_id=f"KIT-LOT-{suffix}",
+        output_product_id=kit_product.id,
+        completed_at=now,
+    )
+
+    kit_input_lot = kit_lot.produced_by.inputs[0].input_lot
+    raw_ancestor_lot = kit_input_lot.produced_by.inputs[0].input_lot
+    assert kit_input_lot.id == intermediate_lot.id
+    assert raw_ancestor_lot.id == raw_lot.id
+    assert kit_lot.origin is LotOrigin.OWN_PRODUCTION
+    assert intermediate_lot.origin is LotOrigin.OWN_PRODUCTION

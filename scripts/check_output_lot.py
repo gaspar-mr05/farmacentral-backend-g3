@@ -1,6 +1,7 @@
 # scripts/check_output_lot.py
 """Busca el SKU de salida indicado en todos los espacios, para confirmar
 que Farma Central ya generó el lote tras una producción."""
+
 import asyncio
 import sys
 

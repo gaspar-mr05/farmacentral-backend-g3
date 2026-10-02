@@ -1,5 +1,6 @@
 # scripts/full_flow.py
 """Ejecuta el flujo completo con un único cliente (una sola autenticación)."""
+
 import asyncio
 
 from app.clients.farma_central import FarmaCentralClient
@@ -24,24 +25,32 @@ async def main():
                 result = await client.post("/sandbox/products", {"sku": sku})
                 created_ids[sku].append(result["productId"])
 
-        for sku, ids in created_ids.items():
+        for _sku, ids in created_ids.items():
             for product_id in ids:
                 await client.move_product(product_id, packaging_space["_id"])
 
         session = SessionLocal()
         run, supply = await produce(
-            session, client=client, sku="BLI-AMOXI-500", quantity=3, input_units_by_lot={},
+            session,
+            client=client,
+            sku="BLI-AMOXI-500",
+            quantity=3,
         )
         print("ProductionRun:", run.id)
         print("Supply:", supply)
 
         # espera hasta available_at antes de verificar
-        wait_seconds = (supply.available_at - __import__("datetime").datetime.now(supply.available_at.tzinfo)).total_seconds()
+        wait_seconds = (
+            supply.available_at
+            - __import__("datetime").datetime.now(supply.available_at.tzinfo)
+        ).total_seconds()
         if wait_seconds > 0:
             print(f"Esperando {wait_seconds:.0f}s hasta available_at...")
             await asyncio.sleep(wait_seconds + 5)
 
-        products = await client.get_space_products(packaging_space["_id"], "BLI-AMOXI-500")
+        products = await client.get_space_products(
+            packaging_space["_id"], "BLI-AMOXI-500"
+        )
         print("Lote de salida:", products)
 
 

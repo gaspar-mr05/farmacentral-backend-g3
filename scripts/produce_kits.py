@@ -3,6 +3,7 @@
 
 con el requisito de al menos 30 unidades producidas en dev.
 """
+
 import asyncio
 
 from app.clients.farma_central import FarmaCentralClient
@@ -12,7 +13,7 @@ from app.services.production.orchestration import produce
 
 async def main():
     kit_sku = "KIT-RESP-ADULTO"  # Ajusta al SKU de kit correspondiente
-    total_quantity = 30          # Requisito del paso 13
+    total_quantity = 30  # Requisito del paso 13
 
     async with FarmaCentralClient() as client:
         session = SessionLocal()

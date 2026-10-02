@@ -10,11 +10,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.mixins import TimestampMixin
-from app.models.production_input import ProductionInput
-from app.models.production_run import ProductionRun
 
 if TYPE_CHECKING:
     from app.models.product import Product
+    from app.models.production_input import ProductionInput
+    from app.models.production_run import ProductionRun
     from app.models.unit import Unit
 
 
@@ -43,6 +43,10 @@ class Lot(Base, TimestampMixin):
     product: Mapped["Product"] = relationship(back_populates="lots")
     units: Mapped[list["Unit"]] = relationship(back_populates="lot")
     produced_by: Mapped["ProductionRun | None"] = relationship(
-    back_populates="output_lot", foreign_keys="ProductionRun.output_lot_id", uselist=False
+        back_populates="output_lot",
+        foreign_keys="ProductionRun.output_lot_id",
+        uselist=False,
     )
-    consumed_in: Mapped[list["ProductionInput"]] = relationship(back_populates="input_lot")
+    consumed_in: Mapped[list["ProductionInput"]] = relationship(
+        back_populates="input_lot"
+    )
