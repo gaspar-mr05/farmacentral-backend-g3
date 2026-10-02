@@ -8,6 +8,7 @@ class LocationData:
     code: str
     name: str
     is_refrigerated: bool
+    is_sellable: bool = True
 
 
 class LocationResponse(BaseModel):

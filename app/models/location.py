@@ -24,5 +24,6 @@ class Location(Base, TimestampMixin):
     is_refrigerated: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
+    is_sellable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     units: Mapped[list["Unit"]] = relationship(back_populates="current_location")

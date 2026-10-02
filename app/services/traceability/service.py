@@ -1,4 +1,4 @@
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -19,7 +19,7 @@ from app.schemas.traceability import (
 
 
 class LotNotFoundError(Exception):
-    pass
+    """Raised when traceability is requested for an unknown lot."""
 
 
 class TraceabilityService:
@@ -103,7 +103,7 @@ class TraceabilityService:
         )
 
     @classmethod
-    def _sorted_lots(cls, lots) -> list[TraceabilityLotResponse]:
+    def _sorted_lots(cls, lots: Iterable[Lot]) -> list[TraceabilityLotResponse]:
         return [
             cls._to_lot(lot)
             for lot in sorted(lots, key=lambda item: item.external_lot_id)

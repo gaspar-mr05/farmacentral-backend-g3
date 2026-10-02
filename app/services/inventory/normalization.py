@@ -58,7 +58,11 @@ def _normalize_location(space: FarmaCentralSpace) -> LocationData:
         roles.append("Cuarentena")
     if not roles:
         roles.append("Almacenamiento refrigerado" if space.cold else "Almacenamiento")
-    return LocationData(space.external_id, " / ".join(roles), space.cold)
+
+    is_sellable = not (
+        space.check_in or space.check_out or space.packaging or space.quarantine
+    )
+    return LocationData(space.external_id, " / ".join(roles), space.cold, is_sellable)
 
 
 def _normalize_stock(

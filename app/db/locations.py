@@ -35,6 +35,7 @@ def upsert_locations(
                 code=record.code,
                 name=record.name,
                 is_refrigerated=record.is_refrigerated,
+                is_sellable=record.is_sellable,
             )
             session.add(location)
             locations[record.code] = location
@@ -44,9 +45,11 @@ def upsert_locations(
         changed = (
             location.name != record.name
             or location.is_refrigerated != record.is_refrigerated
+            or location.is_sellable != record.is_sellable
         )
         location.name = record.name
         location.is_refrigerated = record.is_refrigerated
+        location.is_sellable = record.is_sellable
         updated += int(changed)
 
     return LocationUpsertResult(created, updated, locations)
