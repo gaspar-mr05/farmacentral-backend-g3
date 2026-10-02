@@ -19,8 +19,7 @@ class CustodyEventType(StrEnum):
     MOVED = "moved"
     PRODUCTION_CONSUMED = "production_consumed"
     PRODUCED = "produced"
-    # a futuro: SOLD, DISPATCHED — se agregan
-    # solo cuando esas features realmente existan (Pasos 12, 18, 19)
+    DISPATCHED = "dispatched"
 
 
 class CustodyEvent(Base):

@@ -37,9 +37,21 @@ class ProductionLinkResponse(BaseModel):
     completed_at: datetime | None
 
 
+class TraceabilityDeliveryResponse(BaseModel):
+    lot_id: UUID
+    order_id: UUID
+    buyer_name: str
+    buyer_email: str
+    sku: str
+    external_unit_id: str
+    quantity: int = 1
+    dispatched_at: datetime
+
+
 class TraceabilityResponse(BaseModel):
     lot: TraceabilityLotResponse
     current_units: list[TraceabilityUnitResponse]
     ancestors: list[TraceabilityLotResponse]
     descendants: list[TraceabilityLotResponse]
     production_links: list[ProductionLinkResponse]
+    deliveries: list[TraceabilityDeliveryResponse] = Field(default_factory=list)

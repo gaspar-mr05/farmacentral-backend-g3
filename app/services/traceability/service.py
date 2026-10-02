@@ -6,11 +6,13 @@ from sqlalchemy.orm import Session
 from app.models import Lot, ProductionInput
 from app.queries.traceability import (
     get_lot_with_units,
+    list_deliveries,
     list_downstream_inputs,
     list_upstream_inputs,
 )
 from app.schemas.traceability import (
     ProductionLinkResponse,
+    TraceabilityDeliveryResponse,
     TraceabilityLotResponse,
     TraceabilityResponse,
     TraceabilityUnitLocationResponse,
@@ -45,6 +47,18 @@ class TraceabilityService:
 
         return TraceabilityResponse(
             lot=self._to_lot(lot),
+            deliveries=[
+                TraceabilityDeliveryResponse(
+                    lot_id=assignment.unit.lot_id,
+                    order_id=assignment.order_item.order_id,
+                    buyer_name=assignment.order_item.order.buyer_name,
+                    buyer_email=assignment.order_item.order.buyer_email,
+                    sku=assignment.order_item.sku,
+                    external_unit_id=assignment.unit.external_unit_id,
+                    dispatched_at=assignment.dispatched_at,
+                )
+                for assignment in list_deliveries(self._session, {lot_id, *descendants})
+            ],
             current_units=[
                 TraceabilityUnitResponse(
                     external_unit_id=unit.external_unit_id,
