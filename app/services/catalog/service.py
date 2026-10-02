@@ -8,6 +8,8 @@ from app.clients.market_prices import MarketPriceClient
 from app.queries.catalog import list_sellable_catalog
 from app.schemas.catalog import CatalogItemResponse, MarketPrice
 
+MARKET_PRICES_ADAPTER = TypeAdapter(list[MarketPrice])
+
 
 class CatalogPriceUnavailableError(Exception):
     """Raised when a sellable kit has no current market price."""
@@ -53,7 +55,7 @@ class CatalogService:
     @staticmethod
     def _parse_prices(payload: object) -> dict[str, MarketPrice]:
         try:
-            parsed_prices = TypeAdapter(list[MarketPrice]).validate_python(payload)
+            parsed_prices = MARKET_PRICES_ADAPTER.validate_python(payload)
         except ValidationError as exc:
             raise FarmaCentralInvalidResponseError(
                 "The market price service returned invalid price data"
