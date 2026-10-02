@@ -26,3 +26,5 @@ class Location(Base, TimestampMixin):
     )
 
     units: Mapped[list["Unit"]] = relationship(back_populates="current_location")
+
+    is_sellable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
