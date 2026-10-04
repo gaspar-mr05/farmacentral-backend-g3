@@ -1,4 +1,3 @@
-# scripts/check_space_capacity.py
 import asyncio
 
 from app.clients.farma_central import FarmaCentralClient

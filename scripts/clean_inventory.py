@@ -13,7 +13,6 @@ from app.clients.farma_central import FarmaCentralClient
 from app.db.session import SessionLocal
 
 ALL_SKUS = [
-    # Insumos primarios
     "API-AMOXI-500",
     "API-IBUPRO-400",
     "API-SALBUTA",
@@ -21,11 +20,9 @@ ALL_SKUS = [
     "LAM-BLISTER-PVC",
     "EXC-JARABE-BASE",
     "FRA-VIDRIO-120",
-    # Intermedios
     "BLI-AMOXI-500",
     "BLI-IBUPRO-400",
     "FRA-SALBUTA-120",
-    # Kits
     "KIT-RESP-ADULTO",
 ]
 
@@ -40,7 +37,6 @@ async def reset_farma_central_sandbox(client: FarmaCentralClient) -> None:
             space_id = space["_id"]
             for sku in ALL_SKUS:
                 try:
-                    # Consultar productos de ese SKU en la bodega
                     products = await client.get_space_products(space_id, sku)
                     for prod in products:
                         prod_id = prod["_id"]

@@ -1,4 +1,3 @@
-# app/services/production/consumption.py
 import uuid
 
 from sqlalchemy.orm import Session

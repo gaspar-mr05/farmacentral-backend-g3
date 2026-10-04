@@ -35,7 +35,6 @@ async def prepare_and_produce(
     other_spaces,
     catalog,
 ):
-    # 1. Vaciar la bodega de empaque
     print(f"\n[1] Vaciando empaque para {target_sku}...")
     for sku in ALL_SKUS:
         while True:
@@ -57,7 +56,6 @@ async def prepare_and_produce(
             except Exception:
                 break
 
-    # 2. Calcular receta y mover insumos necesarios sorteando paginación
     print(f"[2] Buscando y moviendo insumos para {target_qty}x {target_sku}...")
     product_info = next((p for p in catalog if p["sku"] == target_sku), None)
 
@@ -95,7 +93,6 @@ async def prepare_and_produce(
                     f"{needed_qty - gathered} unidades de {comp['sku']}"
                 )
 
-    # 3. Fabricar
     print(f"[3] Fabricando {target_qty} unidades de {target_sku}...")
     run, supply = await produce(
         session, client=client, sku=target_sku, quantity=target_qty
@@ -112,7 +109,6 @@ async def main():
         other_spaces = [s for s in spaces if s["_id"] != packaging_space["_id"]]
         catalog = await client.get_available_products()
 
-        # Batch sizes reales según Farma Central
         intermediate_targets = {
             "BLI-AMOXI-500": 3,
             "BLI-IBUPRO-400": 4,
@@ -145,11 +141,9 @@ async def main():
         print(" FASE 2: ESPERA DE DISPONIBILIDAD")
         print("=============================================")
         if available_times:
-            # Encontrar el tiempo máximo de espera
             valid_times = [t for t in available_times if t is not None]
             if valid_times:
                 max_time = max(valid_times)
-                # Asegurar timezone
                 if max_time.tzinfo is None:
                     max_time = max_time.replace(tzinfo=UTC)
 
@@ -170,7 +164,6 @@ async def main():
         print(" FASE 3: PRODUCCIÓN DEL KIT FINAL")
         print("=============================================")
         try:
-            # Produce 1 Kit (consume 1 unidad de cada intermedio)
             await prepare_and_produce(
                 session,
                 client,

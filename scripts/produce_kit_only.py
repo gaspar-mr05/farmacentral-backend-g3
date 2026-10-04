@@ -1,4 +1,3 @@
-# scripts/produce_kit_only.py
 """Produce el kit final, asumiendo que los productos acondicionados
 intermedios (BLI-AMOXI-500, BLI-IBUPRO-400, FRA-SALBUTA-120) ya existen
 en el área de acondicionamiento de Farma Central en cantidad suficiente.

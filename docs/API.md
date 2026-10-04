@@ -292,8 +292,8 @@ curl --request POST \
 
 ### `GET /api/traceability/{lot_id}`
 
-Obtiene la trazabilidad recursiva de un lote. `lot_id` es el UUID interno del
-lote en PostgreSQL, no su `external_lot_id`.
+Obtiene la trazabilidad recursiva de un lote. `lot_id` puede ser el UUID interno
+de PostgreSQL o el identificador externo informado por Farma Central.
 
 La respuesta incluye:
 
@@ -319,7 +319,9 @@ Respuesta `200 OK` abreviada:
     "product_sku": "KIT-RESP-ADULTO",
     "product_name": "Kit respiratorio adulto",
     "origin": "own_production",
-    "expires_at": "2027-01-15T00:00:00Z"
+    "expires_at": "2027-01-15T00:00:00Z",
+    "quantity": 1,
+    "requires_refrigeration": false
   },
   "current_units": [
     {
@@ -355,7 +357,6 @@ Cada elemento de `production_links` tiene esta forma:
 Errores:
 
 - `404 Not Found`: no existe el lote.
-- `422 Unprocessable Entity`: `lot_id` no es un UUID válido.
 
 ## Pedidos
 
@@ -557,6 +558,10 @@ Respuesta `200 OK`:
   "created_at": "2026-10-02T15:02:00Z"
 }
 ```
+
+Si `FRONTEND_PUBLIC_URL` está configurada, este endpoint responde con una
+redirección `303` a `/payment-result` del frontend e incluye `payment_id`,
+`order_id` y `status` como parámetros de consulta.
 
 Estados posibles del pago:
 

@@ -40,3 +40,17 @@ def test_env_local_overrides_env(
 
     assert str(settings.farma_central_base_url) == "https://dev.example.test/api/"
     assert settings.farma_central_group == 3
+
+
+def test_cors_origins_are_parsed() -> None:
+    settings = Settings(
+        _env_file=None,
+        database_url="postgresql+psycopg://unused:unused@localhost/unused",
+        farma_central_base_url="https://example.test/api/",
+        farma_central_api_secret="test-secret",
+        farma_central_ftp="test-ftp",
+        farma_central_group=3,
+        cors_origins="https://one.test, https://two.test",
+    )
+
+    assert settings.allowed_origins == ["https://one.test", "https://two.test"]

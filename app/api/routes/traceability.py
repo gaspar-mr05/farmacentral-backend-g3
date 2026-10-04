@@ -1,5 +1,4 @@
 from typing import Annotated
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -16,7 +15,7 @@ router = APIRouter(tags=["traceability"])
     response_model=TraceabilityResponse,
 )
 def get_traceability(
-    lot_id: UUID,
+    lot_id: str,
     session: Annotated[Session, Depends(get_session)],
 ) -> TraceabilityResponse:
     try:

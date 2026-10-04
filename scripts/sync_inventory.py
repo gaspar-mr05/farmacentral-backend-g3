@@ -17,7 +17,6 @@ async def run() -> None:
             ).relocate_exposed_units()
 
             if movements:
-                # Recupera el expiresAt efectivo después de los movimientos.
                 await sync_service.synchronize()
 
     print(

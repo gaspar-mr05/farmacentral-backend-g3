@@ -1,4 +1,3 @@
-# scripts/check_inventory.py
 """Muestra cuántas unidades y con qué expiresAt hay de los SKUs indicados,
 en cada espacio de la fábrica. Útil para diagnosticar vencimientos."""
 

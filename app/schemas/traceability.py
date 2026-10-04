@@ -13,6 +13,8 @@ class TraceabilityLotResponse(BaseModel):
     product_name: str
     origin: LotOrigin
     expires_at: datetime | None
+    quantity: int = Field(ge=0)
+    requires_refrigeration: bool
 
 
 class TraceabilityUnitLocationResponse(BaseModel):

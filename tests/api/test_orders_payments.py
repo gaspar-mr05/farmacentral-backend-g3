@@ -8,6 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_checkout_client, get_market_price_client
+from app.api.routes import payments as payment_routes
+from app.core.config import Settings
 from app.main import app
 from app.models import (
     Location,
@@ -237,3 +239,34 @@ def test_payment_final_states_update_the_order(
     assert response.json()["status"] == expected_payment_status.value
     db_session.refresh(order)
     assert order.status == expected_order_status
+
+
+def test_payment_return_redirects_to_frontend_when_configured(
+    api_client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order = _add_order(db_session)
+    checkout = FakeCheckoutClient(external_status="SUCCESS")
+    _override_checkout(checkout)
+    settings = Settings(
+        _env_file=None,
+        database_url="postgresql+psycopg://unused:unused@localhost/unused",
+        farma_central_base_url="https://example.test/api/",
+        farma_central_api_secret="test-secret",
+        farma_central_ftp="test-ftp",
+        farma_central_group=3,
+        frontend_public_url="https://frontend.test/",
+    )
+    monkeypatch.setattr(payment_routes, "get_settings", lambda: settings)
+    payment_id = api_client.post(f"/api/orders/{order.id}/payments").json()["id"]
+
+    response = api_client.get(
+        f"/api/payments/{payment_id}/return/success",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith(
+        "https://frontend.test/payment-result?"
+    )

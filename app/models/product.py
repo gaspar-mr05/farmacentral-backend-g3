@@ -1,4 +1,3 @@
-# app/models/product.py
 import uuid
 from enum import StrEnum
 from typing import TYPE_CHECKING

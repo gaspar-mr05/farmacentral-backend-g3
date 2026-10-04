@@ -24,6 +24,10 @@ Variables importantes:
 - `CHECKOUT_BASE_URL`: URL base de la pasarela de pagos (`dev` o `prod`).
 - `APP_PUBLIC_URL`: URL pública del backend, usada por checkout para retornar el
   resultado del pago. En producción debe usar HTTPS y el dominio asignado.
+- `FRONTEND_PUBLIC_URL`: URL opcional del frontend. Si se define, el retorno de
+  checkout redirige a `/payment-result` en esa URL.
+- `CORS_ORIGINS`: orígenes permitidos separados por coma. Puede quedar vacío si
+  frontend y backend comparten dominio.
 
 ## Ejecutar en local
 
@@ -215,6 +219,10 @@ Para producir 30 unidades de todos los kits usando abastecimiento normal:
 python -m scripts.complete_kit_production --quantity 30
 python -m scripts.verify_kit_production --minimum 30
 ```
+
+Al terminar, `complete_kit_production` mueve al buffer las unidades que quedaron
+en acondicionamiento para que los kits aparezcan como stock vendible. El comando
+`python -m scripts.empty_packaging` permite repetir ese paso de forma segura.
 
 El comando rechaza una URL de producción salvo que se agregue explícitamente
 `--allow-production`. Dev y producción deben usar instalaciones y bases de datos

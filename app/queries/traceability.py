@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models import (
@@ -15,14 +15,23 @@ from app.models import (
 )
 
 
-def get_lot_with_units(session: Session, lot_id: UUID) -> Lot | None:
+def get_lot_with_units(session: Session, identifier: str) -> Lot | None:
+    try:
+        internal_id = UUID(identifier)
+    except ValueError:
+        internal_id = None
     statement = (
         select(Lot)
         .options(
             joinedload(Lot.product),
             selectinload(Lot.units).joinedload(Unit.current_location),
         )
-        .where(Lot.id == lot_id)
+        .where(
+            or_(
+                Lot.external_lot_id == identifier,
+                Lot.id == internal_id,
+            )
+        )
     )
     return session.scalar(statement)
 
@@ -59,9 +68,13 @@ def _list_production_inputs(
         .join(ProductionInput.production_run)
         .options(
             joinedload(ProductionInput.input_lot).joinedload(Lot.product),
+            joinedload(ProductionInput.input_lot).selectinload(Lot.units),
             joinedload(ProductionInput.production_run)
             .joinedload(ProductionRun.output_lot)
             .joinedload(Lot.product),
+            joinedload(ProductionInput.production_run)
+            .joinedload(ProductionRun.output_lot)
+            .selectinload(Lot.units),
             selectinload(ProductionInput.units).joinedload(ProductionInputUnit.unit),
         )
         .where(condition)

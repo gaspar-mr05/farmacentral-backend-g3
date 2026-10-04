@@ -28,10 +28,13 @@ class TraceabilityService:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def get_traceability(self, lot_id: UUID) -> TraceabilityResponse:
-        lot = get_lot_with_units(self._session, lot_id)
+    def get_traceability(self, identifier: UUID | str) -> TraceabilityResponse:
+        identifier = str(identifier)
+        lot = get_lot_with_units(self._session, identifier)
         if lot is None:
-            raise LotNotFoundError(f"Lot {lot_id} was not found")
+            raise LotNotFoundError(f"Lot {identifier} was not found")
+
+        lot_id = lot.id
 
         ancestors, upstream_links = self._walk_lineage(
             lot_id,
@@ -114,6 +117,8 @@ class TraceabilityService:
             product_name=lot.product.name,
             origin=lot.origin,
             expires_at=lot.expires_at,
+            quantity=len(lot.units),
+            requires_refrigeration=lot.product.requires_refrigeration,
         )
 
     @classmethod

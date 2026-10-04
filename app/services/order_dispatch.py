@@ -34,7 +34,6 @@ class OrderDispatchService:
         destination = None
         try:
             while True:
-                # Each commit releases the lock; reload progress before continuing.
                 order = self._get_locked_order(order_id)
                 if order.status == OrderStatus.DISPATCHED:
                     self._session.commit()
@@ -49,7 +48,6 @@ class OrderDispatchService:
                 await self._dispatch_unit(pending[0], destination)
                 if len(pending) == 1:
                     order.status = OrderStatus.DISPATCHED
-                # Confirmed deliveries survive failures in subsequent units.
                 self._session.commit()
         except Exception:
             self._session.rollback()

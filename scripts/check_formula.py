@@ -1,4 +1,3 @@
-# scripts/check_formula.py
 import asyncio
 
 from app.clients.farma_central import FarmaCentralClient

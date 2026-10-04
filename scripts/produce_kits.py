@@ -1,4 +1,3 @@
-# scripts/produce_kits.py
 """Script para producir Kits Clínicos (ej. KIT-RESP-ADULTO) y cumplir
 
 con el requisito de al menos 30 unidades producidas en dev.

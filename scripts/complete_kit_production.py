@@ -9,6 +9,7 @@ from app.clients.farma_central import FarmaCentralClient
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.services.production.kits import KitProductionService
+from scripts.empty_packaging import empty_packaging
 
 
 def _arguments() -> argparse.Namespace:
@@ -59,10 +60,12 @@ async def main() -> None:
                 )
             else:
                 runs = await service.produce_all_kits(quantity_per_sku=args.quantity)
+            moved = await empty_packaging(client, session)
 
     for sku, sku_runs in runs.items():
         produced = sum(run.expected_quantity for run in sku_runs)
         print(f"{sku}: {produced} units across {len(sku_runs)} runs")
+    print(f"Moved {moved} units from packaging to the buffer")
 
 
 if __name__ == "__main__":
