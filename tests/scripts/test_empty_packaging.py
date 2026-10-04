@@ -7,61 +7,32 @@ from app.clients.farma_central_exceptions import FarmaCentralInvalidResponseErro
 from scripts import empty_packaging as module
 
 
-def _product(sku: str, *, sellable: bool) -> dict:
-    return {
-        "sku": sku,
-        "name": sku,
-        "production": {"batch": 1, "at": "packaging"},
-        "sellable": sellable,
-    }
-
-
-def _unit(unit_id: str, sku: str) -> dict:
-    return {
-        "_id": unit_id,
-        "sku": sku,
-        "store": "PACKAGING",
-        "expiresAt": "2027-01-01T00:00:00Z",
-    }
-
-
 class FakeSession:
-    def __init__(self, pending_run_id=None):
+    def __init__(self, pending_run_id=None, unit_ids=()):
         self.pending_run_id = pending_run_id
+        self.units = [SimpleNamespace(external_unit_id=value) for value in unit_ids]
 
     def scalar(self, statement):
         del statement
         return self.pending_run_id
 
+    def scalars(self, statement):
+        del statement
+        return self.units
+
 
 class FakeClient:
-    def __init__(self):
-        self.units = {
-            "INTERMEDIATE": [_unit("INTERMEDIATE-1", "INTERMEDIATE")],
-            "KIT-NEW": [_unit("KIT-1", "KIT-NEW"), _unit("KIT-2", "KIT-NEW")],
-        }
-
-    async def get_available_products(self):
-        return [
-            _product("INTERMEDIATE", sellable=False),
-            _product("KIT-NEW", sellable=True),
-        ]
-
     async def get_spaces(self):
         return [
             {"_id": "PACKAGING", "packaging": True},
             {"_id": "BUFFER", "buffer": True, "cold": True},
         ]
 
-    async def get_space_products(self, store_id, sku, *, limit=None):
-        assert store_id == "PACKAGING"
-        assert limit == module.PAGE_SIZE
-        return list(self.units[sku])
-
 
 @pytest.mark.anyio
-async def test_empty_packaging_discovers_and_moves_kits(monkeypatch) -> None:
+async def test_empty_packaging_moves_synchronized_units(monkeypatch) -> None:
     client = FakeClient()
+    session = FakeSession(unit_ids=("INTERMEDIATE-1", "KIT-1", "KIT-2"))
     sync = AsyncMock()
     moves = []
 
@@ -78,14 +49,12 @@ async def test_empty_packaging_discovers_and_moves_kits(monkeypatch) -> None:
         async def move(self, *, product_id, destination_store):
             assert destination_store == "BUFFER"
             moves.append(product_id)
-            for units in client.units.values():
-                units[:] = [unit for unit in units if unit["_id"] != product_id]
             return SimpleNamespace(moved=True)
 
     monkeypatch.setattr(module, "InventorySyncService", FakeSyncService)
     monkeypatch.setattr(module, "ProductMovementService", FakeMovementService)
 
-    moved = await module.empty_packaging(client, FakeSession())
+    moved = await module.empty_packaging(client, session)
 
     assert moved == 3
     assert moves == ["INTERMEDIATE-1", "KIT-1", "KIT-2"]
