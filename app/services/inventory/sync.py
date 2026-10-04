@@ -1,4 +1,3 @@
-# app/services/inventory/sync.py
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -41,7 +40,7 @@ class InventorySyncService:
         self._session = session
 
     async def synchronize(self) -> InventorySyncResult:
-        catalog, spaces, units = await self._collector.collect()
+        catalog, spaces, units, incomplete_groups = await self._collector.collect()
         recently_produced_at = datetime.now(UTC) - timedelta(minutes=10)
         production_skus = set(
             self._session.scalars(
@@ -60,7 +59,11 @@ class InventorySyncService:
             units = list(units_by_id.values())
         data = normalize_inventory(catalog, spaces, units)
         try:
-            result = sync_inventory(self._session, data)
+            result = sync_inventory(
+                self._session,
+                data,
+                incomplete_groups=incomplete_groups,
+            )
             self._session.commit()
             return result
         except Exception:
@@ -68,7 +71,12 @@ class InventorySyncService:
             raise
 
 
-def sync_inventory(session: Session, data: InventoryData) -> InventorySyncResult:
+def sync_inventory(
+    session: Session,
+    data: InventoryData,
+    *,
+    incomplete_groups: set[tuple[str, str]] | None = None,
+) -> InventorySyncResult:
     products = upsert_products(session, data.products)
     locations = upsert_locations(session, data.locations)
     session.flush()
@@ -81,6 +89,7 @@ def sync_inventory(session: Session, data: InventoryData) -> InventorySyncResult
         data.units,
         lots.by_external_id,
         locations.by_code,
+        incomplete_groups=incomplete_groups,
     )
     _link_new_production_outputs(session, units.created_units)
     _record_custody_changes(session, units.location_changes)

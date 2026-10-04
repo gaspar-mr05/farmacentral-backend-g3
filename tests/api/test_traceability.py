@@ -18,6 +18,8 @@ def test_get_traceability_returns_lot_lineage_and_current_units(
     body = response.json()
     assert body["lot"]["external_lot_id"] == scenario.kit_lot_external_id
     assert body["lot"]["origin"] == "own_production"
+    assert body["lot"]["quantity"] == 1
+    assert body["lot"]["requires_refrigeration"] is False
     assert {lot["external_lot_id"] for lot in body["ancestors"]} == {
         scenario.raw_lot_external_id,
         scenario.intermediate_lot_external_id,
@@ -43,7 +45,12 @@ def test_get_traceability_returns_not_found(api_client: TestClient) -> None:
     assert response.status_code == 404
 
 
-def test_get_traceability_rejects_invalid_uuid(api_client: TestClient) -> None:
-    response = api_client.get("/api/traceability/not-a-uuid")
+def test_get_traceability_accepts_external_lot_id(
+    api_client: TestClient,
+    db_session: Session,
+) -> None:
+    scenario = create_traceability_scenario(db_session)
+    response = api_client.get(f"/api/traceability/{scenario.kit_lot_external_id}")
 
-    assert response.status_code == 422
+    assert response.status_code == 200
+    assert response.json()["lot"]["id"] == str(scenario.kit_lot_id)

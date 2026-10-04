@@ -15,6 +15,7 @@ CollectedInventory = tuple[
     list[FarmaCentralProduct],
     list[FarmaCentralSpace],
     list[FarmaCentralUnit],
+    set[tuple[str, str]],
 ]
 
 
@@ -31,13 +32,13 @@ class InventoryCollector:
         )
         catalog = _parse_list(catalog_payload, FarmaCentralProduct, "products")
         spaces = _parse_list(spaces_payload, FarmaCentralSpace, "spaces")
-        units = await self._collect_units(spaces)
-        return catalog, spaces, units
+        units, incomplete_groups = await self._collect_units(spaces)
+        return catalog, spaces, units, incomplete_groups
 
     async def _collect_units(
         self,
         spaces: list[FarmaCentralSpace],
-    ) -> list[FarmaCentralUnit]:
+    ) -> tuple[list[FarmaCentralUnit], set[tuple[str, str]]]:
         inventory_payloads = await asyncio.gather(
             *(self._client.get_space_inventory(space.external_id) for space in spaces)
         )
@@ -63,11 +64,14 @@ class InventoryCollector:
         )
 
         units = []
+        incomplete_groups = set()
         for (space, item), payload in zip(requests, product_payloads, strict=True):
             space_units = _parse_list(payload, FarmaCentralUnit, "space products")
             _validate_units(space, item, space_units)
             units.extend(space_units)
-        return units
+            if item.quantity > len(space_units):
+                incomplete_groups.add((space.external_id, item.sku))
+        return units, incomplete_groups
 
     async def collect_units_for_skus(
         self,
@@ -109,7 +113,7 @@ def _validate_units(
     item: FarmaCentralInventoryItem,
     units: list[FarmaCentralUnit],
 ) -> None:
-    correct_count = len(units) == item.quantity
+    correct_count = len(units) == min(item.quantity, 200)
     correct_origin = all(
         unit.sku == item.sku and unit.store_id == space.external_id for unit in units
     )

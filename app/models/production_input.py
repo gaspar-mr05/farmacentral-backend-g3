@@ -1,4 +1,3 @@
-# app/models/production_input.py
 import uuid
 from typing import TYPE_CHECKING
 

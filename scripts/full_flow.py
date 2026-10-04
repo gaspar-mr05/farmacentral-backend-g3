@@ -1,4 +1,3 @@
-# scripts/full_flow.py
 """Ejecuta el flujo completo con un único cliente (una sola autenticación)."""
 
 import asyncio
@@ -39,7 +38,6 @@ async def main():
         print("ProductionRun:", run.id)
         print("Supply:", supply)
 
-        # espera hasta available_at antes de verificar
         wait_seconds = (
             supply.available_at
             - __import__("datetime").datetime.now(supply.available_at.tzinfo)

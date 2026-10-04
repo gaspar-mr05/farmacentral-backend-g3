@@ -45,6 +45,8 @@ def upsert_units(
     records: Iterable[UnitData],
     lots_by_external_id: dict[str, Lot],
     locations_by_code: dict[str, Location],
+    *,
+    incomplete_groups: set[tuple[str, str]] | None = None,
 ) -> UnitUpsertResult:
     records = tuple(records)
     units = {
@@ -105,8 +107,14 @@ def upsert_units(
             )
 
     visible_ids = {record.external_unit_id for record in records}
+    incomplete_groups = incomplete_groups or set()
     for external_id, unit in units.items():
-        if external_id not in visible_ids and unit.status == "available":
+        group = (unit.current_location.code, unit.lot.product.sku)
+        if (
+            external_id not in visible_ids
+            and group not in incomplete_groups
+            and unit.status == "available"
+        ):
             unit.status = "unavailable"
             updated += 1
 

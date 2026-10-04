@@ -1,4 +1,3 @@
-# scripts/farma_central_common.py
 from app.clients.farma_central import FarmaCentralClient
 
 

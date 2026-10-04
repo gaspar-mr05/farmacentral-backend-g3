@@ -194,5 +194,49 @@ def test_sync_preserves_local_reservation_while_unit_remains_available(
     assert unit.status == "reserved"
 
 
+def test_incomplete_inventory_group_does_not_hide_unseen_units(db_session) -> None:
+    suffix = uuid4().hex
+    product = Product(
+        sku=f"LARGE-{suffix}",
+        name="Large inventory",
+        category=ProductCategory.INSUMO,
+        batch_size=1,
+        requires_refrigeration=False,
+    )
+    location = Location(
+        code=f"BUFFER-{suffix}",
+        name="Buffer",
+        is_refrigerated=True,
+    )
+    db_session.add_all([product, location])
+    db_session.flush()
+    lot = Lot(
+        external_lot_id=f"LARGE-LOT-{suffix}",
+        product_id=product.id,
+        origin=LotOrigin.FARMA_CENTRAL,
+    )
+    db_session.add(lot)
+    db_session.flush()
+    unit = Unit(
+        external_unit_id=f"LARGE-UNIT-{suffix}",
+        lot_id=lot.id,
+        current_location_id=location.id,
+        status="available",
+        effective_expires_at=datetime.now(UTC) + timedelta(days=30),
+    )
+    db_session.add(unit)
+    db_session.flush()
+
+    upsert_units(
+        db_session,
+        [],
+        {},
+        {},
+        incomplete_groups={(location.code, product.sku)},
+    )
+
+    assert unit.status == "available"
+
+
 def _count(db_session, model, criterion) -> int:
     return db_session.scalar(select(func.count()).select_from(model).where(criterion))

@@ -1,4 +1,3 @@
-# app/db/lots.py
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 

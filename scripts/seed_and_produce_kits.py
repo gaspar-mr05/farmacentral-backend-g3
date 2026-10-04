@@ -1,4 +1,3 @@
-# scripts/seed_and_produce_kits.py
 """Abastece insumos y produce de forma multinivel los componentes requeridos
 
 para el KIT-RESP-ADULTO antes de fabricar las 30 unidades del Kit.
@@ -11,7 +10,6 @@ from app.db.session import SessionLocal
 from app.services.production.orchestration import produce
 from scripts.farma_central_common import get_buffer_and_packaging
 
-# Insumos directos de sandbox necesarios para armar los blísteres y frascos requeridos
 REQUIRED_RAW_MATERIALS = {
     "API-AMOXI-500": 36,  # Para fabricar los blísteres de amoxicilina faltantes
     "API-IBUPRO-400": 60,  # Para fabricar los blísteres de ibuprofeno
@@ -36,7 +34,6 @@ async def main():
 
         session = SessionLocal()
 
-        # Producir los componentes acondicionados faltantes
         print("3. Produciendo componentes intermedios...")
         for comp_sku, qty in [
             ("BLI-AMOXI-500", 18),
@@ -48,7 +45,6 @@ async def main():
 
         print("4. Componentes intermedios fabricados con éxito.")
 
-        # Producir el Kit Final
         print("5. Iniciando fabricación de 30 unidades del KIT-RESP-ADULTO...")
         run, supply = await produce(
             session,

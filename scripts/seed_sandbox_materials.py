@@ -1,4 +1,3 @@
-# scripts/seed_sandbox_materials.py
 """Crea unidades de insumo vía el endpoint sandbox, respetando el rate-limit
 general de 250 requests/60s."""
 

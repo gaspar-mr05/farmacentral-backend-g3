@@ -1,4 +1,3 @@
-# app/models/production_run.py
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -21,9 +20,6 @@ class ProductionRun(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    # El lote generado por esta producción. Nullable porque, según el flujo del
-    # Paso 12, la producción se solicita antes de que el lote de salida exista
-    # (Farma Central entrega la hora de recepción, no el lote inmediatamente).
     output_lot_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("lots.id"), unique=True, nullable=True
     )

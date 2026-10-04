@@ -1,7 +1,9 @@
 from typing import Annotated, Literal
+from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_checkout_client
@@ -11,6 +13,7 @@ from app.clients.checkout_exceptions import (
     CheckoutError,
     CheckoutTimeoutError,
 )
+from app.core.config import Settings, get_settings
 from app.db.session import get_session
 from app.schemas.payments import PaymentResponse, PaymentStartResponse
 from app.services.orders import OrderNotFoundError, get_order
@@ -66,13 +69,11 @@ async def confirm_payment(
     result: Literal["success", "error", "cancelled"],
     session: Annotated[Session, Depends(get_session)],
     client: Annotated[CheckoutClient, Depends(get_checkout_client)],
-) -> PaymentResponse:
-    # `result` only identifies which return URL the gateway used. The trusted
-    # status is always read directly from checkout by PaymentService.
+) -> PaymentResponse | RedirectResponse:
     _ = result
     try:
         payment = await PaymentService(client, session).confirm(payment_id)
-        return PaymentResponse.model_validate(payment)
+        response = PaymentResponse.model_validate(payment)
     except PaymentNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
@@ -87,3 +88,16 @@ async def confirm_payment(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Payment status could not be verified",
         ) from exc
+
+    settings: Settings = get_settings()
+    if settings.frontend_public_url is None:
+        return response
+    query = urlencode(
+        {
+            "payment_id": response.id,
+            "order_id": response.order_id,
+            "status": response.status,
+        }
+    )
+    target = f"{str(settings.frontend_public_url).rstrip('/')}/payment-result?{query}"
+    return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)

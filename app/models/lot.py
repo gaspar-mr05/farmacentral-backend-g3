@@ -1,4 +1,3 @@
-# app/models/lot.py
 import uuid
 from datetime import datetime
 from enum import StrEnum

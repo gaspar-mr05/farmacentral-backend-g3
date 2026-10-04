@@ -45,7 +45,6 @@ class CustodyEvent(Base):
         ForeignKey("locations.id"), nullable=True
     )
 
-    # Referencias opcionales a los procesos que originan el evento.
     production_run_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     order_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("orders.id"), nullable=True

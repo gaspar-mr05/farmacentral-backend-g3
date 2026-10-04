@@ -1,4 +1,3 @@
-# scripts/seed_and_produce.py
 """Flujo completo de prueba: siembra insumos en sandbox, los mueve a
 acondicionamiento, y dispara una producción real contra Farma Central dev.
 Todo en una sola ejecución continua para minimizar riesgo de vencimiento."""
