@@ -105,6 +105,26 @@ sudo systemctl status farmacentral-backend.service --no-pager
 curl --fail http://127.0.0.1:8000/api/health
 ```
 
+### Frontend y nginx
+
+nginx sirve el frontend (repositorio `farmacentral-frontend-g3`) en `/` y reenvía `/api`, `/docs`, `/redoc` y `/openapi.json` al backend. El
+workflow del frontend publica cada build en
+`/var/www/farmacentral-frontend/releases/<sha>` y apunta el enlace `current` a
+la versión nueva.
+
+`deploy/nginx.conf` incluye el bloque HTTPS con el certificado que creó
+`certbot --nginx`. Para aplicar un cambio en ese archivo:
+
+```bash
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/farmacentral-backend
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+En `.env`, `APP_PUBLIC_URL` y `FRONTEND_PUBLIC_URL` deben ser
+`https://choripan3.ing.uc.cl/` para que checkout vuelva al portal después del
+pago.
+
 ### Actualizar el servidor
 
 Cada `push` a `main` despliega mediante GitHub Actions. Para actualizar
