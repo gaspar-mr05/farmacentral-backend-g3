@@ -146,7 +146,6 @@ class KitProductionService:
         max_chunk = self._maximum_chunk_size(product)
         chunks = _split_quantity(production_quantity, max_chunk)
         runs: list[ProductionRun] = []
-        availability_times: list[datetime] = []
 
         await self._reject_ambiguous_pending_runs(product.sku)
         next_path = (*dependency_path, product.sku)
@@ -174,15 +173,14 @@ class KitProductionService:
                 quantity=chunk,
             )
             runs.append(run)
-            availability_times.append(supply.available_at)
             logger.info(
                 "Production run %s accepted; available at %s",
                 run.id,
                 supply.available_at.isoformat(),
             )
+            await _wait_until(supply.available_at)
+            await self._wait_for_linked_outputs([run])
 
-        await _wait_until(max(availability_times))
-        await self._wait_for_linked_outputs(runs)
         return runs
 
     async def _ensure_available(
