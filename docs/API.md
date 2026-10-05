@@ -566,7 +566,9 @@ redirección `303` a `/payment-result` del frontend e incluye `payment_id`,
 Estados posibles del pago:
 
 - `pending`: todavía no existe un resultado final.
-- `success`: pago exitoso; el pedido pasa a `paid`.
+- `success`: pago exitoso; el backend asigna unidades FEFO, las despacha y el
+  pedido pasa a `dispatched`. Si Farma Central falla durante el despacho, el
+  pedido permanece `paid` y repetir el retorno retoma la operación pendiente.
 - `cancelled`: cancelado por el usuario; el pedido pasa a `cancelled`.
 - `error`: checkout informó un error; el pedido pasa a `payment_error`.
 - `obsolete`: la sesión expiró; el pedido pasa a `payment_error`.

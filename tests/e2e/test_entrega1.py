@@ -180,17 +180,23 @@ async def test_entrega1_from_raw_material_to_customer(
     assert callback.status_code == 200
     assert callback.json()["status"] == payment_status.lower()
 
-    fulfillment = api_client.post(f"/api/orders/{order_id}/fulfillment")
-    dispatch = api_client.post(f"/api/orders/{order_id}/dispatch")
     if payment_status == "SUCCESS":
-        assert fulfillment.status_code == dispatch.status_code == 200
-        assert dispatch.json()["status"] == order_status
-        assigned = dispatch.json()["items"][0]["assigned_units"]
+        completed = api_client.get(f"/api/orders/{order_id}")
+        assert completed.status_code == 200
+        assert completed.json()["status"] == order_status
+        assigned = completed.json()["items"][0]["assigned_units"]
         assert len(assigned) == 1
         assert assigned[0]["external_unit_id"] == kit.external_unit_id
         assert assigned[0]["dispatched_at"] is not None
         assert client.units[client.kit]["store"] == client.dispatch
+        updated_catalog = api_client.get("/api/catalog")
+        updated_item = next(
+            item for item in updated_catalog.json() if item["sku"] == client.kit
+        )
+        assert updated_item["stock"] == 0
     else:
+        fulfillment = api_client.post(f"/api/orders/{order_id}/fulfillment")
+        dispatch = api_client.post(f"/api/orders/{order_id}/dispatch")
         assert fulfillment.status_code == dispatch.status_code == 409
         assert kit.status == "available"
         assert client.units[client.kit]["store"] == client.warehouse

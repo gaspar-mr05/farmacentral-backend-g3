@@ -7,7 +7,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_checkout_client, get_market_price_client
+from app.api.dependencies import (
+    get_checkout_client,
+    get_farma_central_client,
+    get_market_price_client,
+)
 from app.api.routes import payments as payment_routes
 from app.core.config import Settings
 from app.main import app
@@ -50,6 +54,37 @@ class FakeCheckoutClient:
     async def get_payment(self, payment_id: str) -> dict:
         self.status_requests += 1
         return {"amount": 3000, "group": 3, "status": self.external_status}
+
+
+class FakeFarmaCentralClient:
+    def __init__(self) -> None:
+        self.dispatch = "PAYMENT-DISPATCH"
+        self.dispatched: dict[str, str] = {}
+
+    async def get_spaces(self) -> list[dict]:
+        return [{"_id": self.dispatch, "checkOut": True}]
+
+    async def move_product(self, product_id: str, store_id: str) -> None:
+        self.dispatched[product_id] = store_id
+
+    async def get_space_products(
+        self,
+        store_id: str,
+        sku: str,
+        *,
+        limit: int | None = None,
+    ) -> list[dict]:
+        _ = limit
+        return [
+            {
+                "_id": product_id,
+                "sku": sku,
+                "store": destination,
+                "expiresAt": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+            }
+            for product_id, destination in self.dispatched.items()
+            if destination == store_id
+        ]
 
 
 def _override_market_prices(session: Session, price_by_sku: dict[str, int]) -> None:
@@ -114,6 +149,43 @@ def _add_sellable_kit(session: Session, *, stock: int = 2) -> Product:
 
 
 def _add_order(session: Session) -> Order:
+    product = Product(
+        sku="KIT-PAYMENT",
+        name="Kit payment",
+        category=ProductCategory.KIT,
+        batch_size=1,
+        requires_refrigeration=False,
+    )
+    warehouse = Location(
+        code=f"PAYMENT-WAREHOUSE-{uuid4().hex}",
+        name="Payment warehouse",
+        is_sellable=True,
+    )
+    dispatch = Location(
+        code="PAYMENT-DISPATCH",
+        name="Payment dispatch",
+        is_sellable=False,
+    )
+    session.add_all([product, warehouse, dispatch])
+    session.flush()
+    lot = Lot(
+        external_lot_id=f"PAYMENT-LOT-{uuid4().hex}",
+        product_id=product.id,
+        expires_at=datetime.now(UTC) + timedelta(days=30),
+        origin=LotOrigin.OWN_PRODUCTION,
+    )
+    session.add(lot)
+    session.flush()
+    session.add_all(
+        Unit(
+            external_unit_id=f"PAYMENT-UNIT-{uuid4().hex}",
+            lot_id=lot.id,
+            current_location_id=warehouse.id,
+            status="available",
+            effective_expires_at=datetime.now(UTC) + timedelta(days=30),
+        )
+        for _ in range(2)
+    )
     order = Order(
         buyer_name="Ada Lovelace",
         buyer_email="ada@example.com",
@@ -132,6 +204,10 @@ def _override_checkout(client: FakeCheckoutClient) -> None:
         yield client
 
     app.dependency_overrides[get_checkout_client] = override
+
+
+def _override_farma_central(client: FakeFarmaCentralClient) -> None:
+    app.dependency_overrides[get_farma_central_client] = lambda: client
 
 
 def test_create_order_calculates_total_with_current_price(
@@ -197,6 +273,8 @@ def test_successful_payment_is_verified_and_confirmation_is_idempotent(
     order = _add_order(db_session)
     checkout = FakeCheckoutClient(external_status="SUCCESS")
     _override_checkout(checkout)
+    farma_central = FakeFarmaCentralClient()
+    _override_farma_central(farma_central)
 
     start_response = api_client.post(f"/api/orders/{order.id}/payments")
     payment_id = start_response.json()["id"]
@@ -210,7 +288,8 @@ def test_successful_payment_is_verified_and_confirmation_is_idempotent(
     assert repeated_callback.json()["status"] == "success"
     assert checkout.status_requests == 1
     db_session.refresh(order)
-    assert order.status == OrderStatus.PAID
+    assert order.status == OrderStatus.DISPATCHED
+    assert len(farma_central.dispatched) == 2
 
 
 @pytest.mark.parametrize(
@@ -249,6 +328,7 @@ def test_payment_return_redirects_to_frontend_when_configured(
     order = _add_order(db_session)
     checkout = FakeCheckoutClient(external_status="SUCCESS")
     _override_checkout(checkout)
+    _override_farma_central(FakeFarmaCentralClient())
     settings = Settings(
         _env_file=None,
         database_url="postgresql+psycopg://unused:unused@localhost/unused",

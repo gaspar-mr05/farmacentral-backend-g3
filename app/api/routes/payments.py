@@ -6,16 +6,30 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_checkout_client
+from app.api.dependencies import get_checkout_client, get_farma_central_client
 from app.clients.checkout import CheckoutClient
 from app.clients.checkout_exceptions import (
     CheckoutConnectionError,
     CheckoutError,
     CheckoutTimeoutError,
 )
+from app.clients.farma_central import FarmaCentralClient
+from app.clients.farma_central_exceptions import (
+    FarmaCentralConnectionError,
+    FarmaCentralError,
+    FarmaCentralTimeoutError,
+)
 from app.core.config import Settings, get_settings
 from app.db.session import get_session
+from app.models import OrderStatus, PaymentStatus
 from app.schemas.payments import PaymentResponse, PaymentStartResponse
+from app.services.order_dispatch import InvalidDispatchStateError, OrderDispatchService
+from app.services.order_fulfillment import (
+    InsufficientFulfillmentStockError,
+    InvalidFulfillmentStateError,
+    OrderFulfillmentService,
+    OrderNotPaidError,
+)
 from app.services.orders import OrderNotFoundError, get_order
 from app.services.payments import (
     OrderAlreadyPaidError,
@@ -68,11 +82,19 @@ async def confirm_payment(
     payment_id: UUID,
     result: Literal["success", "error", "cancelled"],
     session: Annotated[Session, Depends(get_session)],
-    client: Annotated[CheckoutClient, Depends(get_checkout_client)],
+    checkout_client: Annotated[CheckoutClient, Depends(get_checkout_client)],
+    farma_client: Annotated[FarmaCentralClient, Depends(get_farma_central_client)],
 ) -> PaymentResponse | RedirectResponse:
     _ = result
     try:
-        payment = await PaymentService(client, session).confirm(payment_id)
+        payment = await PaymentService(checkout_client, session).confirm(payment_id)
+        if payment.status == PaymentStatus.SUCCESS:
+            order = get_order(session, payment.order_id)
+            if order.status == OrderStatus.PAID:
+                OrderFulfillmentService(session).fulfill(payment.order_id)
+                await OrderDispatchService(farma_client, session).dispatch(
+                    payment.order_id
+                )
         response = PaymentResponse.model_validate(payment)
     except PaymentNotFoundError as exc:
         raise HTTPException(
@@ -87,6 +109,26 @@ async def confirm_payment(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Payment status could not be verified",
+        ) from exc
+    except (
+        InsufficientFulfillmentStockError,
+        InvalidFulfillmentStateError,
+        OrderNotPaidError,
+        InvalidDispatchStateError,
+    ) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Payment succeeded, but the order could not be completed: {exc}",
+        ) from exc
+    except (FarmaCentralConnectionError, FarmaCentralTimeoutError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Payment succeeded, but Farma Central is unavailable",
+        ) from exc
+    except FarmaCentralError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Payment succeeded, but dispatch could not be confirmed",
         ) from exc
 
     settings: Settings = get_settings()
