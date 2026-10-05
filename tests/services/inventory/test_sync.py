@@ -16,6 +16,9 @@ from app.models import (
     LotOrigin,
     Product,
     ProductCategory,
+    ProductionInput,
+    ProductionInputUnit,
+    ProductionRun,
     Unit,
 )
 from app.schemas.units import UnitData
@@ -248,6 +251,76 @@ def test_sync_preserves_local_reservation_while_unit_remains_available(
     )
 
     assert unit.status == "reserved"
+
+
+def test_sync_restores_consumed_status_from_production_lineage(
+    db_session,
+) -> None:
+    suffix = uuid4().hex
+    product = Product(
+        sku=f"CONSUMED-{suffix}",
+        name="Consumed production input",
+        category=ProductCategory.INSUMO,
+        batch_size=1,
+        requires_refrigeration=False,
+    )
+    location = Location(
+        code=f"PACKAGING-{suffix}",
+        name="Packaging",
+        is_refrigerated=False,
+    )
+    db_session.add_all([product, location])
+    db_session.flush()
+    expires_at = datetime.now(UTC) + timedelta(days=30)
+    lot = Lot(
+        external_lot_id=f"CONSUMED-LOT-{suffix}",
+        product_id=product.id,
+        expires_at=expires_at,
+        origin=LotOrigin.FARMA_CENTRAL,
+    )
+    db_session.add(lot)
+    db_session.flush()
+    unit = Unit(
+        external_unit_id=f"CONSUMED-UNIT-{suffix}",
+        lot_id=lot.id,
+        current_location_id=location.id,
+        status="available",
+        effective_expires_at=expires_at,
+    )
+    run = ProductionRun(
+        requested_at=datetime.now(UTC),
+        expected_sku=f"OUTPUT-{suffix}",
+        expected_quantity=1,
+        available_at=datetime.now(UTC),
+    )
+    production_input = ProductionInput(
+        production_run=run,
+        input_lot=lot,
+        quantity_consumed=1,
+    )
+    assignment = ProductionInputUnit(
+        production_input=production_input,
+        unit=unit,
+    )
+    db_session.add_all([unit, run, production_input, assignment])
+    db_session.flush()
+
+    upsert_units(
+        db_session,
+        (
+            UnitData(
+                external_unit_id=unit.external_unit_id,
+                lot_external_id=lot.external_lot_id,
+                location_code=location.code,
+                status="available",
+                effective_expires_at=expires_at,
+            ),
+        ),
+        {lot.external_lot_id: lot},
+        {location.code: location},
+    )
+
+    assert unit.status == "consumed"
 
 
 def test_incomplete_inventory_group_does_not_hide_unseen_units(db_session) -> None:
