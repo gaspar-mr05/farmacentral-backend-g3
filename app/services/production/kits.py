@@ -208,6 +208,7 @@ class KitProductionService:
             )
         else:
             await self._provision_raw_material(product, missing)
+            await self._wait_for_available_units(product.sku, quantity)
 
         available_after = len(self._available_units(sku))
         if available_after < quantity:
@@ -224,7 +225,6 @@ class KitProductionService:
                 await self._respect_sandbox_rate_limit()
                 await self._client.post("/sandbox/products", {"sku": product.sku})
                 self._sandbox_requests += 1
-            await self._synchronize()
             return
 
         batch_size = product.production.batch
@@ -238,7 +238,27 @@ class KitProductionService:
             sku=product.sku, quantity=requested_quantity
         )
         await _wait_until(response.available_at)
-        await self._synchronize()
+
+    async def _wait_for_available_units(
+        self,
+        sku: str,
+        quantity: int,
+        *,
+        timeout_seconds: int = 600,
+        poll_interval_seconds: int = 2,
+    ) -> None:
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        while True:
+            await self._synchronize()
+            available = len(self._available_units(sku))
+            if available >= quantity:
+                return
+            if asyncio.get_running_loop().time() >= deadline:
+                raise ProductionOutputNotLinkedError(
+                    f"Expected {quantity} available units of {sku}, "
+                    f"found {available} after waiting {timeout_seconds} seconds"
+                )
+            await asyncio.sleep(poll_interval_seconds)
 
     async def _respect_sandbox_rate_limit(self) -> None:
         if self._sandbox_requests and self._sandbox_requests % 200 == 0:
