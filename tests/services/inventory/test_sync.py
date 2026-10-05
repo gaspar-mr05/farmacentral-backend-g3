@@ -1,11 +1,23 @@
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from threading import Barrier
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import Session
 
 from app.db.units import upsert_units
-from app.models import Location, Lot, LotOrigin, Product, ProductCategory, Unit
+from app.models import (
+    CustodyEvent,
+    Location,
+    Lot,
+    LotOrigin,
+    Product,
+    ProductCategory,
+    Unit,
+)
 from app.schemas.units import UnitData
 from app.services.inventory.sync import InventorySyncService
 
@@ -137,6 +149,50 @@ async def test_sync_accepts_missing_external_batch(db_session) -> None:
     assert result.units.created == 1
     assert _count(db_session, Lot, Lot.external_lot_id == fallback_lot_id) == 1
     assert client.requested_limits == [1]
+
+
+def test_concurrent_syncs_do_not_insert_duplicate_unreported_lots(test_engine) -> None:
+    barrier = Barrier(2)
+    client = FakeInventorySource()
+    client.include_batch = False
+    original_get_space_products = client.get_space_products
+
+    async def synchronized_get_space_products(*args, **kwargs):
+        units = await original_get_space_products(*args, **kwargs)
+        barrier.wait(timeout=5)
+        return units
+
+    client.get_space_products = synchronized_get_space_products
+
+    def synchronize() -> None:
+        with Session(test_engine) as session:
+            asyncio.run(InventorySyncService(client, session).synchronize())
+
+    fallback_lot_id = f"unreported:{client.unit_id}"
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(synchronize) for _ in range(2)]
+            for future in futures:
+                future.result(timeout=10)
+
+        with Session(test_engine) as session:
+            assert _count(session, Lot, Lot.external_lot_id == fallback_lot_id) == 1
+            assert _count(session, Unit, Unit.external_unit_id == client.unit_id) == 1
+    finally:
+        with Session(test_engine) as session:
+            unit_ids = select(Unit.id).where(Unit.external_unit_id == client.unit_id)
+            session.execute(
+                delete(CustodyEvent).where(CustodyEvent.unit_id.in_(unit_ids))
+            )
+            session.execute(delete(Unit).where(Unit.external_unit_id == client.unit_id))
+            session.execute(delete(Lot).where(Lot.external_lot_id == fallback_lot_id))
+            session.execute(
+                delete(Location).where(
+                    Location.code.in_((client.store_1, client.store_2))
+                )
+            )
+            session.execute(delete(Product).where(Product.sku == client.sku))
+            session.commit()
 
 
 def test_sync_preserves_local_reservation_while_unit_remains_available(

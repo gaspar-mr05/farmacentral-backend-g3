@@ -17,6 +17,8 @@ from app.services.inventory.collection import InventoryCollector
 from app.services.inventory.normalization import normalize_inventory
 from app.services.production.runs import link_production_run_to_existing_lot
 
+INVENTORY_SYNC_LOCK_ID = 0x4641524D
+
 
 @dataclass(frozen=True)
 class EntityChanges:
@@ -59,6 +61,9 @@ class InventorySyncService:
             units = list(units_by_id.values())
         data = normalize_inventory(catalog, spaces, units)
         try:
+            self._session.execute(
+                select(func.pg_advisory_xact_lock(INVENTORY_SYNC_LOCK_ID))
+            )
             result = sync_inventory(
                 self._session,
                 data,
