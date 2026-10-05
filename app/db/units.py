@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Location, Lot, Unit
+from app.models import Location, Lot, ProductionInputUnit, Unit
 from app.schemas.units import UnitData
 
 
@@ -52,6 +52,7 @@ def upsert_units(
     units = {
         unit.external_unit_id: unit for unit in session.scalars(select(Unit)).all()
     }
+    consumed_unit_ids = set(session.scalars(select(ProductionInputUnit.unit_id)))
     location_changes: list[UnitLocationChange] = []
     created_units: list[Unit] = []
     created = updated = 0
@@ -83,8 +84,10 @@ def upsert_units(
             else incoming_lot
         )
         synchronized_status = (
-            unit.status
-            if unit.status == "dispatched"
+            "consumed"
+            if unit.id in consumed_unit_ids
+            else unit.status
+            if unit.status in {"consumed", "dispatched"}
             or (unit.status == "reserved" and record.status == "available")
             else record.status
         )
