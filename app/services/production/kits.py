@@ -153,6 +153,7 @@ class KitProductionService:
         self._packaging_code = packaging["_id"]
         self._buffer_code = buffer["_id"]
         self._packaging_capacity = capacity
+        await self._recover_pending_runs()
 
     async def _produce_quantity(
         self,
@@ -367,6 +368,25 @@ class KitProductionService:
             raise ProductionOutputNotLinkedError(
                 f"There are {len(pending)} unresolved production runs for {sku}"
             )
+
+    async def _recover_pending_runs(self) -> None:
+        pending = list(
+            self._session.scalars(
+                select(ProductionRun)
+                .where(ProductionRun.completed_at.is_(None))
+                .order_by(ProductionRun.requested_at, ProductionRun.id)
+            )
+        )
+        if not pending:
+            return
+
+        logger.info("Recovering %s interrupted production run(s)", len(pending))
+        availability_times = [
+            run.available_at for run in pending if run.available_at is not None
+        ]
+        if availability_times:
+            await _wait_until(max(availability_times))
+        await self._wait_for_linked_outputs(pending)
 
     async def _wait_for_linked_outputs(
         self, runs: list[ProductionRun], *, timeout_seconds: int = 600

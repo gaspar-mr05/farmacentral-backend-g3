@@ -9,6 +9,7 @@ from app.services.production.kits import (
     KitProductionService,
     ProductionOutputNotLinkedError,
 )
+from app.services.production.runs import start_production_run
 
 
 @pytest.mark.anyio
@@ -177,3 +178,48 @@ async def test_resume_produces_only_the_missing_kit_quantity(db_session, monkeyp
 
     assert result == {kit.sku: produced_runs}
     produce_quantity.assert_awaited_once_with(kit, 18, dependency_path=())
+
+
+@pytest.mark.anyio
+async def test_recovers_interrupted_runs_before_planning_more_production(
+    db_session, monkeypatch
+):
+    service = KitProductionService(
+        AsyncMock(),
+        db_session,
+        raw_material_source="supply",
+    )
+    now = datetime.now(UTC)
+    run = start_production_run(
+        db_session,
+        requested_at=now,
+        expected_sku="SUS-AMOXI-250",
+        expected_quantity=30,
+        available_at=now + timedelta(minutes=2),
+    )
+    wait_until = AsyncMock()
+    wait_for_outputs = AsyncMock()
+    monkeypatch.setattr("app.services.production.kits._wait_until", wait_until)
+    monkeypatch.setattr(service, "_wait_for_linked_outputs", wait_for_outputs)
+
+    await service._recover_pending_runs()
+
+    wait_until.assert_awaited_once_with(run.available_at)
+    wait_for_outputs.assert_awaited_once_with([run])
+
+
+@pytest.mark.anyio
+async def test_pending_run_recovery_is_a_noop_when_every_run_is_complete(
+    db_session, monkeypatch
+):
+    service = KitProductionService(
+        AsyncMock(),
+        db_session,
+        raw_material_source="supply",
+    )
+    wait_for_outputs = AsyncMock()
+    monkeypatch.setattr(service, "_wait_for_linked_outputs", wait_for_outputs)
+
+    await service._recover_pending_runs()
+
+    wait_for_outputs.assert_not_awaited()
