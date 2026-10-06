@@ -156,8 +156,8 @@ def _link_new_production_outputs(
                 .join(Product, Lot.product_id == Product.id)
                 .where(
                     Product.sku == sku,
-                    Lot.external_lot_id.startswith("unreported:"),
                     Unit.created_at >= runs[0].requested_at,
+                    ~Lot.produced_by.has(),
                 )
                 .order_by(Unit.created_at, Unit.id)
             )

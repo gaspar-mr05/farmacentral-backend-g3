@@ -105,6 +105,67 @@ def test_sync_groups_unbatched_output_units_and_links_pending_run(db_session):
     assert empty_fallback_lots == 0
 
 
+def test_sync_links_batched_output_units_to_pending_run(db_session):
+    suffix = uuid4().hex
+    sku = f"OUTPUT-{suffix}"
+    location_code = f"PACKAGING-{suffix}"
+    external_lot_id = f"LOT-{suffix}"
+    now = datetime.now(UTC)
+    product = Product(
+        sku=sku,
+        name="Output",
+        category=ProductCategory.ACONDICIONADO,
+        batch_size=2,
+        requires_refrigeration=False,
+    )
+    db_session.add(product)
+    db_session.flush()
+    run = start_production_run(
+        db_session,
+        requested_at=now,
+        expected_sku=sku,
+        expected_quantity=2,
+        available_at=now,
+    )
+    data = InventoryData(
+        products=(),
+        locations=(LocationData(location_code, "Packaging", False),),
+        lots=(
+            LotData(
+                external_lot_id=external_lot_id,
+                product_sku=sku,
+                expires_at=now + timedelta(days=30),
+                origin=LotOrigin.FARMA_CENTRAL,
+            ),
+        ),
+        units=(
+            UnitData(
+                external_unit_id=f"UNIT-1-{suffix}",
+                lot_external_id=external_lot_id,
+                location_code=location_code,
+                status="available",
+                effective_expires_at=now + timedelta(days=30),
+            ),
+            UnitData(
+                external_unit_id=f"UNIT-2-{suffix}",
+                lot_external_id=external_lot_id,
+                location_code=location_code,
+                status="available",
+                effective_expires_at=now + timedelta(days=30),
+            ),
+        ),
+    )
+
+    sync_inventory(db_session, data)
+
+    db_session.refresh(run)
+    assert run.completed_at is not None
+    assert run.output_lot is not None
+    assert run.output_lot.external_lot_id == external_lot_id
+    assert run.output_lot.origin is LotOrigin.OWN_PRODUCTION
+    assert len(run.output_lot.units) == 2
+
+
 @pytest.mark.anyio
 async def test_service_finds_pending_output_before_inventory_summary_updates(
     db_session,
