@@ -41,14 +41,12 @@ def upsert_lots(
             created += 1
             continue
 
-        changed = (
-            lot.product_id != product.id
-            or lot.expires_at != record.expires_at
-            or lot.origin != record.origin
-        )
+        changed = lot.product_id != product.id or lot.expires_at != record.expires_at
         lot.product_id = product.id
         lot.expires_at = record.expires_at
-        lot.origin = record.origin
+        # Inventory responses do not identify where a lot originated. The
+        # normalized value is only a fallback for new lots, so it must not
+        # overwrite origins established from local production or transfers.
         updated += int(changed)
 
     return LotUpsertResult(created, updated, lots, tuple(created_lots))

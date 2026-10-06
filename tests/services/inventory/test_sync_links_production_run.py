@@ -165,6 +165,13 @@ def test_sync_links_batched_output_units_to_pending_run(db_session):
     assert run.output_lot.origin is LotOrigin.OWN_PRODUCTION
     assert len(run.output_lot.units) == 2
 
+    # Later inventory synchronizations still report every visible lot with the
+    # generic external origin. Local production evidence must remain authoritative.
+    sync_inventory(db_session, data)
+
+    db_session.refresh(run.output_lot)
+    assert run.output_lot.origin is LotOrigin.OWN_PRODUCTION
+
 
 @pytest.mark.anyio
 async def test_service_finds_pending_output_before_inventory_summary_updates(

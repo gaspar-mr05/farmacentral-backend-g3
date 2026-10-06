@@ -73,6 +73,7 @@ class TraceabilityService:
                     ),
                 )
                 for unit in sorted(lot.units, key=lambda item: item.external_unit_id)
+                if unit.status in {"available", "reserved"}
             ],
             ancestors=self._sorted_lots(ancestors.values()),
             descendants=self._sorted_lots(descendants.values()),

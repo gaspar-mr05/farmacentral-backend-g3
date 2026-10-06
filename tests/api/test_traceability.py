@@ -54,3 +54,16 @@ def test_get_traceability_accepts_external_lot_id(
 
     assert response.status_code == 200
     assert response.json()["lot"]["id"] == str(scenario.kit_lot_id)
+
+
+def test_get_traceability_excludes_consumed_units_from_current_inventory(
+    api_client: TestClient,
+    db_session: Session,
+) -> None:
+    scenario = create_traceability_scenario(db_session)
+
+    response = api_client.get(f"/api/traceability/{scenario.raw_lot_id}")
+
+    assert response.status_code == 200
+    assert response.json()["lot"]["quantity"] == 1
+    assert response.json()["current_units"] == []
