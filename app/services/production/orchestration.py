@@ -8,7 +8,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.clients.farma_central import FarmaCentralClient
-from app.clients.farma_central_exceptions import FarmaCentralInvalidResponseError
+from app.clients.farma_central_exceptions import (
+    FarmaCentralHTTPError,
+    FarmaCentralInvalidResponseError,
+)
 from app.clients.farma_central_pow import solve_challenge
 from app.models import Location, Lot, Product, ProductionRun, Unit
 from app.schemas.farma_central import (
@@ -66,29 +69,7 @@ async def produce(
         quantity=quantity,
     )
 
-    challenge = _parse_response(
-        await client.request_fabrication_challenge(sku, quantity),
-        FarmaCentralChallengeResponse,
-    )
-    _validate_external_response(challenge.sku, challenge.quantity, sku, quantity)
-    _ensure_not_expired(challenge.expires_at)
-
-    nonce = await asyncio.to_thread(
-        solve_challenge,
-        challenge.prefix,
-        challenge.difficulty,
-    )
-    _ensure_not_expired(challenge.expires_at)
-
-    supply = _parse_response(
-        await client.request_products(
-            sku=sku,
-            quantity=quantity,
-            challenge_id=challenge.challenge_id,
-            nonce=nonce,
-        ),
-        FarmaCentralSupplyResponse,
-    )
+    supply = await _request_production(client, sku=sku, quantity=quantity)
     _validate_external_response(supply.sku, supply.quantity, sku, quantity)
 
     try:
@@ -110,6 +91,43 @@ async def produce(
         raise
 
     return run, supply
+
+
+async def _request_production(
+    client: FarmaCentralClient,
+    *,
+    sku: str,
+    quantity: int,
+) -> FarmaCentralSupplyResponse:
+    for attempt in range(2):
+        challenge = _parse_response(
+            await client.request_fabrication_challenge(sku, quantity),
+            FarmaCentralChallengeResponse,
+        )
+        _validate_external_response(challenge.sku, challenge.quantity, sku, quantity)
+        _ensure_not_expired(challenge.expires_at)
+
+        nonce = await asyncio.to_thread(
+            solve_challenge,
+            challenge.prefix,
+            challenge.difficulty,
+        )
+        _ensure_not_expired(challenge.expires_at)
+
+        try:
+            payload = await client.request_products(
+                sku=sku,
+                quantity=quantity,
+                challenge_id=challenge.challenge_id,
+                nonce=nonce,
+            )
+        except FarmaCentralHTTPError as exc:
+            if exc.status_code not in {400, 409} or attempt == 1:
+                raise
+            continue
+        return _parse_response(payload, FarmaCentralSupplyResponse)
+
+    raise AssertionError("Production challenge retry loop exhausted")
 
 
 async def _get_recipe(client: FarmaCentralClient, sku: str) -> FarmaCentralProduct:

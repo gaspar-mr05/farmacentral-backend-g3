@@ -64,7 +64,7 @@ async def main() -> None:
 
     for sku, sku_runs in runs.items():
         produced = sum(run.expected_quantity for run in sku_runs)
-        print(f"{sku}: {produced} units across {len(sku_runs)} runs")
+        print(f"{sku}: {produced} new units across {len(sku_runs)} runs")
     print(f"Moved {moved} units from packaging to the buffer")
 
 

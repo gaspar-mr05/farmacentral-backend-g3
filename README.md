@@ -21,6 +21,10 @@ Variables importantes:
 - `FARMA_CENTRAL_BASE_URL`: URL base HTTPS entregada para Farma Central.
 - `FARMA_CENTRAL_API_SECRET`: secreto del grupo. No debe versionarse.
 - `FARMA_CENTRAL_FTP` y `FARMA_CENTRAL_GROUP`: datos asignados al grupo.
+- `MARKET_PRICE_CACHE_TTL_SECONDS`: duración máxima de la caché compartida de
+  precios (30 segundos por defecto), para evitar consultas duplicadas.
+- `MARKET_PRICE_MAX_RETRY_WAIT_SECONDS`: espera máxima para reintentar una
+  consulta de precios limitada por tasa (2 segundos por defecto).
 - `CHECKOUT_BASE_URL`: URL base de la pasarela de pagos (`dev` o `prod`).
 - `APP_PUBLIC_URL`: URL pública del backend, usada por checkout para retornar el
   resultado del pago. En producción debe usar HTTPS y el dominio asignado.

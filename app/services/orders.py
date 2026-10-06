@@ -29,7 +29,11 @@ class OrderService:
     async def create(self, request: OrderCreate) -> Order:
         catalog = {
             item.sku: item
-            for item in await CatalogService(self._client, self._session).list_items()
+            for item in await CatalogService(
+                self._client,
+                self._session,
+                use_price_cache=False,
+            ).list_items()
         }
 
         for requested_item in request.items:

@@ -124,3 +124,56 @@ async def test_waits_for_each_chunk_before_starting_the_next(db_session, monkeyp
         "wait-2",
         "link-2",
     ]
+
+
+@pytest.mark.anyio
+async def test_completed_kits_are_skipped_when_resuming(db_session, monkeypatch):
+    service = KitProductionService(
+        AsyncMock(),
+        db_session,
+        raw_material_source="supply",
+    )
+    kit = FarmaCentralProduct.model_validate(
+        {
+            "sku": "KIT-COMPLETED",
+            "name": "Completed kit",
+            "production": {"batch": 1, "at": "packaging"},
+            "sellable": True,
+            "components": [{"sku": "INPUT", "req": 1}],
+        }
+    )
+    monkeypatch.setattr(service, "_completed_quantity", Mock(return_value=30))
+    produce_quantity = AsyncMock()
+    monkeypatch.setattr(service, "_produce_quantity", produce_quantity)
+
+    result = await service._produce_kits([kit], quantity_per_sku=30)
+
+    assert result == {kit.sku: []}
+    produce_quantity.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_resume_produces_only_the_missing_kit_quantity(db_session, monkeypatch):
+    service = KitProductionService(
+        AsyncMock(),
+        db_session,
+        raw_material_source="supply",
+    )
+    kit = FarmaCentralProduct.model_validate(
+        {
+            "sku": "KIT-PARTIAL",
+            "name": "Partial kit",
+            "production": {"batch": 1, "at": "packaging"},
+            "sellable": True,
+            "components": [{"sku": "INPUT", "req": 1}],
+        }
+    )
+    monkeypatch.setattr(service, "_completed_quantity", Mock(return_value=12))
+    produced_runs = [Mock()]
+    produce_quantity = AsyncMock(return_value=produced_runs)
+    monkeypatch.setattr(service, "_produce_quantity", produce_quantity)
+
+    result = await service._produce_kits([kit], quantity_per_sku=30)
+
+    assert result == {kit.sku: produced_runs}
+    produce_quantity.assert_awaited_once_with(kit, 18, dependency_path=())

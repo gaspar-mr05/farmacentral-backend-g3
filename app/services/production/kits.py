@@ -5,7 +5,7 @@ from math import ceil
 from typing import Literal
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.clients.farma_central import FarmaCentralClient
@@ -93,11 +93,39 @@ class KitProductionService:
     ) -> dict[str, list[ProductionRun]]:
         result: dict[str, list[ProductionRun]] = {}
         for kit in kits:
-            logger.info("Producing %s units of %s", quantity_per_sku, kit.sku)
+            completed = self._completed_quantity(kit.sku)
+            remaining = max(quantity_per_sku - completed, 0)
+            if remaining == 0:
+                logger.info(
+                    "%s already meets the target (%s/%s units)",
+                    kit.sku,
+                    completed,
+                    quantity_per_sku,
+                )
+                result[kit.sku] = []
+                continue
+
+            logger.info(
+                "Producing %s remaining units of %s (%s/%s completed)",
+                remaining,
+                kit.sku,
+                completed,
+                quantity_per_sku,
+            )
             result[kit.sku] = await self._produce_quantity(
-                kit, quantity_per_sku, dependency_path=()
+                kit, remaining, dependency_path=()
             )
         return result
+
+    def _completed_quantity(self, sku: str) -> int:
+        quantity = self._session.scalar(
+            select(func.coalesce(func.sum(ProductionRun.expected_quantity), 0)).where(
+                ProductionRun.expected_sku == sku,
+                ProductionRun.completed_at.is_not(None),
+                ProductionRun.output_lot_id.is_not(None),
+            )
+        )
+        return int(quantity or 0)
 
     async def _initialize(self) -> None:
         await self._synchronize()

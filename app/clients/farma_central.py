@@ -211,7 +211,31 @@ class FarmaCentralClient:
         if response.status_code in (401, 403):
             raise FarmaCentralAuthenticationError(response.status_code)
         if response.is_error:
-            raise FarmaCentralHTTPError(response.status_code)
+            detail = FarmaCentralClient._error_detail(response)
+            message = f"Farma Central returned HTTP {response.status_code}"
+            if detail:
+                message = f"{message}: {detail}"
+            raise FarmaCentralHTTPError(
+                response.status_code,
+                message,
+                retry_after_seconds=FarmaCentralClient._retry_after_seconds(response)
+                if response.status_code == 429
+                else None,
+            )
+
+    @staticmethod
+    def _error_detail(response: httpx.Response) -> str | None:
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict):
+            for key in ("detail", "message", "error"):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()[:500]
+        text = response.text.strip()
+        return text[:500] or None
 
     @staticmethod
     def _decode_json(response: httpx.Response) -> JSONResponse:

@@ -95,8 +95,9 @@ Errores:
 
 - `502 Bad Gateway`: la respuesta del servicio de precios es inválida o falta
   el precio de algún kit.
-- `503 Service Unavailable`: el servicio de precios no responde o excede el
-  tiempo máximo de espera.
+- `503 Service Unavailable`: el servicio de precios no responde, excede el
+  tiempo máximo de espera o limita temporalmente las solicitudes. Cuando el
+  proveedor informa cuánto esperar, la respuesta incluye `Retry-After`.
 
 Ejemplo:
 

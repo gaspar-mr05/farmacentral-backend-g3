@@ -20,12 +20,17 @@ class CatalogService:
         self,
         client: MarketPriceClient,
         session: Session,
+        *,
+        use_price_cache: bool = True,
     ) -> None:
         self._client = client
         self._session = session
+        self._use_price_cache = use_price_cache
 
     async def list_items(self) -> list[CatalogItemResponse]:
-        price_payload = await self._client.get_current_prices()
+        price_payload = await self._client.get_current_prices(
+            use_cache=self._use_price_cache
+        )
         prices = self._parse_prices(price_payload)
 
         products = list_sellable_catalog(

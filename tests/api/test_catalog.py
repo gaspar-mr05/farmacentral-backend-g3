@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_market_price_client
+from app.clients.farma_central_exceptions import FarmaCentralHTTPError
 from app.main import app
 from app.models import Location, Lot, LotOrigin, Product, ProductCategory, Unit
 
@@ -15,7 +16,7 @@ class FakeMarketPriceClient:
     def __init__(self, prices: list[dict]) -> None:
         self._prices = prices
 
-    async def get_current_prices(self) -> list[dict]:
+    async def get_current_prices(self, *, use_cache: bool = True) -> list[dict]:
         return self._prices
 
 
@@ -184,3 +185,22 @@ def test_catalog_returns_bad_gateway_when_a_kit_has_no_price(
 
     assert response.status_code == 502
     assert response.json() == {"detail": "Current market prices could not be obtained"}
+
+
+def test_catalog_returns_service_unavailable_with_retry_after_when_rate_limited(
+    api_client: TestClient,
+) -> None:
+    class RateLimitedMarketPriceClient:
+        async def get_current_prices(self, *, use_cache: bool = True) -> list[dict]:
+            raise FarmaCentralHTTPError(429, retry_after_seconds=12.2)
+
+    async def override() -> AsyncGenerator[RateLimitedMarketPriceClient, None]:
+        yield RateLimitedMarketPriceClient()
+
+    app.dependency_overrides[get_market_price_client] = override
+
+    response = api_client.get("/api/catalog")
+
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "13"
+    assert response.json() == {"detail": "The market price service is unavailable"}

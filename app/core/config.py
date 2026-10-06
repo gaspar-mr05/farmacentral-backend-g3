@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     farma_central_ftp: str = Field(min_length=1)
     farma_central_group: int = Field(gt=0)
     farma_central_timeout_seconds: float = Field(default=10, gt=0)
+    market_price_cache_ttl_seconds: float = Field(default=30, ge=0)
+    market_price_max_retry_wait_seconds: float = Field(default=2, ge=0)
     checkout_base_url: AnyHttpUrl = AnyHttpUrl(
         "https://dev.proyecto.2026-2.tallerdeintegracion.cl/"
     )

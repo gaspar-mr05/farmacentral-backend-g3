@@ -34,7 +34,7 @@ class FakeMarketPriceClient:
     def __init__(self, prices: list[dict]) -> None:
         self._prices = prices
 
-    async def get_current_prices(self) -> list[dict]:
+    async def get_current_prices(self, *, use_cache: bool = True) -> list[dict]:
         return self._prices
 
 

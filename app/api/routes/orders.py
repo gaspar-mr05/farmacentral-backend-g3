@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_farma_central_client, get_market_price_client
+from app.api.errors import market_price_http_exception
 from app.clients.farma_central import FarmaCentralClient
 from app.clients.farma_central_exceptions import (
     FarmaCentralConnectionError,
@@ -55,7 +56,9 @@ async def create_order(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc)
         ) from exc
-    except (FarmaCentralError, CatalogPriceUnavailableError) as exc:
+    except FarmaCentralError as exc:
+        raise market_price_http_exception(exc) from exc
+    except CatalogPriceUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Current market prices could not be obtained",

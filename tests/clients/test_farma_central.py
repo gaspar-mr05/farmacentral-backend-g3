@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from app.clients.farma_central import FarmaCentralClient
+from app.clients.farma_central_exceptions import FarmaCentralHTTPError
 from tests.support.farma_central import make_settings
 
 
@@ -92,6 +93,26 @@ async def test_get_retries_rate_limit_response() -> None:
     assert response == {"status": "ok"}
     assert attempts == 2
     sleep.assert_awaited_once_with(1.0)
+
+
+@pytest.mark.anyio
+async def test_http_error_preserves_safe_provider_detail() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/auth":
+            return httpx.Response(200, json={"token": "test-token"})
+        return httpx.Response(400, json={"detail": "Invalid fabrication nonce"})
+
+    async with httpx.AsyncClient(
+        base_url="https://example.test/api/",
+        transport=httpx.MockTransport(handler),
+    ) as http_client:
+        client = FarmaCentralClient(settings=make_settings(), http_client=http_client)
+
+        with pytest.raises(
+            FarmaCentralHTTPError,
+            match="HTTP 400: Invalid fabrication nonce",
+        ):
+            await client.get("/products")
 
 
 @pytest.mark.anyio

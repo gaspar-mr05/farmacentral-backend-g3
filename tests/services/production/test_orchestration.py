@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.clients.farma_central_exceptions import FarmaCentralHTTPError
 from app.models import Location, Lot, LotOrigin, Product, ProductCategory, Unit
 from app.services.production.orchestration import (
     InvalidProductionQuantityError,
@@ -138,3 +139,60 @@ async def test_produce_rejects_quantity_outside_batch_size(db_session):
 
     client.get_spaces.assert_not_awaited()
     client.request_fabrication_challenge.assert_not_awaited()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status_code", [400, 409])
+async def test_produce_renews_rejected_challenge_once(db_session, status_code):
+    now = datetime.now(UTC)
+    suffix = uuid4().hex
+    target_sku = f"OUTPUT-{suffix}"
+    component_sku = f"INPUT-{suffix}"
+    _create_inputs(db_session, component_sku=component_sku, count=6)
+    client = _production_client(
+        target_sku=target_sku,
+        component_sku=component_sku,
+        now=now,
+    )
+    successful_response = client.request_products.return_value
+    client.request_products.side_effect = [
+        FarmaCentralHTTPError(status_code),
+        successful_response,
+    ]
+
+    run, _ = await produce(
+        db_session,
+        client=client,
+        sku=target_sku,
+        quantity=3,
+    )
+
+    assert run.expected_quantity == 3
+    assert client.request_fabrication_challenge.await_count == 2
+    assert client.request_products.await_count == 2
+
+
+@pytest.mark.anyio
+async def test_produce_does_not_retry_non_challenge_http_error(db_session):
+    now = datetime.now(UTC)
+    suffix = uuid4().hex
+    target_sku = f"OUTPUT-{suffix}"
+    component_sku = f"INPUT-{suffix}"
+    _create_inputs(db_session, component_sku=component_sku, count=6)
+    client = _production_client(
+        target_sku=target_sku,
+        component_sku=component_sku,
+        now=now,
+    )
+    client.request_products.side_effect = FarmaCentralHTTPError(500)
+
+    with pytest.raises(FarmaCentralHTTPError):
+        await produce(
+            db_session,
+            client=client,
+            sku=target_sku,
+            quantity=3,
+        )
+
+    client.request_fabrication_challenge.assert_awaited_once()
+    client.request_products.assert_awaited_once()
