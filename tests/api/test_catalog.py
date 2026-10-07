@@ -55,6 +55,10 @@ def _price(sku: str, *, amount: int = 1000) -> dict:
     }
 
 
+def _iso_z(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
 def test_catalog_combines_current_prices_with_sellable_stock(
     api_client: TestClient,
     db_session: Session,
@@ -106,6 +110,15 @@ def test_catalog_combines_current_prices_with_sellable_stock(
     db_session.add(lot)
     db_session.flush()
 
+    later_lot = Lot(
+        external_lot_id=f"CATALOG-LATER-LOT-{suffix}",
+        product_id=kit.id,
+        expires_at=now + timedelta(days=120),
+        origin=LotOrigin.OWN_PRODUCTION,
+    )
+    db_session.add(later_lot)
+    db_session.flush()
+
     _add_unit(
         db_session,
         lot=lot,
@@ -131,6 +144,18 @@ def test_catalog_combines_current_prices_with_sellable_stock(
         location=quarantine,
         expires_at=now + timedelta(days=30),
     )
+    _add_unit(
+        db_session,
+        lot=later_lot,
+        location=warehouse,
+        expires_at=now + timedelta(days=60),
+    )
+    _add_unit(
+        db_session,
+        lot=later_lot,
+        location=warehouse,
+        expires_at=now + timedelta(days=61),
+    )
     db_session.flush()
 
     kit_skus = db_session.scalars(
@@ -150,10 +175,25 @@ def test_catalog_combines_current_prices_with_sellable_stock(
         "sku": kit.sku,
         "name": kit.name,
         "price": 2500,
-        "stock": 1,
+        "stock": 3,
+        "next_expiry_at": _iso_z(now + timedelta(days=30)),
+        "lots": [
+            {
+                "external_lot_id": lot.external_lot_id,
+                "stock": 1,
+                "next_expiry_at": _iso_z(now + timedelta(days=30)),
+            },
+            {
+                "external_lot_id": later_lot.external_lot_id,
+                "stock": 2,
+                "next_expiry_at": _iso_z(now + timedelta(days=60)),
+            },
+        ],
         "price_updated_at": "2026-10-02T12:00:00Z",
     }
     assert items[empty_kit.sku]["stock"] == 0
+    assert items[empty_kit.sku]["next_expiry_at"] is None
+    assert items[empty_kit.sku]["lots"] == []
     assert raw_material.sku not in items
 
 

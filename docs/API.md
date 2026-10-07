@@ -72,7 +72,9 @@ stock cero. Para cada kit combina:
 - nombre y SKU guardados en PostgreSQL;
 - precio vigente entregado por el servicio de precios;
 - cantidad de unidades con estado `available`, no vencidas y ubicadas en un
-  espacio marcado como vendible.
+  espacio marcado como vendible;
+- lotes que componen ese stock y el vencimiento efectivo más próximo de cada
+  lote.
 
 El precio no se almacena indefinidamente: se vuelve a consultar al procesar la
 solicitud.
@@ -86,6 +88,14 @@ Respuesta `200 OK`:
     "name": "Kit respiratorio adulto",
     "price": 9990,
     "stock": 12,
+    "next_expiry_at": "2026-10-08T01:02:46Z",
+    "lots": [
+      {
+        "external_lot_id": "L-KIT-RESP-ADULTO-261006-29e4",
+        "stock": 12,
+        "next_expiry_at": "2026-10-08T01:02:46Z"
+      }
+    ],
     "price_updated_at": "2026-10-02T12:00:00Z"
   }
 ]

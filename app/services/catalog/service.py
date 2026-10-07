@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.clients.farma_central_exceptions import FarmaCentralInvalidResponseError
 from app.clients.market_prices import MarketPriceClient
 from app.queries.catalog import list_sellable_catalog
-from app.schemas.catalog import CatalogItemResponse, MarketPrice
+from app.schemas.catalog import CatalogItemResponse, CatalogLotResponse, MarketPrice
 
 MARKET_PRICES_ADAPTER = TypeAdapter(list[MarketPrice])
 
@@ -52,6 +52,15 @@ class CatalogService:
                 name=product.name,
                 price=prices[product.sku].price,
                 stock=product.stock,
+                next_expiry_at=product.next_expiry_at,
+                lots=[
+                    CatalogLotResponse(
+                        external_lot_id=lot.external_lot_id,
+                        stock=lot.stock,
+                        next_expiry_at=lot.next_expiry_at,
+                    )
+                    for lot in product.lots
+                ],
                 price_updated_at=prices[product.sku].updated_at,
             )
             for product in products

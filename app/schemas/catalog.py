@@ -10,9 +10,17 @@ class MarketPrice(BaseModel):
     updated_at: datetime = Field(alias="updatedAt")
 
 
+class CatalogLotResponse(BaseModel):
+    external_lot_id: str = Field(min_length=1)
+    stock: int = Field(ge=1)
+    next_expiry_at: datetime
+
+
 class CatalogItemResponse(BaseModel):
     sku: str = Field(min_length=1)
     name: str = Field(min_length=1)
     price: int = Field(ge=0)
     stock: int = Field(ge=0)
+    next_expiry_at: datetime | None
+    lots: list[CatalogLotResponse]
     price_updated_at: datetime
