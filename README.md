@@ -492,3 +492,65 @@ local de desarrollo, sin errores. Las 100 OCs históricas consultadas ya estaban
 insertó cero eventos y cero pedidos adicionales. La trazabilidad previa de
 Entrega 1 siguió reconstruyendo sus 109 lotes ancestros y 110 enlaces de producción.
 La prueba no cambió estados externos ni llamó al gateway LLM.
+
+## Entrega 2: recepción de pedidos por Pub/Sub
+
+El paso 5 usa una suscripción pull. Primero descarga la llave del ambiente desde
+`GET /ordenes-compra/pubsub/key`, guárdala fuera del repositorio y restringe sus
+permisos:
+
+```bash
+mkdir -p keys
+# Guardar la respuesta JSON como keys/grupo3-dev.json
+chmod 600 keys/grupo3-dev.json
+```
+
+Luego configura la ruta en `.env`:
+
+```dotenv
+PUBSUB_CREDENTIALS_FILE=/ruta/absoluta/keys/grupo3-dev.json
+PUBSUB_PROJECT_ID=taller-integracion-310700
+PUBSUB_POLL_INTERVAL_SECONDS=5
+PUBSUB_BATCH_SIZE=100
+```
+
+El tópico y la suscripción se derivan del grupo y de
+`FARMA_CENTRAL_BASE_URL`. Para el grupo 3 en desarrollo son
+`dev.proyecto.2026-2.grupo3` y `grupo3-dev`. Se pueden sobrescribir con
+`PUBSUB_TOPIC_ID` y `PUBSUB_SUBSCRIPTION_ID`. El worker crea la suscripción si
+no existe, por lo que la configuración es reproducible.
+
+Para probar una revisión:
+
+```bash
+.venv/bin/python -m scripts.poll_pubsub_orders --once
+```
+
+Para mantener el polling mientras el proceso esté activo:
+
+```bash
+.venv/bin/python -m scripts.poll_pubsub_orders
+```
+
+Cada mensaje se guarda primero como `InboundEvent`, usando el `messageId` como
+identidad única y conservando `message.data` en base64. Sólo después del commit
+se envía el ack a Pub/Sub. El worker acepta como contenido un ID directo o un
+JSON `{"orderId": "..."}`; siempre consulta el detalle oficial antes de crear
+la OC local.
+
+Si falla el ack, Pub/Sub puede volver a entregar el mensaje, pero la restricción
+única evita otro evento. Si dos mensajes distintos contienen la misma OC,
+`Order.external_order_id` evita crear dos pedidos. Los eventos ya persistidos se
+pueden procesar incluso si Pub/Sub está temporalmente indisponible.
+
+Pruebas del paso 5:
+
+```bash
+pytest tests/clients/test_pubsub_orders.py \
+  tests/schemas/test_pubsub_orders.py \
+  tests/services/test_pubsub_orders.py \
+  tests/scripts/test_poll_pubsub_orders.py -q
+```
+
+La instalación del worker como servicio permanente se realizará junto con los
+demás procesos autónomos de la Entrega 2.
