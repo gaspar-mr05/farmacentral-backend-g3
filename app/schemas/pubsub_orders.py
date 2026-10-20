@@ -21,9 +21,11 @@ def extract_order_id(data: bytes) -> str:
     if text.startswith("{"):
         try:
             payload = json.loads(text)
-            candidate = payload["orderId"]
+            candidate = payload.get("orderId") or payload["id"]
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
-            raise InvalidPubSubOrderError("Pub/Sub data must contain orderId") from exc
+            raise InvalidPubSubOrderError(
+                "Pub/Sub data must contain id or orderId"
+            ) from exc
 
     try:
         return ORDER_ID_ADAPTER.validate_python(candidate).lower()

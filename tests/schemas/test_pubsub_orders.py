@@ -10,6 +10,7 @@ ORDER_ID = "64abc123def456789012abcd"
     [
         ORDER_ID.encode(),
         f'{{"orderId": "{ORDER_ID.upper()}"}}'.encode(),
+        f'{{"id": "{ORDER_ID}", "cliente": "999", "sku": "KIT-PEDIA-FEBRIL"}}'.encode(),
     ],
 )
 def test_extracts_order_id_from_supported_pubsub_payloads(data):

@@ -535,7 +535,7 @@ Para mantener el polling mientras el proceso esté activo:
 Cada mensaje se guarda primero como `InboundEvent`, usando el `messageId` como
 identidad única y conservando `message.data` en base64. Sólo después del commit
 se envía el ack a Pub/Sub. El worker acepta como contenido un ID directo o un
-JSON `{"orderId": "..."}`; siempre consulta el detalle oficial antes de crear
+JSON con `id` u `orderId`; siempre consulta el detalle oficial antes de crear
 la OC local.
 
 Si falla el ack, Pub/Sub puede volver a entregar el mensaje, pero la restricción
