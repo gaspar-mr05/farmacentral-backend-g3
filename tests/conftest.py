@@ -36,7 +36,8 @@ def test_engine():
     admin_engine = create_engine(TEST_DATABASE_URL)
     engine = create_engine(
         TEST_DATABASE_URL,
-        connect_args={"options": f"-csearch_path={schema}"},
+        # Las respuestas esperadas usan UTC, independientemente de la zona del host.
+        connect_args={"options": f"-csearch_path={schema} -ctimezone=UTC"},
     )
     with admin_engine.begin() as connection:
         connection.execute(CreateSchema(schema))

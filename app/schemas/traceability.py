@@ -43,7 +43,7 @@ class TraceabilityDeliveryResponse(BaseModel):
     lot_id: UUID
     order_id: UUID
     buyer_name: str
-    buyer_email: str
+    buyer_email: str | None
     sku: str
     external_unit_id: str
     quantity: int = 1

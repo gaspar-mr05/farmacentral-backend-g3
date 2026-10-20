@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.core.config import Settings
+from tests.support.farma_central import make_settings
 
 
 def test_env_local_overrides_env(
@@ -54,3 +55,20 @@ def test_cors_origins_are_parsed() -> None:
     )
 
     assert settings.allowed_origins == ["https://one.test", "https://two.test"]
+
+
+@pytest.mark.parametrize("environment", ["dev", "prod"])
+def test_purchase_orders_default_to_the_farma_central_environment(environment):
+    settings = make_settings(
+        farma_central_base_url=f"https://{environment}.example.test/farma-central/"
+    )
+
+    assert settings.effective_purchase_orders_base_url == (
+        f"https://{environment}.example.test/ordenes-compra/"
+    )
+
+
+def test_purchase_orders_url_can_be_configured_independently():
+    settings = make_settings(purchase_orders_base_url="https://orders.test/service/")
+
+    assert settings.effective_purchase_orders_base_url == "https://orders.test/service/"
