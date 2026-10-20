@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from urllib.parse import urljoin
 
 from pydantic import AnyHttpUrl, Field, SecretStr
@@ -22,6 +23,16 @@ class Settings(BaseSettings):
     farma_central_timeout_seconds: float = Field(default=10, gt=0)
     purchase_orders_base_url: AnyHttpUrl | None = None
     purchase_orders_timeout_seconds: float = Field(default=10, gt=0)
+    sftp_host: str = Field(default="choripan10.ing.uc.cl", min_length=1)
+    sftp_port: int = Field(default=22, ge=1, le=65535)
+    sftp_username: str | None = Field(default=None, min_length=1)
+    sftp_password: SecretStr | None = Field(default=None, min_length=1)
+    sftp_directory: str = Field(default=".", min_length=1)
+    sftp_known_hosts_file: Path | None = None
+    sftp_timeout_seconds: float = Field(default=10, gt=0)
+    sftp_poll_interval_seconds: float = Field(default=30, gt=0)
+    sftp_max_file_bytes: int = Field(default=65536, gt=0)
+    sftp_batch_size: int = Field(default=100, ge=1)
     market_price_cache_ttl_seconds: float = Field(default=30, ge=0)
     market_price_max_retry_wait_seconds: float = Field(default=2, ge=0)
     checkout_base_url: AnyHttpUrl = AnyHttpUrl(
@@ -37,6 +48,20 @@ class Settings(BaseSettings):
             self.purchase_orders_base_url
             or urljoin(str(self.farma_central_base_url), "/ordenes-compra/")
         )
+
+    @property
+    def effective_sftp_username(self) -> str:
+        if self.sftp_username:
+            return self.sftp_username
+        host = self.farma_central_base_url.host or ""
+        if not host.endswith(".tallerdeintegracion.cl"):
+            raise ValueError("Set SFTP_USERNAME explicitly for a custom API host")
+        environment = "desarrollo" if host.startswith("dev.") else "produccion"
+        return f"grupo{self.farma_central_group}_{environment}"
+
+    @property
+    def effective_sftp_password(self) -> SecretStr:
+        return self.sftp_password or SecretStr(self.farma_central_ftp)
 
     @property
     def allowed_origins(self) -> list[str]:
