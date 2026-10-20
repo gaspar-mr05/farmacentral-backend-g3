@@ -98,3 +98,26 @@ def test_sftp_legacy_password_is_supported_and_unknown_hosts_require_username():
     assert settings.effective_sftp_password.get_secret_value() == "test-ftp"
     with pytest.raises(ValueError, match="SFTP_USERNAME"):
         _ = settings.effective_sftp_username
+
+
+@pytest.mark.parametrize(
+    ("host", "environment"),
+    [
+        ("dev.proyecto.2026-2.tallerdeintegracion.cl", "dev"),
+        ("proyecto.2026-2.tallerdeintegracion.cl", "prod"),
+    ],
+)
+def test_pubsub_names_follow_the_group_and_api_environment(host, environment):
+    settings = make_settings(farma_central_base_url=f"https://{host}/farma-central/")
+    assert settings.effective_pubsub_topic_id == (
+        f"{environment}.proyecto.2026-2.grupo3"
+    )
+    assert settings.effective_pubsub_subscription_id == f"grupo3-{environment}"
+
+
+def test_pubsub_names_can_be_configured_for_a_custom_host():
+    settings = make_settings(
+        pubsub_topic_id="custom-topic", pubsub_subscription_id="custom-subscription"
+    )
+    assert settings.effective_pubsub_topic_id == "custom-topic"
+    assert settings.effective_pubsub_subscription_id == "custom-subscription"

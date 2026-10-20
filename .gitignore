@@ -13,6 +13,7 @@ venv/
 .env
 .env.*
 !.env.example
+keys/
 
 # Editors and operating systems
 .idea/
@@ -25,5 +26,6 @@ htmlcov/
 
 # Archivos
 IIC3103_Entrega1_Backend_Paso_a_Paso.pdf
+IIC3103_Entrega2_Backend_Paso_a_Paso.pdf
 
 scripts/smoke_test_farma_central.py

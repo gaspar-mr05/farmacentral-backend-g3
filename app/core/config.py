@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     sftp_poll_interval_seconds: float = Field(default=30, gt=0)
     sftp_max_file_bytes: int = Field(default=65536, gt=0)
     sftp_batch_size: int = Field(default=100, ge=1)
+    pubsub_project_id: str = Field(default="taller-integracion-310700", min_length=1)
+    pubsub_topic_id: str | None = Field(default=None, min_length=1)
+    pubsub_subscription_id: str | None = Field(default=None, min_length=1)
+    pubsub_credentials_file: Path | None = None
+    pubsub_timeout_seconds: float = Field(default=10, gt=0)
+    pubsub_poll_interval_seconds: float = Field(default=5, gt=0)
+    pubsub_batch_size: int = Field(default=100, ge=1)
     market_price_cache_ttl_seconds: float = Field(default=30, ge=0)
     market_price_max_retry_wait_seconds: float = Field(default=2, ge=0)
     checkout_base_url: AnyHttpUrl = AnyHttpUrl(
@@ -62,6 +69,32 @@ class Settings(BaseSettings):
     @property
     def effective_sftp_password(self) -> SecretStr:
         return self.sftp_password or SecretStr(self.farma_central_ftp)
+
+    @property
+    def effective_pubsub_topic_id(self) -> str:
+        if self.pubsub_topic_id:
+            return self.pubsub_topic_id
+        return (
+            f"{self._farma_central_environment}.proyecto.2026-2."
+            f"grupo{self.farma_central_group}"
+        )
+
+    @property
+    def effective_pubsub_subscription_id(self) -> str:
+        return self.pubsub_subscription_id or (
+            f"grupo{self.farma_central_group}-{self._farma_central_environment}"
+        )
+
+    @property
+    def _farma_central_environment(self) -> str:
+        host = self.farma_central_base_url.host or ""
+        if host.startswith("dev."):
+            return "dev"
+        if host.endswith(".tallerdeintegracion.cl"):
+            return "prod"
+        raise ValueError(
+            "Set PUBSUB_TOPIC_ID and PUBSUB_SUBSCRIPTION_ID for a custom API host"
+        )
 
     @property
     def allowed_origins(self) -> list[str]:

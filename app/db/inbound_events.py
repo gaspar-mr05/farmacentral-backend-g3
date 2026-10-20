@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.clients.pubsub_orders import PubSubOrderMessage
 from app.clients.sftp_orders import SFTPOrderFile
 from app.models import InboundEvent, InboundEventSource
 
@@ -39,3 +40,23 @@ def known_sftp_paths(session: Session) -> set[str]:
             )
         )
     )
+
+
+def record_pubsub_messages(session: Session, messages: list[PubSubOrderMessage]) -> int:
+    recorded = 0
+    for message in messages:
+        statement = (
+            insert(InboundEvent)
+            .values(
+                source=InboundEventSource.PUBSUB,
+                external_event_id=message.message_id,
+                payload={
+                    "data_base64": base64.b64encode(message.data).decode("ascii"),
+                },
+            )
+            .on_conflict_do_nothing(constraint="uq_inbound_events_source_external_id")
+            .returning(InboundEvent.id)
+        )
+        if session.scalar(statement) is not None:
+            recorded += 1
+    return recorded
