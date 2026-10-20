@@ -15,10 +15,11 @@ from app.clients.purchase_orders_exceptions import (
     PurchaseOrdersHTTPError,
 )
 from app.core.config import Settings, get_settings
-from app.db.external_orders import InvalidExternalOrderError, import_external_order
+from app.db.external_orders import InvalidExternalOrderError
 from app.db.inbound_events import record_pubsub_messages
 from app.models import InboundEvent, InboundEventSource, InboundEventStatus, OrderSource
 from app.schemas.pubsub_orders import InvalidPubSubOrderError, extract_order_id
+from app.services.order_ingestion import OrderIngestionService
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +44,13 @@ class PubSubOrderIngestionService:
         settings: Settings | None = None,
     ) -> None:
         self._pubsub = pubsub
-        self._orders = orders
         self._session = session
         self._settings = settings or get_settings()
+        self._ingestion = OrderIngestionService(
+            orders,
+            session,
+            supplier_id=str(self._settings.farma_central_group),
+        )
 
     async def poll(self) -> PubSubPollResult:
         result = PubSubPollResult()
@@ -117,13 +122,7 @@ class PubSubOrderIngestionService:
                     ) from exc
                 order_id = extract_order_id(data)
                 event.payload = {**event.payload, "order_id": order_id}
-                detail = await self._orders.get_order(order_id)
-                order = import_external_order(
-                    self._session,
-                    detail,
-                    source=OrderSource.PUBSUB,
-                    supplier_id=str(self._settings.farma_central_group),
-                )
+                order = await self._ingestion.ingest(order_id, OrderSource.PUBSUB)
             except (InvalidPubSubOrderError, InvalidExternalOrderError) as exc:
                 self._fail(event, str(exc))
                 result.failed += 1

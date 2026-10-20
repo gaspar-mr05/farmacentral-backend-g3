@@ -15,10 +15,11 @@ from app.clients.purchase_orders_exceptions import (
 )
 from app.clients.sftp_orders import SFTPOrdersClient, SFTPOrdersError
 from app.core.config import Settings, get_settings
-from app.db.external_orders import InvalidExternalOrderError, import_external_order
+from app.db.external_orders import InvalidExternalOrderError
 from app.db.inbound_events import known_sftp_paths, record_sftp_files
 from app.models import InboundEvent, InboundEventSource, InboundEventStatus, OrderSource
 from app.schemas.sftp_orders import InvalidSFTPOrderError, extract_order_id
+from app.services.order_ingestion import OrderIngestionService
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +43,13 @@ class SFTPOrderIngestionService:
         settings: Settings | None = None,
     ) -> None:
         self._sftp = sftp
-        self._orders = orders
         self._session = session
         self._settings = settings or get_settings()
+        self._ingestion = OrderIngestionService(
+            orders,
+            session,
+            supplier_id=str(self._settings.farma_central_group),
+        )
 
     async def poll(self) -> SFTPPollResult:
         result = SFTPPollResult()
@@ -112,13 +117,7 @@ class SFTPOrderIngestionService:
                     content, max_bytes=self._settings.sftp_max_file_bytes
                 )
                 event.payload = {**event.payload, "order_id": order_id}
-                detail = await self._orders.get_order(order_id)
-                order = import_external_order(
-                    self._session,
-                    detail,
-                    source=OrderSource.SFTP,
-                    supplier_id=str(self._settings.farma_central_group),
-                )
+                order = await self._ingestion.ingest(order_id, OrderSource.SFTP)
             except (InvalidSFTPOrderError, InvalidExternalOrderError) as exc:
                 self._fail(event, str(exc))
                 result.failed += 1

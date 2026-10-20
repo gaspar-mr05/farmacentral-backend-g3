@@ -325,15 +325,15 @@ async def test_received_event_survives_closing_session_before_processing(test_en
 
 @pytest.mark.anyio
 async def test_database_failure_does_not_leave_a_partial_order(db_session, monkeypatch):
-    import app.services.sftp_orders as module
+    import app.services.order_ingestion as module
 
-    original = module.import_external_order
+    original = module.upsert_external_order
 
     def interrupted_import(*args, **kwargs):
         original(*args, **kwargs)
         raise RuntimeError("Crash after creating order")
 
-    monkeypatch.setattr(module, "import_external_order", interrupted_import)
+    monkeypatch.setattr(module, "upsert_external_order", interrupted_import)
     with pytest.raises(RuntimeError):
         await make_service(db_session, FakeSFTP(order_file()), FakeOrders()).poll()
     assert not db_session.scalars(select(Order)).all()

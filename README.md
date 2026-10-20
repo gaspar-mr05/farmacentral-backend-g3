@@ -554,3 +554,26 @@ pytest tests/clients/test_pubsub_orders.py \
 
 La instalación del worker como servicio permanente se realizará junto con los
 demás procesos autónomos de la Entrega 2.
+
+## Entrega 2: pipeline unificado de órdenes
+
+El paso 6 centraliza la lógica de sFTP y Pub/Sub en `OrderIngestionService`.
+Ambos adaptadores extraen el `orderId`, pero el servicio común siempre consulta
+el detalle oficial y crea o actualiza el pedido identificado por
+`external_order_id`.
+
+Cuando la misma OC vuelve a llegar, se mantienen un solo `Order` y un solo item,
+y se actualizan cliente, SKU, cantidad, precio, plazo y estado externo. El canal
+de la primera recepción queda en `Order.source`; cada canal adicional permanece
+registrado en sus propios `InboundEvent`. El evento se enlaza al pedido y se
+marca procesado en la misma transacción que persiste la OC.
+
+Este pipeline sólo ingiere datos. La decisión de aceptar o rechazar una OC sigue
+separada y corresponde al paso 7.
+
+Pruebas del paso 6:
+
+```bash
+pytest tests/services/test_order_ingestion.py \
+  tests/services/test_sftp_orders.py tests/services/test_pubsub_orders.py -q
+```

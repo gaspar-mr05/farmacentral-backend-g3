@@ -10,7 +10,7 @@ class InvalidExternalOrderError(Exception):
     pass
 
 
-def import_external_order(
+def upsert_external_order(
     session: Session, detail: PurchaseOrder, *, source: OrderSource, supplier_id: str
 ) -> Order:
     if detail.supplier_id != supplier_id:
@@ -20,18 +20,21 @@ def import_external_order(
             "The local sales model requires whole-peso prices"
         )
     unit_price = int(detail.unit_price)
+    values = {
+        "external_customer_id": detail.customer_id,
+        "buyer_name": detail.customer_name or detail.customer_id,
+        "buyer_email": None,
+        "external_status": ExternalOrderStatus(detail.state),
+        "delivery_deadline": detail.delivery_deadline,
+        "total": unit_price * detail.quantity,
+    }
     order_id = session.scalar(
         insert(Order)
         .values(
             external_order_id=detail.id.lower(),
-            external_customer_id=detail.customer_id,
-            buyer_name=detail.customer_name or detail.customer_id,
-            buyer_email=None,
             source=source,
             status=OrderStatus.RECEIVED,
-            external_status=ExternalOrderStatus(detail.state),
-            delivery_deadline=detail.delivery_deadline,
-            total=unit_price * detail.quantity,
+            **values,
         )
         .on_conflict_do_nothing(constraint="uq_orders_external_order_id")
         .returning(Order.id)
@@ -46,6 +49,17 @@ def import_external_order(
             )
         )
         session.flush()
-    return session.scalars(
-        select(Order).where(Order.external_order_id == detail.id.lower())
+
+    order = session.scalars(
+        select(Order)
+        .where(Order.external_order_id == detail.id.lower())
+        .with_for_update()
     ).one()
+    if order_id is None:
+        for field, value in values.items():
+            setattr(order, field, value)
+        item = order.items[0]
+        item.sku = detail.sku
+        item.quantity = detail.quantity
+        item.unit_price = unit_price
+    return order
