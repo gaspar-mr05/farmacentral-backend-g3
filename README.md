@@ -276,3 +276,67 @@ Usan PostgreSQL configurado por `TEST_DATABASE_URL` (el mismo valor predetermina
 de las demás pruebas), revierten sus datos al terminar y simulan Farma Central,
 precios y checkout. Este recorrido automatizado no verifica las APIs externas
 reales; esa validación debe hacerse en dev.
+
+## Entrega 2: verificar la base de Entrega 1
+
+El paso 1 de `IIC3103_Entrega2_Backend_Paso_a_Paso.pdf` valida la base existente.
+Para comprobar una unidad ya despachada, con la base correspondiente configurada:
+
+```bash
+python -m scripts.verify_e1_traceability --unit-id ID_EXTERNO_DE_UNIDAD
+```
+
+El comando sólo consulta PostgreSQL: comprueba la asociación a pedido/cliente,
+los eventos de custodia y el recorrido desde los lotes de entrada hasta la
+entrega. No llama servicios externos ni consume el gateway LLM. Una historia
+incompleta termina con un mensaje de error y código de salida distinto de cero.
+
+Las verificaciones automatizadas siguen ejecutándose con `pytest`; usan un
+esquema temporal aislado y UTC, sin depender de la zona horaria de PostgreSQL.
+El resultado del ensayo real de desarrollo queda en
+[`docs/ENTREGA2_PASO1_VALIDACION.md`](docs/ENTREGA2_PASO1_VALIDACION.md).
+
+## Entrega 2: cliente de órdenes de compra
+
+`PurchaseOrdersClient` autentica con `FARMA_CENTRAL_GROUP` y
+`FARMA_CENTRAL_API_SECRET`. Reutiliza el token y lo renueva una vez ante un 401.
+Por defecto, usa `/ordenes-compra/` en el mismo host de
+`FARMA_CENTRAL_BASE_URL`, por lo que sigue el ambiente dev o producción configurado.
+Se puede cambiar mediante `PURCHASE_ORDERS_BASE_URL`; el timeout se configura con
+`PURCHASE_ORDERS_TIMEOUT_SECONDS` (10 segundos por defecto).
+
+```python
+from app.clients.purchase_orders import PurchaseOrdersClient
+
+
+async def consultar_orden(order_id: str):
+    async with PurchaseOrdersClient() as client:
+        return await client.get_order(order_id)
+
+
+async def aceptar_orden(order_id: str):
+    async with PurchaseOrdersClient() as client:
+        await client.update_order_state(order_id, "aceptada")
+```
+
+Las respuestas se validan con esquemas propios, separados del pedido local de
+SQLAlchemy. El servicio permite solicitar `aceptada`, `rechazada` o `anulada`;
+valida que el grupo y el estado actual permitan la transición. Una actualización
+exitosa devuelve HTTP 204. `cumplida` y `vencida` son estados administrados por el
+servicio y no se envían con este método.
+
+Las excepciones de `app.clients.purchase_orders_exceptions` distinguen
+autenticación, timeout, conexión, errores HTTP y respuestas inválidas. Los errores
+HTTP conservan `status_code` y, para 429, `retry_after_seconds` cuando el servidor
+envía un valor numérico. Ante timeout, 429 o 5xx el cliente devuelve el error al
+llamador; no repite automáticamente una actualización cuyo resultado sea incierto.
+Los logs identifican la OC y el resultado sin incluir credenciales ni tokens.
+
+Las pruebas del cliente no necesitan red ni PostgreSQL:
+
+```bash
+pytest tests/clients/test_purchase_orders.py tests/core/test_config.py -q
+```
+
+La validación realizada y la comprobación pendiente con una OC real se detallan en
+[`docs/ENTREGA2_PASO2_VALIDACION.md`](docs/ENTREGA2_PASO2_VALIDACION.md).
