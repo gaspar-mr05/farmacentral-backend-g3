@@ -412,6 +412,10 @@ Respuesta `201 Created`:
   "id": "03de4a0c-b143-4481-9377-3076cbdb2a8b",
   "buyer_name": "Ada Lovelace",
   "buyer_email": "ada@example.com",
+  "external_order_id": null,
+  "external_customer_id": null,
+  "delivery_deadline": null,
+  "external_status": null,
   "source": "web",
   "status": "pending_payment",
   "total": 19980,
@@ -434,6 +438,11 @@ Estados posibles del pedido:
 - `paid`: pago confirmado exitosamente.
 - `cancelled`: pago cancelado por el usuario.
 - `payment_error`: pago con error o sesión expirada.
+- `dispatched`: unidades despachadas.
+- `received`: OC externa recibida, pendiente de decisión.
+- `accepted`: OC externa aceptada localmente.
+- `rejected`: OC externa rechazada localmente.
+- `expired`: OC externa vencida.
 
 Errores:
 
@@ -446,6 +455,14 @@ Errores:
 
 Consulta un pedido persistido. La respuesta tiene la misma estructura que la
 creación del pedido.
+
+El modelo admite además pedidos de `sftp`, `pubsub` y `messaging`. Su identidad
+oficial se guarda en `external_order_id`, el cliente en `external_customer_id`
+y el plazo en `delivery_deadline`. `external_status` puede ser `creada`,
+`aceptada`, `rechazada`, `anulada`, `vencida` o `cumplida`, independientemente del
+estado local `status`. Estos cuatro campos pueden ser NULL para pedidos web;
+`buyer_email` puede ser NULL para pedidos externos. La creación mediante
+`POST /api/orders` sigue reservada al canal web.
 
 Errores:
 
@@ -649,3 +666,4 @@ unidad (`quantity: 1`) e incluye `lot_id`, `order_id`, `buyer_name`, `buyer_emai
 `sku`, `external_unit_id` y `dispatched_at`. Las entregas parciales confirmadas
 aparecen incluso si quedan otras unidades pendientes del pedido. Las unidades
 despachadas conservan su historial y no vuelven al stock disponible al sincronizar.
+`buyer_email` puede ser NULL para entregas de pedidos externos sin correo.

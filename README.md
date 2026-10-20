@@ -340,3 +340,56 @@ pytest tests/clients/test_purchase_orders.py tests/core/test_config.py -q
 
 La validación realizada y la comprobación pendiente con una OC real se detallan en
 [`docs/ENTREGA2_PASO2_VALIDACION.md`](docs/ENTREGA2_PASO2_VALIDACION.md).
+
+## Entrega 2: pedidos externos y eventos persistentes
+
+El paso 3 extiende `Order` con `external_order_id`, `external_customer_id`,
+`delivery_deadline` y `external_status`. El canal `source` admite `web`, `sftp`,
+`pubsub` y `messaging`. El estado local incorpora `received`, `accepted`,
+`rejected` y `expired`; el estado externo conserva los valores oficiales en
+español, como `creada`, `aceptada` y `cumplida`.
+
+`external_order_id` es único entre todos los canales y se almacena como 24
+caracteres hexadecimales en minúsculas. Los pedidos web conservan ese campo en
+NULL y pueden coexistir sin una OC externa. Los pedidos externos pueden guardar
+el ID oficial del cliente sin inventar un correo. El correo sigue siendo
+obligatorio para crear pedidos web y `POST /api/orders` acepta únicamente
+`source=web`; la ingestión externa se implementa en los pasos siguientes.
+
+`InboundEvent` guarda el canal (`sftp`, `pubsub`, `messaging` o `recall`), una
+referencia externa obligatoria, el payload JSON, las fechas de recepción y
+procesamiento, y su estado (`pending`, `processing`, `processed` o `failed`).
+Puede persistirse antes de que exista un pedido y asociarse después mediante
+`order_id`. Incluye contador de intentos, último error y fechas del último
+intento y del próximo reintento para el futuro worker.
+
+La restricción UNIQUE de `(source, external_event_id)` impide guardar dos veces
+el mismo evento, incluso con recepciones simultáneas. Los adaptadores deberán
+tratar ese conflicto como una entrega repetida. Dos notificaciones de canales
+distintos pueden asociarse al mismo pedido; la unicidad global de
+`Order.external_order_id` impide crear una segunda OC local. Estas restricciones
+preparan la deduplicación; el procesamiento y los reintentos se desarrollan en
+los pasos posteriores.
+
+Para actualizar la base configurada con Alembic:
+
+```bash
+.venv/bin/alembic upgrade head
+```
+
+La migración `a6d8e2c49130` conserva los pedidos y las relaciones de Entrega 1.
+El downgrade se bloquea si hay pedidos o eventos de Entrega 2, para evitar perder
+su información. Las etiquetas añadidas a los enums existentes de PostgreSQL
+permanecen al revertir, igual que en la migración de despacho.
+
+Pruebas del paso 3, con `TEST_DATABASE_URL` apuntando a PostgreSQL:
+
+```bash
+pytest tests/models/test_e2_orders.py tests/models/test_inbound_event.py \
+  tests/models/test_e2_migration.py tests/api/test_e2_order_data.py -q
+```
+
+Verifican restricciones, inserciones concurrentes, persistencia entre sesiones,
+asociación posterior del evento, migración desde Entrega 1, downgrade y consultas
+de pedidos/trazabilidad sin correo. Crean esquemas temporales que se eliminan al
+terminar y no llaman servicios externos.

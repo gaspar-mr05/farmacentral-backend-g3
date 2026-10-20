@@ -1,9 +1,10 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.models import OrderSource, OrderStatus
+from app.models import ExternalOrderStatus, OrderSource, OrderStatus
 
 
 class OrderItemCreate(BaseModel):
@@ -14,7 +15,7 @@ class OrderItemCreate(BaseModel):
 class OrderCreate(BaseModel):
     buyer_name: str = Field(min_length=1)
     buyer_email: str = Field(min_length=3)
-    source: OrderSource = OrderSource.WEB
+    source: Literal[OrderSource.WEB] = OrderSource.WEB
     items: list[OrderItemCreate] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -50,7 +51,11 @@ class OrderResponse(BaseModel):
 
     id: UUID
     buyer_name: str
-    buyer_email: str
+    buyer_email: str | None
+    external_order_id: str | None
+    external_customer_id: str | None
+    delivery_deadline: datetime | None
+    external_status: ExternalOrderStatus | None
     source: OrderSource
     status: OrderStatus
     total: int
