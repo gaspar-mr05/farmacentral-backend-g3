@@ -72,3 +72,29 @@ def test_purchase_orders_url_can_be_configured_independently():
     settings = make_settings(purchase_orders_base_url="https://orders.test/service/")
 
     assert settings.effective_purchase_orders_base_url == "https://orders.test/service/"
+
+
+@pytest.mark.parametrize(
+    ("host", "username"),
+    [
+        ("dev.proyecto.2026-2.tallerdeintegracion.cl", "grupo3_desarrollo"),
+        ("proyecto.2026-2.tallerdeintegracion.cl", "grupo3_produccion"),
+    ],
+)
+def test_sftp_username_follows_the_group_and_api_environment(host, username):
+    settings = make_settings(farma_central_base_url=f"https://{host}/farma-central/")
+    assert settings.effective_sftp_username == username
+
+
+def test_sftp_credentials_can_be_overridden_without_changing_the_api():
+    settings = make_settings(sftp_username="custom", sftp_password="separate-password")
+    assert settings.effective_sftp_username == "custom"
+    assert settings.effective_sftp_password.get_secret_value() == "separate-password"
+    assert settings.farma_central_ftp == "test-ftp"
+
+
+def test_sftp_legacy_password_is_supported_and_unknown_hosts_require_username():
+    settings = make_settings()
+    assert settings.effective_sftp_password.get_secret_value() == "test-ftp"
+    with pytest.raises(ValueError, match="SFTP_USERNAME"):
+        _ = settings.effective_sftp_username

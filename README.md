@@ -393,3 +393,102 @@ Verifican restricciones, inserciones concurrentes, persistencia entre sesiones,
 asociación posterior del evento, migración desde Entrega 1, downgrade y consultas
 de pedidos/trazabilidad sin correo. Crean esquemas temporales que se eliminan al
 terminar y no llaman servicios externos.
+
+## Entrega 2: recepción de pedidos por sFTP
+
+El paso 4 se ejecuta separado de FastAPI. Instala las dependencias del proyecto y
+aplica las migraciones existentes antes de ejecutarlo:
+
+```bash
+.venv/bin/python -m pip install -e '.[dev]'
+.venv/bin/alembic upgrade head
+```
+
+Configuración en `.env` o `.env.local`:
+
+```dotenv
+SFTP_HOST=choripan10.ing.uc.cl
+SFTP_PORT=22
+SFTP_DIRECTORY=.
+SFTP_TIMEOUT_SECONDS=10
+SFTP_POLL_INTERVAL_SECONDS=30
+SFTP_BATCH_SIZE=100
+SFTP_MAX_FILE_BYTES=65536
+```
+
+El usuario se deriva del grupo y del ambiente de `FARMA_CENTRAL_BASE_URL`:
+`grupo3_desarrollo` en dev y `grupo3_produccion` en producción. `SFTP_USERNAME`
+permite indicar otro usuario. `SFTP_PASSWORD` guarda la contraseña específica de
+la casilla; si se omite, se intenta usar `FARMA_CENTRAL_FTP`. La contraseña sFTP
+puede ser distinta del secreto de las APIs.
+
+El cliente verifica la clave pública del servidor con `~/.ssh/known_hosts`.
+`SFTP_KNOWN_HOSTS_FILE` permite usar otro archivo con las claves de confianza.
+Una clave desconocida o distinta provoca un error de conexión. Este comportamiento
+usa la verificación de servidor de [AsyncSSH](https://asyncssh.readthedocs.io/en/latest/api.html#asyncssh.connect).
+
+Para revisar una sola vez la casilla y procesar eventos pendientes:
+
+```bash
+.venv/bin/python -m scripts.poll_sftp_orders --once
+```
+
+Para mantener el polling periódico mientras el proceso esté ejecutándose:
+
+```bash
+.venv/bin/python -m scripts.poll_sftp_orders
+```
+
+Cada revisión lee hasta 100 archivos XML regulares nuevos, de hasta 64 KiB por
+defecto. Cierra la conexión sFTP antes de consultar las órdenes. No elimina ni
+renombra archivos remotos. Los archivos ilegibles se vuelven a intentar en otra
+revisión; un timeout termina la conexión para liberar la sesión.
+
+Los archivos recibidos se guardan primero en `InboundEvent`, con su ruta completa,
+XML en base64 y SHA-256. La ruta es la referencia única de una notificación
+inmutable: repetir una lectura no sobrescribe el evento ni genera otra consulta.
+El parser extrae únicamente `order/id`, valida su formato y rechaza DTD y entidades
+XML. El SKU y la cantidad del archivo se ignoran; el detalle se obtiene mediante
+el cliente oficial de órdenes de compra.
+
+El detalle oficial genera un `Order` con canal `sftp`, cliente, plazo, estado
+externo y un item con SKU, cantidad y precio oficiales. Se comprueba que el grupo
+sea el proveedor. El modelo de ventas actual usa pesos enteros: un precio
+fraccionario deja el evento fallido sin redondear importes. Si la OC ya existe,
+se asocia el evento al pedido existente conservando sus datos y decisiones.
+La actualización unificada de órdenes corresponde al paso 6.
+
+La creación del pedido y la marca `processed` se confirman juntas. Los eventos
+pendientes sobreviven a reinicios; los bloqueos de filas evitan procesarlos
+simultáneamente. Los errores de conexión a la API, autenticación, 429 y 5xx se
+reintentan desde PostgreSQL. Un 429 pausa el lote y respeta `Retry-After`; los
+fallos de autenticación también pausan el lote. Un XML inválido, un proveedor
+incorrecto o un rechazo HTTP definitivo quedan `failed` con su error y sin
+reintento automático. Los logs identifican la ruta y la OC sin incluir secretos.
+
+`--once` termina con código 1 si falla la conexión, la base o algún evento de esa
+revisión. El modo periódico espera entre revisiones y continúa ante fallos
+recuperables. La instalación como servicio permanente corresponde al paso 19.
+Este proceso consulta OCs y registra pedidos; la aceptación/rechazo y el despacho
+se desarrollan en los pasos 7 y 8. No utiliza el gateway LLM.
+
+Pruebas de la integración, con `TEST_DATABASE_URL` configurada:
+
+```bash
+pytest tests/clients/test_sftp_orders.py tests/schemas/test_sftp_orders.py \
+  tests/services/test_sftp_orders.py tests/scripts/test_poll_sftp_orders.py \
+  tests/core/test_config.py -q
+```
+
+Usan un servidor sFTP local real, respuestas HTTP simuladas y PostgreSQL aislado.
+Cubren duplicados, recuperación entre sesiones, archivos inválidos, errores de
+API, límites de tamaño/lote, esperas y cierre de conexiones ante timeouts.
+
+Validación real en dev, realizada el 20 de octubre de 2026: la casilla
+`grupo3_desarrollo` permitió leer `/pedidos` usando `SFTP_PASSWORD`. Una revisión
+importó 100 archivos como 100 eventos procesados y 100 OCs distintas en PostgreSQL
+local de desarrollo, sin errores. Las 100 OCs históricas consultadas ya estaban
+`vencida` en la API oficial. Al volver a leer esos mismos archivos, el registro
+insertó cero eventos y cero pedidos adicionales. La trazabilidad previa de
+Entrega 1 siguió reconstruyendo sus 109 lotes ancestros y 110 enlaces de producción.
+La prueba no cambió estados externos ni llamó al gateway LLM.
