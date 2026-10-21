@@ -56,6 +56,8 @@ class OrderResponse(BaseModel):
     external_customer_id: str | None
     delivery_deadline: datetime | None
     external_status: ExternalOrderStatus | None
+    decision_at: datetime | None
+    decision_reason: str | None
     source: OrderSource
     status: OrderStatus
     total: int

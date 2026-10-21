@@ -195,6 +195,11 @@ async def test_local_sftp_to_official_http_contract_creates_one_order(
         requests.append(request)
         if request.url.path.endswith("/autenticar"):
             return httpx.Response(200, json={"token": "test-token"})
+        if request.url.path.endswith(f"/ordenes/{EXTERNAL_ORDER_ID}/estado"):
+            assert request.method == "POST"
+            assert request.headers["Authorization"] == "Bearer test-token"
+            assert request.content == b'{"estado":"rechazada"}'
+            return httpx.Response(204)
         assert request.url.path.endswith(f"/ordenes/{EXTERNAL_ORDER_ID}")
         assert request.headers["Authorization"] == "Bearer test-token"
         return httpx.Response(
@@ -218,9 +223,11 @@ async def test_local_sftp_to_official_http_contract_creates_one_order(
         assert (await service.poll()).processed == 1
         assert (await service.poll()).processed == 0
 
-    assert len(requests) == 2
+    assert len(requests) == 3
     order = db_session.scalars(select(Order)).one()
     assert order.external_order_id == EXTERNAL_ORDER_ID
     assert order.items[0].sku == "KIT-ANALGESIA"
     assert order.items[0].quantity == 2
+    assert order.status.value == "rejected"
+    assert order.decision_at is not None
     assert len(order.inbound_events) == 1

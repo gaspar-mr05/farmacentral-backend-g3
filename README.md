@@ -577,3 +577,29 @@ Pruebas del paso 6:
 pytest tests/services/test_order_ingestion.py \
   tests/services/test_sftp_orders.py tests/services/test_pubsub_orders.py -q
 ```
+
+## Entrega 2: decisión y procesamiento de órdenes
+
+El paso 7 agrega `OrderProcessingService.process_order(order_id)`. La política
+es intencionalmente conservadora: acepta una OC sólo si todavía está dentro de
+plazo y la cantidad solicitada puede cubrirse con stock vendible vigente más
+producción ya confirmada para antes del vencimiento. También descuenta las
+cantidades prometidas a otras OCs aceptadas; no supone producción futura que
+aún no haya sido solicitada.
+
+La decisión se envía al sistema oficial como `aceptada` o `rechazada` y se
+guarda localmente en `status`, `external_status`, `decision_at` y
+`decision_reason`. El bloqueo del producto evita prometer el mismo stock a dos
+órdenes procesadas en paralelo. Reprocesar una orden decidida no vuelve a
+enviar la transición.
+
+Los adaptadores sFTP y Pub/Sub ejecutan este servicio después de la ingestión.
+La OC, su decisión y el evento procesado se confirman en una misma transacción.
+
+Para aplicar el cambio de base de datos y ejecutar las pruebas del paso:
+
+```bash
+alembic upgrade head
+pytest tests/services/test_order_processing.py \
+  tests/services/test_sftp_orders.py tests/services/test_pubsub_orders.py -q
+```

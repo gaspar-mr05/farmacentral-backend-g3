@@ -19,7 +19,7 @@ from app.models import InboundEvent, InboundEventSource, InboundEventStatus, Ord
 from tests.support.orders import make_external_order
 
 PREVIOUS_REVISION = "7e3a8b91f2c4"
-REVISION = "a6d8e2c49130"
+REVISION = "f65d4ad17b2e"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
