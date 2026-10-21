@@ -115,7 +115,7 @@ def _record_custody_changes(
 ) -> None:
     for change in changes:
         if change.is_received:
-            lot = change.unit.lot  # lazy-loaded si no está ya en la sesión
+            lot = change.unit.lot
             event_type = (
                 CustodyEventType.PRODUCED
                 if lot.origin == LotOrigin.OWN_PRODUCTION

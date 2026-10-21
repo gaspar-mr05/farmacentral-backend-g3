@@ -15,8 +15,8 @@ REQUIRED_MATERIALS = {
     "FRA-VIDRIO-120": 3,
 }
 
-BATCH_SIZE = 200  # requests por tanda, con margen bajo el límite de 250
-PAUSE_SECONDS = 65  # más que la ventana de 60s, para asegurar el reset
+BATCH_SIZE = 200
+PAUSE_SECONDS = 65
 
 
 async def main():

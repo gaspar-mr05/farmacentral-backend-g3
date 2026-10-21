@@ -21,7 +21,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Enum labels remain in PostgreSQL; removing labels requires recreating types.
     op.execute("UPDATE orders SET status = 'PAID' WHERE status::text = 'DISPATCHED'")
     op.execute("DELETE FROM custody_events WHERE event_type::text = 'DISPATCHED'")
     op.execute("UPDATE units SET status = 'reserved' WHERE status = 'dispatched'")

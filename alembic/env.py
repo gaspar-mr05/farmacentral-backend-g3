@@ -2,13 +2,11 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 
-import app.models  # noqa: F401
 from alembic import context
 from app.core.config import get_settings
-from app.db.base import Base
+from app.models import Base
 
 config = context.config
-# ConfigParser treats percent signs in URL-encoded credentials as interpolation.
 database_url = get_settings().database_url.replace("%", "%%")
 config.set_main_option("sqlalchemy.url", database_url)
 

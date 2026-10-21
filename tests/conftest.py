@@ -1,4 +1,3 @@
-# tests/conftest.py
 import os
 from collections.abc import Generator
 from uuid import uuid4
@@ -18,12 +17,10 @@ os.environ.setdefault("FARMA_CENTRAL_API_SECRET", "unused-secret")
 os.environ.setdefault("FARMA_CENTRAL_FTP", "unused-ftp")
 os.environ.setdefault("FARMA_CENTRAL_GROUP", "3")
 
-import app.models  # noqa: F401  — registra los modelos en Base.metadata
-from app.db.base import Base
 from app.db.session import get_session
 from app.main import app
+from app.models import Base
 
-# Puede usar el Postgres de desarrollo: los tests crean su propio esquema temporal.
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
     "postgresql+psycopg://farmacentral:change-me@localhost:5432/farmacentral",
@@ -36,7 +33,6 @@ def test_engine():
     admin_engine = create_engine(TEST_DATABASE_URL)
     engine = create_engine(
         TEST_DATABASE_URL,
-        # Las respuestas esperadas usan UTC, independientemente de la zona del host.
         connect_args={"options": f"-csearch_path={schema} -ctimezone=UTC"},
     )
     with admin_engine.begin() as connection:
@@ -58,10 +54,7 @@ def anyio_backend() -> str:
 
 @pytest.fixture
 def db_session(test_engine):
-    """Sesión de DB envuelta en una transacción que se revierte al final del test."""
     with test_engine.connect() as connection:
-        # El contexto de la transacción debe terminar siempre con rollback,
-        # incluso cuando el código probado hace commit o el test falla.
         transaction = connection.begin()
         session = Session(
             bind=connection,

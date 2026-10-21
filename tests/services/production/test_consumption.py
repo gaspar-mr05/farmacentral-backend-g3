@@ -1,4 +1,3 @@
-# tests/services/production/test_consumption.py
 from datetime import UTC, datetime, timedelta
 
 from app.models import (

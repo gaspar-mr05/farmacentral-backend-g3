@@ -128,7 +128,6 @@ async def test_entrega1_from_raw_material_to_customer(
     sync = InventorySyncService(client, db_session)
     movements = ProductMovementService(client, db_session)
 
-    # Partimos con un insumo disponible: sync registra recepción y luego movimiento.
     await sync.synchronize()
     raw = db_session.scalar(
         select(Unit).where(Unit.external_unit_id == f"UNIT-{client.raw}")
@@ -139,7 +138,6 @@ async def test_entrega1_from_raw_material_to_customer(
     )
     for sku in (client.intermediate, client.kit):
         run, _ = await produce(db_session, client=client, sku=sku, quantity=1)
-        # PostgreSQL now() conserva la hora de la transacción externa del fixture.
         run.requested_at = raw.created_at
         db_session.flush()
         await sync.synchronize()

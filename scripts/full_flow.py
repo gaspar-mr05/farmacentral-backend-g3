@@ -15,7 +15,7 @@ REQUIRED_MATERIALS = {
 
 
 async def main():
-    async with FarmaCentralClient() as client:  # una sola instancia, un solo token
+    async with FarmaCentralClient() as client:
         _, packaging_space = await get_buffer_and_packaging(client)
 
         created_ids: dict[str, list[str]] = {sku: [] for sku in REQUIRED_MATERIALS}

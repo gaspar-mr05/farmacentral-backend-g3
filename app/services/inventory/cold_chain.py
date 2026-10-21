@@ -58,7 +58,7 @@ class ColdChainService:
                     raise
                 last_conflict = exc
 
-        if last_conflict is None:  # pragma: no cover - guarded by the caller
+        if last_conflict is None:
             raise NoRefrigeratedLocationError("No refrigerated location is available")
         raise last_conflict
 

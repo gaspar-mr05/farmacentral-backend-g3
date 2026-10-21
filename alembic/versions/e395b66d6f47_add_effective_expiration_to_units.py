@@ -17,7 +17,6 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    # 1. Crear temporalmente como nullable.
     op.add_column(
         "units",
         sa.Column(
@@ -27,7 +26,6 @@ def upgrade() -> None:
         ),
     )
 
-    # 2. Copiar el vencimiento histórico del lote.
     op.execute(
         """
         UPDATE units
@@ -37,7 +35,6 @@ def upgrade() -> None:
         """
     )
 
-    # 3. Ahora puede establecerse NOT NULL.
     op.alter_column(
         "units",
         "effective_expires_at",

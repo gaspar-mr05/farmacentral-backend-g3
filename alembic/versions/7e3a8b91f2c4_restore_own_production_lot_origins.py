@@ -27,6 +27,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # The previous origin cannot be reconstructed safely, so keep the corrected
-    # value when downgrading the application schema.
     pass

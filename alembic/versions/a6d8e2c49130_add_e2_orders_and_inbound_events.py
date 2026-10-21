@@ -118,7 +118,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # The previous application cannot represent E2 orders or pending events.
     op.execute(
         """
         DO $$ BEGIN
@@ -150,4 +149,3 @@ def downgrade() -> None:
     op.alter_column("orders", "buyer_email", existing_type=sa.String(), nullable=False)
     for name in ("inboundeventstatus", "inboundeventsource", "externalorderstatus"):
         postgresql.ENUM(name=name).drop(op.get_bind())
-    # As in the dispatch migration, added labels remain on existing PostgreSQL enums.

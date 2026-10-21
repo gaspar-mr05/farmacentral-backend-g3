@@ -67,7 +67,6 @@ def test_sync_groups_unbatched_output_units_and_links_pending_run(db_session):
         ),
     )
 
-    # The product is normally inserted from catalog data before lots.
     product = Product(
         sku=sku,
         name="Output",
@@ -165,8 +164,6 @@ def test_sync_links_batched_output_units_to_pending_run(db_session):
     assert run.output_lot.origin is LotOrigin.OWN_PRODUCTION
     assert len(run.output_lot.units) == 2
 
-    # Later inventory synchronizations still report every visible lot with the
-    # generic external origin. Local production evidence must remain authoritative.
     sync_inventory(db_session, data)
 
     db_session.refresh(run.output_lot)
