@@ -77,6 +77,14 @@ class FarmaCentralClient:
             allow_empty=True,
         )
 
+    async def dispatch_product(self, product_id: str, order_id: str) -> None:
+        await self._request(
+            "POST",
+            "/dispatch",
+            json={"productId": product_id, "orderId": order_id},
+            allow_empty=True,
+        )
+
     async def request_fabrication_challenge(
         self,
         sku: str,

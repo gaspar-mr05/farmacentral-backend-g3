@@ -66,7 +66,10 @@ class OrderDispatchService:
         return order
 
     def _pending_assignments(self, order: Order) -> list[OrderUnit]:
-        if order.status != OrderStatus.PAID:
+        is_accepted_external_order = (
+            order.external_order_id is not None and order.status == OrderStatus.ACCEPTED
+        )
+        if order.status != OrderStatus.PAID and not is_accepted_external_order:
             raise InvalidDispatchStateError("Order must be paid before dispatch")
         if not order.items or any(
             len(item.assigned_units) != item.quantity for item in order.items
@@ -127,6 +130,11 @@ class OrderDispatchService:
                 )
         if unit.current_location_id != destination.id:
             record_move(self._session, unit=unit, to_location_id=destination.id)
+        external_order_id = assignment.order_item.order.external_order_id
+        if external_order_id is not None:
+            await self._client.dispatch_product(
+                unit.external_unit_id, external_order_id
+            )
         self._session.add(
             CustodyEvent(
                 unit_id=unit.id,
