@@ -603,3 +603,39 @@ alembic upgrade head
 pytest tests/services/test_order_processing.py \
   tests/services/test_sftp_orders.py tests/services/test_pubsub_orders.py -q
 ```
+
+## Entrega 2: cumplimiento y despacho de órdenes externas
+
+El paso 8 reutiliza la reserva FEFO y la custodia de Entrega 1 para las OCs
+externas aceptadas. Cada unidad se mueve al espacio de despacho y luego se
+entrega con `POST /farma-central/dispatch`, indicando su ID y el
+`external_order_id` de la OC. Las unidades entregadas parcialmente quedan
+confirmadas una a una, por lo que un reintento continúa con las restantes.
+
+El worker revisa primero las OCs con el vencimiento más cercano. Si la producción
+aceptada todavía no está disponible, conserva la orden pendiente para una
+revisión posterior. Al completar las unidades consulta nuevamente la OC oficial
+y guarda su estado final.
+
+Para ejecutar una revisión:
+
+```bash
+.venv/bin/python -m scripts.fulfill_external_orders --once
+```
+
+Para mantener el seguimiento periódico mientras el proceso esté activo:
+
+```bash
+.venv/bin/python -m scripts.fulfill_external_orders
+```
+
+El intervalo y el tamaño máximo de cada lote se configuran con
+`EXTERNAL_ORDER_POLL_INTERVAL_SECONDS` y `EXTERNAL_ORDER_BATCH_SIZE`.
+
+Pruebas del paso 8:
+
+```bash
+pytest tests/services/test_external_order_fulfillment.py \
+  tests/api/test_order_fulfillment.py tests/api/test_order_dispatch.py \
+  tests/clients/test_farma_central.py -q
+```

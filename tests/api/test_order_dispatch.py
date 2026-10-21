@@ -8,7 +8,15 @@ from app.api.dependencies import get_farma_central_client
 from app.clients.farma_central_exceptions import FarmaCentralTimeoutError
 from app.db.units import upsert_units
 from app.main import app
-from app.models import CustodyEvent, CustodyEventType, Location, OrderStatus, Unit
+from app.models import (
+    CustodyEvent,
+    CustodyEventType,
+    ExternalOrderStatus,
+    Location,
+    OrderSource,
+    OrderStatus,
+    Unit,
+)
 from app.schemas.units import UnitData
 from tests.api.test_order_fulfillment import _add_order, _add_stock
 from tests.support.traceability import create_traceability_scenario
@@ -20,6 +28,7 @@ class DispatchClient:
         self.units = {u.external_unit_id: u for u in units}
         self.positions = {}
         self.moves = []
+        self.dispatches = []
         self.fail_on = None
         self.timeout_after_move = False
         self.confirm = True
@@ -51,6 +60,9 @@ class DispatchClient:
         if self.timeout_after_move:
             self.timeout_after_move = False
             raise FarmaCentralTimeoutError("Response lost after moving")
+
+    async def dispatch_product(self, product_id, order_id):
+        self.dispatches.append((product_id, order_id))
 
 
 def prepare(session, api_client, quantity=2):
@@ -100,6 +112,37 @@ def test_dispatch_is_idempotent_and_records_delivery(api_client, db_session):
     assert trace["deliveries"][0]["buyer_email"] == order.buyer_email
     assert api_client.post(f"/api/orders/{order.id}/payments").status_code == 409
     assert api_client.post(f"/api/orders/{order.id}/fulfillment").status_code == 409
+
+
+def test_accepted_external_order_is_reserved_and_dispatched_with_oc_id(
+    api_client, db_session
+):
+    sku = f"KIT-EXTERNAL-{uuid4().hex}"
+    units = _add_stock(db_session, sku=sku, days_until_expiration=[10])
+    order = _add_order(
+        db_session,
+        sku=sku,
+        quantity=1,
+        status=OrderStatus.ACCEPTED,
+    )
+    order.source = OrderSource.SFTP
+    order.external_order_id = "64abc123def456789012abcd"
+    order.external_status = ExternalOrderStatus.ACCEPTED
+    order.buyer_email = None
+    destination = f"OUT-{uuid4().hex}"
+    db_session.add(Location(code=destination, name="Despacho", is_sellable=False))
+    db_session.commit()
+
+    assert api_client.post(f"/api/orders/{order.id}/fulfillment").status_code == 200
+    client = DispatchClient(units, destination)
+    app.dependency_overrides[get_farma_central_client] = lambda: client
+
+    response = api_client.post(f"/api/orders/{order.id}/dispatch")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "dispatched"
+    assert client.dispatches == [(units[0].external_unit_id, order.external_order_id)]
+    assert len(events(db_session)) == 1
 
 
 def test_dispatch_resumes_partial_progress(api_client, db_session):

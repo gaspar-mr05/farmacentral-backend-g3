@@ -141,6 +141,33 @@ async def test_move_product_patches_destination_store_and_accepts_empty_response
 
 
 @pytest.mark.anyio
+async def test_dispatch_product_sends_product_and_purchase_order_ids() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/auth":
+            return httpx.Response(200, json={"token": "test-token"})
+
+        assert request.method == "POST"
+        assert request.url.path == "/api/dispatch"
+        assert json.loads(request.content) == {
+            "productId": "64abc123def4567890120001",
+            "orderId": "64abc123def456789012abcd",
+        }
+        return httpx.Response(204)
+
+    async with httpx.AsyncClient(
+        base_url="https://example.test/api/",
+        transport=httpx.MockTransport(handler),
+    ) as http_client:
+        client = FarmaCentralClient(settings=make_settings(), http_client=http_client)
+
+        result = await client.dispatch_product(
+            "64abc123def4567890120001", "64abc123def456789012abcd"
+        )
+
+    assert result is None
+
+
+@pytest.mark.anyio
 async def test_supply_operations_use_expected_payloads() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/auth":

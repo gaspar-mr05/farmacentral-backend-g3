@@ -36,7 +36,11 @@ class OrderFulfillmentService:
     def fulfill(self, order_id: uuid.UUID) -> Order:
         try:
             order = self._get_order_for_update(order_id)
-            if order.status != OrderStatus.PAID:
+            is_accepted_external_order = (
+                order.external_order_id is not None
+                and order.status == OrderStatus.ACCEPTED
+            )
+            if order.status != OrderStatus.PAID and not is_accepted_external_order:
                 raise OrderNotPaidError(
                     f"Order {order.id} must be paid before fulfillment"
                 )

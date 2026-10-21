@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     pubsub_timeout_seconds: float = Field(default=10, gt=0)
     pubsub_poll_interval_seconds: float = Field(default=5, gt=0)
     pubsub_batch_size: int = Field(default=100, ge=1)
+    external_order_poll_interval_seconds: float = Field(default=5, gt=0)
+    external_order_batch_size: int = Field(default=100, ge=1)
     market_price_cache_ttl_seconds: float = Field(default=30, ge=0)
     market_price_max_retry_wait_seconds: float = Field(default=2, ge=0)
     checkout_base_url: AnyHttpUrl = AnyHttpUrl(
