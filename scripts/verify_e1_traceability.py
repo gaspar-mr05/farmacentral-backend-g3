@@ -7,14 +7,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
-from app.models import CustodyEventType, LotOrigin, Unit
+from app.models import CustodyEvent, CustodyEventType, LotOrigin, Order, OrderUnit, Unit
+from app.schemas.traceability import TraceabilityResponse
 from app.services.traceability.service import TraceabilityService
 
 
-def verify_delivery(session: Session, external_unit_id: str) -> dict:
+def _get_delivery(
+    session: Session, external_unit_id: str
+) -> tuple[Unit, OrderUnit, Order]:
     unit = session.scalar(select(Unit).where(Unit.external_unit_id == external_unit_id))
     if unit is None:
         raise ValueError("Unit was not found in the configured database")
+
     assignment = unit.order_assignment
     if unit.status != "dispatched" or assignment is None:
         raise ValueError("Unit has no completed order assignment")
@@ -24,9 +28,15 @@ def verify_delivery(session: Session, external_unit_id: str) -> dict:
     order = assignment.order_item.order
     if not order.buyer_name:
         raise ValueError("The delivery has no recorded customer")
+    return unit, assignment, order
 
+
+def _get_trace(
+    session: Session, unit: Unit, order: Order, external_unit_id: str
+) -> TraceabilityResponse:
     service = TraceabilityService(session)
     trace = service.get_traceability(unit.lot.external_lot_id)
+
     if unit.lot.origin == LotOrigin.OWN_PRODUCTION and not trace.ancestors:
         raise ValueError("Own production has no recorded input lots")
     if not any(
@@ -42,13 +52,23 @@ def verify_delivery(session: Session, external_unit_id: str) -> dict:
             for delivery in upstream.deliveries
         ):
             raise ValueError("An input lot cannot be traced downstream to the customer")
+    return trace
 
+
+def _get_custody(unit: Unit) -> list[CustodyEvent]:
     events = sorted(unit.custody_events, key=lambda event: event.occurred_at)
     event_types = {event.event_type for event in events}
     if CustodyEventType.DISPATCHED not in event_types:
         raise ValueError("The delivery has no dispatch custody event")
     if not event_types & {CustodyEventType.PRODUCED, CustodyEventType.RECEIVED}:
         raise ValueError("The unit has no receipt or production custody event")
+    return events
+
+
+def verify_delivery(session: Session, external_unit_id: str) -> dict:
+    unit, assignment, order = _get_delivery(session, external_unit_id)
+    trace = _get_trace(session, unit, order, external_unit_id)
+    events = _get_custody(unit)
 
     return {
         "unit_id": external_unit_id,

@@ -1,4 +1,3 @@
-# tests/services/production/test_lifecycle.py
 from datetime import UTC, datetime
 
 from app.db.production_runs import find_pending_runs_for_sku
@@ -41,5 +40,4 @@ def test_finish_production_run_links_correct_pending_run_by_sku(db_session):
     assert run.output_lot_id == output_lot.id
     assert run.completed_at is not None
 
-    # ya no debería aparecer como pendiente
     assert find_pending_runs_for_sku(db_session, sku="BLI-AMOXI-500") == []

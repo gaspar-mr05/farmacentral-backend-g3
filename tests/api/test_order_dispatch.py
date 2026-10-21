@@ -224,7 +224,6 @@ def test_concurrent_dispatch_records_one_delivery(db_session):
     from app.services.order_dispatch import OrderDispatchService
     from app.services.order_fulfillment import OrderFulfillmentService
 
-    # Separate schema and committed transactions exercise real PostgreSQL locks.
     original_engine = db_session.get_bind().engine
     schema = f"dispatch_test_{uuid4().hex}"
     with original_engine.begin() as connection:

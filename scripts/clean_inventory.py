@@ -48,9 +48,9 @@ async def reset_farma_central_sandbox(client: FarmaCentralClient) -> None:
                 except Exception:
                     pass
 
-        print(f"   ✅ {deleted_count} productos eliminados de Farma Central.")
-    except Exception as e:
-        print(f"   ⚠️ Error al limpiar bodegas de Farma Central: {e}")
+        print(f"   {deleted_count} productos eliminados de Farma Central.")
+    except Exception as error:
+        print(f"   Error al limpiar bodegas de Farma Central: {error}")
 
 
 def reset_local_database() -> None:
@@ -64,10 +64,10 @@ def reset_local_database() -> None:
             )
         )
         db.commit()
-        print("   ✅ Base de datos local truncada con éxito.")
-    except Exception as e:
+        print("   Base de datos local truncada con éxito.")
+    except Exception as error:
         db.rollback()
-        print(f"   ⚠️ Error al limpiar la base de datos local: {e}")
+        print(f"   Error al limpiar la base de datos local: {error}")
     finally:
         db.close()
 

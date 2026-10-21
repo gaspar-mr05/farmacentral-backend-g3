@@ -12,7 +12,7 @@ def make_settings(**overrides: Any) -> Settings:
         "farma_central_group": 3,
     }
     values.update(overrides)
-    return Settings(  # type: ignore[call-arg]
+    return Settings(
         _env_file=None,
         **values,
     )

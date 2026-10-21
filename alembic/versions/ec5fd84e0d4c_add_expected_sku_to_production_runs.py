@@ -18,7 +18,6 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    # 1. Agregar la columna como nullable
     op.add_column(
         "production_runs", sa.Column("expected_sku", sa.String(), nullable=True)
     )
@@ -32,8 +31,6 @@ def upgrade() -> None:
         WHERE run.output_lot_id = lot.id AND run.expected_sku IS NULL
         """
     )
-    # Pending legacy runs predate expected_sku. At that point the only production
-    # flow supported by the application was the amoxicillin blister.
     op.execute(
         """
         UPDATE production_runs
@@ -42,7 +39,6 @@ def upgrade() -> None:
         """
     )
 
-    # 3. Ahora sí, aplicar la restricción NOT NULL
     op.alter_column("production_runs", "expected_sku", nullable=False)
 
 

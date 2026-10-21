@@ -49,7 +49,6 @@ class SFTPOrdersClient:
                 try:
                     return await self._read_inbox(sftp, skip_paths)
                 finally:
-                    # A stalled server must not retain a session during shutdown.
                     sftp.exit()
                     connection.close()
                     await sftp.wait_closed()
@@ -89,7 +88,6 @@ class SFTPOrdersClient:
             except TimeoutError:
                 raise
             except (OSError, asyncssh.SFTPError):
-                # Do not record an unreadable file as received: try it next poll.
                 logger.warning("Could not read sFTP file: path=%s", path)
                 continue
             files.append(SFTPOrderFile(path=path, content=content))

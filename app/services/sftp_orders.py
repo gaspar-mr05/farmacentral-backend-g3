@@ -152,8 +152,6 @@ class SFTPOrderIngestionService:
                     event.external_event_id,
                     order_id,
                 )
-            # The order and the processed marker are committed together. A crash
-            # before this commit leaves the already persisted event ready to retry.
             self._session.commit()
             if pause:
                 break

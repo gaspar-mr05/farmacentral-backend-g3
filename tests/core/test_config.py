@@ -37,7 +37,7 @@ def test_env_local_overrides_env(
     )
     monkeypatch.chdir(tmp_path)
 
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings()
 
     assert str(settings.farma_central_base_url) == "https://dev.example.test/api/"
     assert settings.farma_central_group == 3

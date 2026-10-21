@@ -101,7 +101,6 @@ def test_migration_preserves_web_orders_and_allows_durable_event_linking(
     ):
         run_migration(engine, "downgrade", PREVIOUS_REVISION)
 
-    # Reopen the session to verify persisted data, independently of the identity map.
     with Session(engine) as session:
         event = session.get(InboundEvent, event_id)
         assert event.order_id is None
@@ -127,7 +126,6 @@ def test_migration_preserves_web_orders_and_allows_durable_event_linking(
         )
         assert compare_metadata(context, Base.metadata) == []
 
-    # A rollback cannot discard the identity of an existing E2 order.
     with pytest.raises(
         AssertionError, match="Cannot downgrade while Delivery 2 data exists"
     ):

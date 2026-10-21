@@ -1,4 +1,3 @@
-# tests/models/test_core_inventory.py
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -16,7 +15,7 @@ def test_can_create_and_traverse_inventory_relationships(db_session):
         requires_refrigeration=False,
     )
     db_session.add(product)
-    db_session.flush()  # asigna el id sin hacer commit
+    db_session.flush()
 
     location = Location(
         code="BODEGA_PRINCIPAL",
@@ -45,7 +44,6 @@ def test_can_create_and_traverse_inventory_relationships(db_session):
     db_session.add(unit)
     db_session.flush()
 
-    # --- Lectura y navegación de relaciones ---
     db_session.refresh(product)
     db_session.refresh(lot)
 
@@ -56,10 +54,8 @@ def test_can_create_and_traverse_inventory_relationships(db_session):
     fetched_unit = lot.units[0]
     assert fetched_unit.id == unit.id
 
-    # navegar hacia atrás: unidad -> lote -> producto
     assert fetched_unit.lot.product.sku == sku
 
-    # navegar hacia la ubicación actual
     assert fetched_unit.current_location.code == "BODEGA_PRINCIPAL"
     assert fetched_unit.current_location.is_refrigerated is False
     assert fetched_unit.effective_expires_at == lot.expires_at
