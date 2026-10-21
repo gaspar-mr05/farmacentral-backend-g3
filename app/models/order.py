@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -79,6 +80,10 @@ class Order(Base, TimestampMixin):
     external_status: Mapped[ExternalOrderStatus | None] = mapped_column(
         Enum(ExternalOrderStatus), nullable=True
     )
+    decision_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[OrderSource] = mapped_column(Enum(OrderSource), nullable=False)
     status: Mapped[OrderStatus] = mapped_column(Enum(OrderStatus), nullable=False)
     total: Mapped[int] = mapped_column(Integer, nullable=False)

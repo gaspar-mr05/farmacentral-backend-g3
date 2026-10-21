@@ -46,6 +46,7 @@ class FakeOrders:
     def __init__(self, detail=None):
         self.detail = detail or make_purchase_order()
         self.requested_ids = []
+        self.decisions = []
         self.error = None
 
     async def get_order(self, order_id):
@@ -53,6 +54,10 @@ class FakeOrders:
         if self.error:
             raise self.error
         return self.detail
+
+    async def update_order_state(self, order_id, state):
+        self.decisions.append((order_id, state))
+        self.detail.state = state
 
 
 def make_service(session, sftp, orders):

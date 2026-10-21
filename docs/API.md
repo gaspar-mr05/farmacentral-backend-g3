@@ -464,6 +464,10 @@ estado local `status`. Estos cuatro campos pueden ser NULL para pedidos web;
 `buyer_email` puede ser NULL para pedidos externos. La creación mediante
 `POST /api/orders` sigue reservada al canal web.
 
+Para una OC procesada, `decision_at` indica cuándo se aceptó o rechazó y
+`decision_reason` registra el stock, la producción confirmada y los compromisos
+considerados. Ambos campos son NULL mientras no exista una decisión.
+
 Errores:
 
 - `404 Not Found`: no existe el pedido.

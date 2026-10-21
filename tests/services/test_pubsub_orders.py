@@ -34,10 +34,18 @@ class FakePubSub:
 class FakeOrders:
     def __init__(self):
         self.requested_ids = []
+        self.decisions = []
+        self.states = {}
 
     async def get_order(self, order_id):
         self.requested_ids.append(order_id)
-        return make_purchase_order(id=order_id)
+        return make_purchase_order(
+            id=order_id, estado=self.states.get(order_id, "creada")
+        )
+
+    async def update_order_state(self, order_id, state):
+        self.decisions.append((order_id, state))
+        self.states[order_id] = state
 
 
 def make_service(session, pubsub, orders):
