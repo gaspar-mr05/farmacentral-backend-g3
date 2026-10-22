@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     messaging_timeout_seconds: float = Field(default=10, gt=0)
     messaging_poll_interval_seconds: float = Field(default=12, gt=0)
     messaging_batch_size: int = Field(default=1, ge=1)
+    recall_oidc_audience: AnyHttpUrl | None = None
+    recall_oidc_service_account: str = Field(
+        default="mensajeria@taller-integracion-310700.iam.gserviceaccount.com",
+        min_length=1,
+    )
     oidc_timeout_seconds: float = Field(default=3, gt=0, le=5)
     llm_gateway_base_url: AnyHttpUrl | None = None
     llm_gateway_api_key: SecretStr | None = Field(default=None, min_length=1)
@@ -85,6 +90,13 @@ class Settings(BaseSettings):
         return str(
             self.messaging_base_url
             or urljoin(str(self.farma_central_base_url), "/messaging/")
+        )
+
+    @property
+    def effective_recall_oidc_audience(self) -> str:
+        return str(
+            self.recall_oidc_audience
+            or urljoin(str(self.app_public_url), "/api/recalls")
         )
 
     @property

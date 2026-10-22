@@ -11,9 +11,10 @@ respuestas y principales errores.
 - Las fechas usan el formato ISO 8601, por ejemplo
   `2026-10-02T12:00:00Z`.
 - Los UUID deben enviarse en su representación textual estándar.
-- El webhook `/api/messaging` exige un Bearer OIDC de la plataforma; los demás
-  endpoints actuales no exigen autenticación. Las credenciales de Farma Central
-  y de checkout se utilizan internamente y no deben enviarse desde el frontend.
+- Los webhooks `/api/messaging` y `/api/recalls` exigen un Bearer OIDC de la
+  plataforma; los demás endpoints actuales no exigen autenticación. Las
+  credenciales de Farma Central y de checkout se utilizan internamente y no
+  deben enviarse desde el frontend.
 - FastAPI devuelve `422 Unprocessable Entity` automáticamente cuando un path,
   query param o cuerpo no cumple el esquema esperado.
 
@@ -41,6 +42,7 @@ La documentación interactiva generada por FastAPI está disponible en:
 | `POST` | `/api/orders/{order_id}/payments` | Iniciar un pago para un pedido. |
 | `GET` | `/api/payments/{payment_id}/return/{result}` | Confirmar el resultado de un pago. |
 | `POST` | `/api/messaging` | Recibir y persistir mensajes autenticados, sin duplicados. |
+| `POST` | `/api/recalls` | Recibir y persistir retiros autenticados, sin duplicados. |
 
 ## Salud
 
