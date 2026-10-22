@@ -7,6 +7,7 @@ from app.api.routes.messaging import router as messaging_router
 from app.api.routes.orders import router as orders_router
 from app.api.routes.payments import router as payments_router
 from app.api.routes.products import router as products_router
+from app.api.routes.recalls import router as recalls_router
 from app.api.routes.supply import router as supply_router
 from app.api.routes.traceability import router as traceability_router
 
@@ -20,3 +21,4 @@ api_router.include_router(payments_router)
 api_router.include_router(supply_router)
 api_router.include_router(traceability_router)
 api_router.include_router(messaging_router)
+api_router.include_router(recalls_router)

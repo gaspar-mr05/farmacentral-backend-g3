@@ -157,6 +157,27 @@ def test_messaging_api_url_can_be_configured_independently():
     assert settings.effective_messaging_base_url == "https://messages.test/api/"
 
 
+def test_recall_audience_uses_the_configured_public_endpoint():
+    settings = make_settings(app_public_url="https://choripan3.ing.uc.cl/")
+    assert settings.effective_recall_oidc_audience == (
+        "https://choripan3.ing.uc.cl/api/recalls"
+    )
+    assert settings.recall_oidc_service_account == (
+        "mensajeria@taller-integracion-310700.iam.gserviceaccount.com"
+    )
+
+
+def test_recall_audience_can_be_overridden():
+    settings = make_settings(
+        recall_oidc_audience="https://public.test/custom/recalls/",
+        recall_oidc_service_account="recalls@example.test",
+    )
+    assert settings.effective_recall_oidc_audience == (
+        "https://public.test/custom/recalls/"
+    )
+    assert settings.recall_oidc_service_account == "recalls@example.test"
+
+
 def test_llm_gateway_is_optional_and_key_is_redacted():
     assert make_settings().llm_gateway_base_url is None
     settings = make_settings(llm_gateway_api_key="private-llm-key")

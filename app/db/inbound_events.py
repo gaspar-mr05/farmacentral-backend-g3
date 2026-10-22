@@ -9,6 +9,7 @@ from app.clients.pubsub_orders import PubSubOrderMessage
 from app.clients.sftp_orders import SFTPOrderFile
 from app.models import InboundEvent, InboundEventSource
 from app.schemas.messaging import MessagingWebhookPayload
+from app.schemas.recalls import RecallWebhookPayload
 
 
 def record_sftp_files(session: Session, files: list[SFTPOrderFile]) -> int:
@@ -72,6 +73,20 @@ def record_messaging_message(
             source=InboundEventSource.MESSAGING,
             external_event_id=message.message_id,
             payload=message.model_dump(mode="json", by_alias=True),
+        )
+        .on_conflict_do_nothing(constraint="uq_inbound_events_source_external_id")
+        .returning(InboundEvent.id)
+    )
+    return session.scalar(statement) is not None
+
+
+def record_recall(session: Session, recall: RecallWebhookPayload) -> bool:
+    statement = (
+        insert(InboundEvent)
+        .values(
+            source=InboundEventSource.RECALL,
+            external_event_id=recall.recall_id,
+            payload=recall.model_dump(mode="json", by_alias=True),
         )
         .on_conflict_do_nothing(constraint="uq_inbound_events_source_external_id")
         .returning(InboundEvent.id)

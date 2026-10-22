@@ -909,3 +909,40 @@ Pruebas del paso:
   tests/scripts/test_process_messaging.py \
   tests/services/test_message_interpretation.py
 ```
+
+## Entrega 2: webhook de retiros de lote (paso 14)
+
+`POST /api/recalls` recibe los avisos de retiro, verifica el Bearer OIDC de
+Google y confirma con `204` sólo después de persistir el evento. La audiencia
+predeterminada es la URL pública exacta terminada en `/api/recalls`; el
+remitente esperado se configura de forma independiente para poder ajustarlo a
+la cuenta publicada por la plataforma.
+
+El payload exige `recallId`, lote, SKU, motivo, `issuedAt` y `deadline`, con
+fechas que incluyan zona horaria y un plazo posterior a la emisión. Se conserva
+completo en `InboundEvent`, con origen `recall` y estado `pending`. La restricción
+única existente sobre fuente e ID hace idempotentes también las entregas
+concurrentes: un duplicado responde `204` sin sobrescribir el aviso original.
+
+No se consulta Farma Central ni se inicia cuarentena dentro del request. El
+análisis de lotes afectados, las notificaciones, el reporte y el polling de
+respaldo pertenecen a los pasos siguientes.
+
+Configuración del servidor del grupo 3:
+
+```dotenv
+RECALL_OIDC_AUDIENCE=https://choripan3.ing.uc.cl/api/recalls
+RECALL_OIDC_SERVICE_ACCOUNT=mensajeria@taller-integracion-310700.iam.gserviceaccount.com
+```
+
+Si se omite la audiencia, se deriva de `APP_PUBLIC_URL`. Los fallos de token
+devuelven `401`, los fallos temporales al verificar certificados o persistir
+devuelven `503`, y un payload inválido devuelve `422`.
+
+Pruebas del paso:
+
+```bash
+.venv/bin/python -m pytest -q tests/api/test_recalls.py \
+  tests/services/test_recalls.py tests/core/test_config.py \
+  tests/core/test_oidc.py
+```
