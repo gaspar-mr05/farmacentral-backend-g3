@@ -75,7 +75,7 @@ class FakeOrders:
         self.decisions.append((order_id, state))
 
 
-def add_event(db_session, *, decision=None):
+def add_event(db_session, *, decision=None, received_at=NOW):
     event = InboundEvent(
         source=InboundEventSource.MESSAGING,
         external_event_id="msg-worker",
@@ -83,7 +83,7 @@ def add_event(db_session, *, decision=None):
             "messageId": "msg-worker",
             "sender": {"name": "Farmacia", "phone": "+56911111111"},
             "text": "Necesito dos kits para hoy a las 19:00",
-            "receivedAt": NOW.isoformat(),
+            "receivedAt": received_at.isoformat(),
         },
         decision=decision,
     )
@@ -228,6 +228,61 @@ async def test_expired_response_is_not_retried(db_session):
     assert result.failed == 1
     assert incoming.status is InboundEventStatus.FAILED
     assert incoming.next_retry_at is None
+
+
+@pytest.mark.anyio
+async def test_old_message_is_failed_without_calling_the_llm_or_messaging_api(
+    db_session,
+):
+    incoming = add_event(
+        db_session,
+        received_at=datetime.now(UTC) - timedelta(minutes=31),
+    )
+    service, messaging, interpreter, orders = make_service(db_session)
+
+    result = await service.process_pending()
+    db_session.refresh(incoming)
+
+    assert (result.processed, result.failed) == (0, 1)
+    assert interpreter.calls == 0
+    assert messaging.orders == []
+    assert messaging.discards == []
+    assert orders.requested == []
+    assert incoming.status is InboundEventStatus.FAILED
+    assert incoming.decision is None
+    assert incoming.next_retry_at is None
+    assert "window expired" in incoming.last_error
+
+
+@pytest.mark.anyio
+async def test_expired_backlog_does_not_block_a_current_message(db_session):
+    first = add_event(
+        db_session,
+        received_at=datetime.now(UTC) - timedelta(minutes=32),
+    )
+    first.external_event_id = "msg-old-1"
+    second = add_event(
+        db_session,
+        received_at=datetime.now(UTC) - timedelta(minutes=31),
+    )
+    second.external_event_id = "msg-old-2"
+    current = add_event(db_session)
+    current.external_event_id = "msg-current"
+    db_session.commit()
+    service, messaging, interpreter, _ = make_service(db_session)
+    service._settings.messaging_batch_size = 1
+
+    result = await service.process_pending()
+    db_session.expire_all()
+
+    assert (result.processed, result.failed) == (1, 2)
+    assert db_session.get(InboundEvent, first.id).status is InboundEventStatus.FAILED
+    assert db_session.get(InboundEvent, second.id).status is InboundEventStatus.FAILED
+    assert (
+        db_session.get(InboundEvent, current.id).status is InboundEventStatus.PROCESSED
+    )
+    assert interpreter.calls == 1
+    assert messaging.discards == [("msg-current", "No corresponde a un pedido")]
 
 
 @pytest.mark.anyio
