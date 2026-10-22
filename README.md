@@ -663,3 +663,56 @@ pytest tests/services/test_external_order_fulfillment.py \
   tests/api/test_order_fulfillment.py tests/api/test_order_dispatch.py \
   tests/clients/test_farma_central.py -q
 ```
+
+## Entrega 2: webhook de mensajería (paso 9)
+
+`POST /api/messaging` recibe el mensaje de la plataforma y responde `204` después
+de confirmar su persistencia en PostgreSQL. Conserva `messageId`, `sender`, `text`
+y `receivedAt` en el `payload` de `InboundEvent`, con origen `messaging` y estado
+`pending`. `InboundEvent.received_at` registra la recepción local; el `receivedAt`
+original se conserva para calcular el plazo de respuesta en los siguientes pasos.
+Se reutiliza la tabla existente, por lo que este paso no agrega una migración.
+
+El webhook valida el Bearer OIDC de Google: firma, emisor, audiencia exacta,
+vigencia, correo de la cuenta de servicio y `email_verified=true`. La cuenta
+publicada en el [contrato de mensajería](https://dev.proyecto.2026-2.tallerdeintegracion.cl/messaging/docs)
+es `mensajeria@taller-integracion-310700.iam.gserviceaccount.com`. No se usa la
+llave de Pub/Sub ni se necesita una llave privada para verificar estos tokens.
+Los certificados públicos se descargan con timeout y se mantienen en caché según
+sus cabeceras HTTP. Los fallos de autenticación devuelven `401`; los fallos
+temporales al verificar certificados o guardar en PostgreSQL devuelven `503`
+para permitir el reintento.
+
+La restricción única `(source, external_event_id)` deduplica por `messageId`,
+también con entregas concurrentes. Un duplicado devuelve `204` sin sobrescribir
+el mensaje original ni cambiar su procesamiento. No se llama al LLM, no se crea
+una OC y no se responde a la API de mensajería durante este request: eso pertenece
+a los pasos 10–13.
+
+Configuración del endpoint público del grupo 3:
+
+```dotenv
+MESSAGING_OIDC_AUDIENCE=https://choripan3.ing.uc.cl/api/messaging
+MESSAGING_OIDC_SERVICE_ACCOUNT=mensajeria@taller-integracion-310700.iam.gserviceaccount.com
+OIDC_TIMEOUT_SECONDS=3
+```
+
+Si se omite la audiencia, se deriva de `APP_PUBLIC_URL` y `/api/messaging`.
+Debe coincidir exactamente con la URL pública a la que envía la plataforma,
+incluyendo esquema y path. No se deriva de `Host` ni de `X-Forwarded-Host`.
+Reiniciar el backend después de cambiar la configuración. El acceso público y
+el envío de un webhook real se verifican después de desplegar; los tests locales
+usan tokens RSA de prueba y certificados simulados, sin consumir el LLM.
+
+Instalar las nuevas dependencias y ejecutar los tests del paso:
+
+```bash
+.venv/bin/python -m pip install -e '.[dev]'
+.venv/bin/python -m pytest -q tests/core/test_oidc.py tests/core/test_config.py \
+  tests/api/test_messaging.py tests/services/test_messaging.py
+```
+
+Las pruebas cubren firma y claims inválidos, payload incompleto, deduplicación,
+fallos de persistencia, reintentos, recepción en menos de 15 segundos y
+persistencia entre sesiones. No se registran tokens ni texto de mensajes en los
+logs del webhook.

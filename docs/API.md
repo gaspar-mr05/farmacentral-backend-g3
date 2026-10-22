@@ -11,9 +11,9 @@ respuestas y principales errores.
 - Las fechas usan el formato ISO 8601, por ejemplo
   `2026-10-02T12:00:00Z`.
 - Los UUID deben enviarse en su representación textual estándar.
-- Actualmente la API propia no exige autenticación. Las credenciales de Farma
-  Central y de checkout son utilizadas internamente por el backend y nunca
-  deben enviarse desde el frontend.
+- El webhook `/api/messaging` exige un Bearer OIDC de la plataforma; los demás
+  endpoints actuales no exigen autenticación. Las credenciales de Farma Central
+  y de checkout se utilizan internamente y no deben enviarse desde el frontend.
 - FastAPI devuelve `422 Unprocessable Entity` automáticamente cuando un path,
   query param o cuerpo no cumple el esquema esperado.
 
@@ -40,6 +40,7 @@ La documentación interactiva generada por FastAPI está disponible en:
 | `POST` | `/api/orders/{order_id}/dispatch` | Despachar unidades asignadas y cerrar la venta. |
 | `POST` | `/api/orders/{order_id}/payments` | Iniciar un pago para un pedido. |
 | `GET` | `/api/payments/{payment_id}/return/{result}` | Confirmar el resultado de un pago. |
+| `POST` | `/api/messaging` | Recibir y persistir mensajes autenticados, sin duplicados. |
 
 ## Salud
 
@@ -678,3 +679,38 @@ unidad (`quantity: 1`) e incluye `lot_id`, `order_id`, `buyer_name`, `buyer_emai
 aparecen incluso si quedan otras unidades pendientes del pedido. Las unidades
 despachadas conservan su historial y no vuelven al stock disponible al sincronizar.
 `buyer_email` puede ser NULL para entregas de pedidos externos sin correo.
+
+## Webhook de mensajería
+
+### `POST /api/messaging`
+
+Exclusivo para la plataforma de mensajería. Requiere
+`Authorization: Bearer <token OIDC de Google>` con audiencia igual a
+`MESSAGING_OIDC_AUDIENCE` (o `APP_PUBLIC_URL` + `/api/messaging`) y el correo de
+`MESSAGING_OIDC_SERVICE_ACCOUNT` verificado. La firma, el emisor y la vigencia
+se verifican usando `google-auth`; la audiencia no depende de los headers de
+la solicitud.
+
+```json
+{
+  "messageId": "msg_01JB7Q2F4R8S",
+  "sender": {
+    "name": "Farmacia Los Aromos",
+    "phone": "+56 9 5555 0123"
+  },
+  "text": "Necesito dos kits respiratorios para hoy antes de las 7.",
+  "receivedAt": "2026-10-27T16:05:00Z"
+}
+```
+
+Todos los campos del ejemplo son obligatorios. Las cadenas deben contener texto
+y `receivedAt` debe ser una fecha ISO 8601 con zona horaria.
+
+Devuelve `204 No Content` después de confirmar el mensaje en PostgreSQL como
+evento `messaging`, pendiente de interpretación. Un duplicado por `messageId`
+devuelve también `204`, conservando el payload original y su estado. No se llama
+al LLM ni se crea una OC en esta operación.
+
+Errores: `401` para Bearer ausente o token inválido, `422` para payload inválido
+y `503` si no se pueden verificar certificados o confirmar la persistencia.
+Un error no confirma la recepción: la plataforma puede reintentar el mismo ID.

@@ -121,3 +121,22 @@ def test_pubsub_names_can_be_configured_for_a_custom_host():
     )
     assert settings.effective_pubsub_topic_id == "custom-topic"
     assert settings.effective_pubsub_subscription_id == "custom-subscription"
+
+
+def test_messaging_audience_uses_the_configured_public_endpoint():
+    settings = make_settings(app_public_url="https://choripan3.ing.uc.cl/")
+    assert settings.effective_messaging_oidc_audience == (
+        "https://choripan3.ing.uc.cl/api/messaging"
+    )
+    assert settings.messaging_oidc_service_account == (
+        "mensajeria@taller-integracion-310700.iam.gserviceaccount.com"
+    )
+
+
+def test_messaging_audience_override_preserves_the_exact_path():
+    settings = make_settings(
+        messaging_oidc_audience="https://public.test/custom/webhook/",
+    )
+    assert settings.effective_messaging_oidc_audience == (
+        "https://public.test/custom/webhook/"
+    )

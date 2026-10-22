@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.clients.pubsub_orders import PubSubOrderMessage
 from app.clients.sftp_orders import SFTPOrderFile
 from app.models import InboundEvent, InboundEventSource
+from app.schemas.messaging import MessagingWebhookPayload
 
 
 def record_sftp_files(session: Session, files: list[SFTPOrderFile]) -> int:
@@ -60,3 +61,19 @@ def record_pubsub_messages(session: Session, messages: list[PubSubOrderMessage])
         if session.scalar(statement) is not None:
             recorded += 1
     return recorded
+
+
+def record_messaging_message(
+    session: Session, message: MessagingWebhookPayload
+) -> bool:
+    statement = (
+        insert(InboundEvent)
+        .values(
+            source=InboundEventSource.MESSAGING,
+            external_event_id=message.message_id,
+            payload=message.model_dump(mode="json", by_alias=True),
+        )
+        .on_conflict_do_nothing(constraint="uq_inbound_events_source_external_id")
+        .returning(InboundEvent.id)
+    )
+    return session.scalar(statement) is not None
