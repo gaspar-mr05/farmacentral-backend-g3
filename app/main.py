@@ -7,13 +7,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 from app.clients.market_prices import MarketPriceClient
 from app.core.config import get_settings
+from app.core.oidc import GoogleOIDCVerifier
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     async with MarketPriceClient() as market_price_client:
         application.state.market_price_client = market_price_client
-        yield
+        verifier = GoogleOIDCVerifier(
+            timeout_seconds=get_settings().oidc_timeout_seconds
+        )
+        application.state.oidc_verifier = verifier
+        try:
+            yield
+        finally:
+            verifier.close()
 
 
 def create_app() -> FastAPI:

@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     pubsub_batch_size: int = Field(default=100, ge=1)
     external_order_poll_interval_seconds: float = Field(default=5, gt=0)
     external_order_batch_size: int = Field(default=100, ge=1)
+    messaging_oidc_audience: AnyHttpUrl | None = None
+    messaging_oidc_service_account: str = Field(
+        default="mensajeria@taller-integracion-310700.iam.gserviceaccount.com",
+        min_length=1,
+    )
+    oidc_timeout_seconds: float = Field(default=3, gt=0, le=5)
     market_price_cache_ttl_seconds: float = Field(default=30, ge=0)
     market_price_max_retry_wait_seconds: float = Field(default=2, ge=0)
     checkout_base_url: AnyHttpUrl = AnyHttpUrl(
@@ -56,6 +62,13 @@ class Settings(BaseSettings):
         return str(
             self.purchase_orders_base_url
             or urljoin(str(self.farma_central_base_url), "/ordenes-compra/")
+        )
+
+    @property
+    def effective_messaging_oidc_audience(self) -> str:
+        return str(
+            self.messaging_oidc_audience
+            or urljoin(str(self.app_public_url), "/api/messaging")
         )
 
     @property
