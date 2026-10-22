@@ -143,6 +143,20 @@ def test_messaging_audience_override_preserves_the_exact_path():
     )
 
 
+def test_messaging_api_defaults_to_the_farma_central_environment():
+    settings = make_settings(
+        farma_central_base_url="https://dev.example.test/farma-central/"
+    )
+    assert (
+        settings.effective_messaging_base_url == "https://dev.example.test/messaging/"
+    )
+
+
+def test_messaging_api_url_can_be_configured_independently():
+    settings = make_settings(messaging_base_url="https://messages.test/api/")
+    assert settings.effective_messaging_base_url == "https://messages.test/api/"
+
+
 def test_llm_gateway_is_optional_and_key_is_redacted():
     assert make_settings().llm_gateway_base_url is None
     settings = make_settings(llm_gateway_api_key="private-llm-key")
