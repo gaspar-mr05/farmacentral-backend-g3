@@ -48,6 +48,11 @@ class Settings(BaseSettings):
         min_length=1,
     )
     oidc_timeout_seconds: float = Field(default=3, gt=0, le=5)
+    llm_gateway_base_url: AnyHttpUrl | None = None
+    llm_gateway_api_key: SecretStr | None = Field(default=None, min_length=1)
+    llm_gateway_model: str | None = Field(default=None, min_length=1, pattern=r"\S")
+    llm_gateway_timeout_seconds: float = Field(default=20, gt=0)
+    llm_gateway_max_tokens: int = Field(default=256, gt=0)
     market_price_cache_ttl_seconds: float = Field(default=30, ge=0)
     market_price_max_retry_wait_seconds: float = Field(default=2, ge=0)
     checkout_base_url: AnyHttpUrl = AnyHttpUrl(

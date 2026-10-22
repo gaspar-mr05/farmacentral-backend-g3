@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.core.config import Settings
 from tests.support.farma_central import make_settings
@@ -140,3 +141,25 @@ def test_messaging_audience_override_preserves_the_exact_path():
     assert settings.effective_messaging_oidc_audience == (
         "https://public.test/custom/webhook/"
     )
+
+
+def test_llm_gateway_is_optional_and_key_is_redacted():
+    assert make_settings().llm_gateway_base_url is None
+    settings = make_settings(llm_gateway_api_key="private-llm-key")
+    assert settings.llm_gateway_api_key.get_secret_value() == "private-llm-key"
+    assert "private-llm-key" not in repr(settings)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"llm_gateway_base_url": "not-a-url"},
+        {"llm_gateway_api_key": ""},
+        {"llm_gateway_model": "  "},
+        {"llm_gateway_timeout_seconds": 0},
+        {"llm_gateway_max_tokens": 0},
+    ],
+)
+def test_invalid_llm_gateway_configuration_is_rejected(overrides):
+    with pytest.raises(ValidationError):
+        make_settings(**overrides)
