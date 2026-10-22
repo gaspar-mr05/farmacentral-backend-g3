@@ -584,7 +584,8 @@ El paso 7 agrega `OrderProcessingService.process_order(order_id)`. La política
 es intencionalmente conservadora: acepta una OC sólo si todavía está dentro de
 plazo y la cantidad solicitada puede cubrirse con stock vendible vigente más
 producción ya confirmada para antes del vencimiento. También descuenta las
-cantidades prometidas a otras OCs aceptadas; no supone producción futura que
+cantidades aún sin asignar prometidas a otras OCs aceptadas. Las unidades ya
+reservadas o entregadas no se descuentan otra vez; no supone producción futura que
 aún no haya sido solicitada.
 
 La decisión se envía al sistema oficial como `aceptada` o `rechazada` y se
@@ -612,6 +613,28 @@ entrega con `POST /farma-central/dispatch`, indicando su ID y el
 `external_order_id` de la OC. Las unidades entregadas parcialmente quedan
 confirmadas una a una, por lo que un reintento continúa con las restantes.
 
+Antes de cada entrega externa se persiste una intención de despacho por unidad.
+Si se pierde la respuesta, el reintento compara el contador oficial de la OC
+con esa intención y verifica la ausencia de la unidad en el espacio de despacho.
+Sólo entonces registra la entrega sin repetirla. Si la evidencia es ambigua
+(incluido un listado truncado o una unidad vencida), conserva la reserva y
+reporta el conflicto; no supone que la entrega ocurrió. Todos los despachos de
+la OC deben pasar por este servicio para mantener esa correlación.
+Los despachos ambiguos anteriores a esta migración, sin intención persistida,
+requieren revisión de sus unidades; el contador agregado no permite reconstruir
+por sí solo sus entregas individuales.
+
+Al recibir el estado oficial `vencida`, `anulada` o `rechazada`, se liberan las
+reservas sin entregar y se conservan las entregas confirmadas. Las intenciones
+sin resolver se reconcilian antes de liberar esas unidades. Una notificación
+duplicada conserva el estado oficial actualizado y la auditoría original.
+
+Aplicar la migración de intenciones antes de iniciar el backend o el worker:
+
+```bash
+.venv/bin/alembic upgrade head
+```
+
 El worker revisa primero las OCs con el vencimiento más cercano. Si la producción
 aceptada todavía no está disponible, conserva la orden pendiente para una
 revisión posterior. Al completar las unidades consulta nuevamente la OC oficial
@@ -636,6 +659,7 @@ Pruebas del paso 8:
 
 ```bash
 pytest tests/services/test_external_order_fulfillment.py \
+  tests/services/test_external_order_regressions.py \
   tests/api/test_order_fulfillment.py tests/api/test_order_dispatch.py \
   tests/clients/test_farma_central.py -q
 ```

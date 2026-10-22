@@ -660,6 +660,13 @@ Repetir el endpoint retoma las pendientes; una respuesta perdida después del
 movimiento se reconcilia consultando el destino antes de volver a mover.
 Repetir un pedido completo devuelve su estado sin nuevos movimientos ni eventos.
 
+Para OCs externas aceptadas se usa `external_order_id` al entregar cada unidad.
+Se guarda una intención antes de llamar a `/farma-central/dispatch`. Si se pierde
+la respuesta, se consulta el avance oficial y se comprueba la ausencia de esa
+unidad en despacho antes de registrar la entrega localmente. Una discrepancia
+devuelve `409` y conserva la intención para revisión, sin duplicar el despacho.
+La imposibilidad de consultar el estado oficial devuelve `503`.
+
 Errores: `404` para un pedido inexistente, `409` para estado/asignaciones/unidades
 o ubicación de despacho inválidos, `503` para conexión o timeout de Farma Central
 y `502` para rechazo externo o confirmación inválida.

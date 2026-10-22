@@ -6,7 +6,7 @@ import pytest
 from app.core.config import Settings
 from app.models import ExternalOrderStatus, Location, OrderItem, OrderStatus
 from app.services.external_order_fulfillment import ExternalOrderFulfillmentService
-from tests.api.test_order_dispatch import DispatchClient
+from tests.api.test_order_dispatch import DispatchClient, DispatchOrders
 from tests.api.test_order_fulfillment import _add_stock
 from tests.support.farma_central import make_settings
 from tests.support.orders import make_external_order, make_purchase_order
@@ -69,7 +69,7 @@ async def test_fulfills_external_orders_by_nearest_deadline(db_session):
     db_session.add(Location(code=destination, name="Despacho", is_sellable=False))
     db_session.commit()
     farma_central = DispatchClient(first_units + second_units, destination)
-    purchase_orders = FakePurchaseOrders()
+    purchase_orders = DispatchOrders(farma_central)
     settings: Settings = make_settings(external_order_batch_size=100)
 
     result = await ExternalOrderFulfillmentService(
@@ -81,7 +81,10 @@ async def test_fulfills_external_orders_by_nearest_deadline(db_session):
 
     assert result.completed == 2
     assert result.pending == result.failed == 0
-    assert purchase_orders.fetched == [early.external_order_id, late.external_order_id]
+    assert list(dict.fromkeys(purchase_orders.fetched)) == [
+        early.external_order_id,
+        late.external_order_id,
+    ]
     assert db_session.get(type(early), early.id).status == OrderStatus.DISPATCHED
     assert db_session.get(type(late), late.id).status == OrderStatus.DISPATCHED
     assert early.external_status == ExternalOrderStatus.FULFILLED
@@ -129,7 +132,7 @@ async def test_resumes_after_a_partial_external_dispatch(db_session):
     db_session.commit()
     farma_central = DispatchClient(units, destination)
     farma_central.fail_on = units[1].external_unit_id
-    purchase_orders = FakePurchaseOrders()
+    purchase_orders = DispatchOrders(farma_central, quantity=2)
     service = ExternalOrderFulfillmentService(
         farma_central,
         purchase_orders,

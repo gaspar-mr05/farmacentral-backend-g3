@@ -13,10 +13,12 @@ from app.models import (
     Order,
     OrderItem,
     OrderStatus,
+    OrderUnit,
     Product,
     ProductionRun,
     Unit,
 )
+from app.services.external_order_state import apply_official_state
 from app.services.orders import OrderNotFoundError
 
 
@@ -37,6 +39,17 @@ class OrderProcessingService:
         now = now or datetime.now(UTC)
         order = self._get_for_update(order_id)
         self._validate_external_order(order)
+
+        if order.external_status in {
+            ExternalOrderStatus.EXPIRED,
+            ExternalOrderStatus.CANCELLED,
+            ExternalOrderStatus.REJECTED,
+        }:
+            apply_official_state(self._session, order, order.external_status)
+            if order.external_status == ExternalOrderStatus.REJECTED:
+                self._complete_missing_audit(order, now)
+            self._session.flush()
+            return order
 
         if order.status in {OrderStatus.ACCEPTED, OrderStatus.REJECTED}:
             self._complete_missing_audit(order, now)
@@ -136,8 +149,18 @@ class OrderProcessingService:
         return int(quantity or 0)
 
     def _committed_quantity(self, sku: str, current_order_id: uuid.UUID) -> int:
+        assigned = (
+            select(func.count(OrderUnit.id))
+            .where(OrderUnit.order_item_id == OrderItem.id)
+            .correlate(OrderItem)
+            .scalar_subquery()
+        )
         quantity = self._session.scalar(
-            select(func.coalesce(func.sum(OrderItem.quantity), 0))
+            select(
+                func.coalesce(
+                    func.sum(func.greatest(OrderItem.quantity - assigned, 0)), 0
+                )
+            )
             .join(Order, OrderItem.order_id == Order.id)
             .where(
                 OrderItem.sku == sku,
@@ -172,11 +195,6 @@ class OrderProcessingService:
             order.decision_at = now
         if order.decision_reason is None:
             order.decision_reason = "Existing local decision"
-        order.external_status = (
-            ExternalOrderStatus.ACCEPTED
-            if order.status is OrderStatus.ACCEPTED
-            else ExternalOrderStatus.REJECTED
-        )
 
     @staticmethod
     def _reconcile_official_decision(order: Order, now: datetime) -> None:

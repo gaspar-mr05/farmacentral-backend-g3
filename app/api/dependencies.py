@@ -5,6 +5,7 @@ from fastapi import Request
 from app.clients.checkout import CheckoutClient
 from app.clients.farma_central import FarmaCentralClient
 from app.clients.market_prices import MarketPriceClient
+from app.clients.purchase_orders import PurchaseOrdersClient
 
 
 async def get_farma_central_client() -> AsyncGenerator[FarmaCentralClient, None]:
@@ -20,4 +21,9 @@ async def get_market_price_client(
 
 async def get_checkout_client() -> AsyncGenerator[CheckoutClient, None]:
     async with CheckoutClient() as client:
+        yield client
+
+
+async def get_purchase_orders_client() -> AsyncGenerator[PurchaseOrdersClient, None]:
+    async with PurchaseOrdersClient() as client:
         yield client

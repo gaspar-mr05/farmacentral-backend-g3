@@ -13,6 +13,7 @@ venv/
 .env
 .env.*
 !.env.example
+.env.local
 keys/
 
 # Editors and operating systems
@@ -29,3 +30,5 @@ IIC3103_Entrega1_Backend_Paso_a_Paso.pdf
 IIC3103_Entrega2_Backend_Paso_a_Paso.pdf
 
 scripts/smoke_test_farma_central.py
+
+keys/

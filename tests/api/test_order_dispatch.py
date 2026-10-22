@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
-from app.api.dependencies import get_farma_central_client
+from app.api.dependencies import get_farma_central_client, get_purchase_orders_client
 from app.clients.farma_central_exceptions import FarmaCentralTimeoutError
 from app.db.units import upsert_units
 from app.main import app
@@ -19,6 +19,7 @@ from app.models import (
 )
 from app.schemas.units import UnitData
 from tests.api.test_order_fulfillment import _add_order, _add_stock
+from tests.support.orders import make_purchase_order
 from tests.support.traceability import create_traceability_scenario
 
 
@@ -26,6 +27,7 @@ class DispatchClient:
     def __init__(self, units, destination="dispatch"):
         self.spaces = [{"_id": destination, "checkOut": True}]
         self.units = {u.external_unit_id: u for u in units}
+        self.skus = {u.external_unit_id: u.lot.product.sku for u in units}
         self.positions = {}
         self.moves = []
         self.dispatches = []
@@ -33,6 +35,7 @@ class DispatchClient:
         self.timeout_after_move = False
         self.confirm = True
         self.invalid = False
+        self.timeout_after_dispatch = False
 
     async def get_spaces(self):
         return self.spaces
@@ -48,7 +51,7 @@ class DispatchClient:
                 "expiresAt": unit.effective_expires_at.isoformat(),
             }
             for key, unit in self.units.items()
-            if self.positions.get(key) == store_id
+            if self.positions.get(key) == store_id and self.skus[key] == sku
         ]
 
     async def move_product(self, product_id, store_id):
@@ -63,6 +66,27 @@ class DispatchClient:
 
     async def dispatch_product(self, product_id, order_id):
         self.dispatches.append((product_id, order_id))
+        self.positions.pop(product_id, None)
+        if self.timeout_after_dispatch:
+            self.timeout_after_dispatch = False
+            raise FarmaCentralTimeoutError("Response lost after successful dispatch")
+
+
+class DispatchOrders:
+    def __init__(self, client, quantity=1):
+        self.client = client
+        self.quantity = quantity
+        self.fetched = []
+
+    async def get_order(self, order_id):
+        self.fetched.append(order_id)
+        delivered = sum(oc == order_id for _, oc in self.client.dispatches)
+        return make_purchase_order(
+            id=order_id,
+            cantidad=self.quantity,
+            despachado=delivered,
+            estado="cumplida" if delivered == self.quantity else "aceptada",
+        )
 
 
 def prepare(session, api_client, quantity=2):
@@ -136,6 +160,9 @@ def test_accepted_external_order_is_reserved_and_dispatched_with_oc_id(
     assert api_client.post(f"/api/orders/{order.id}/fulfillment").status_code == 200
     client = DispatchClient(units, destination)
     app.dependency_overrides[get_farma_central_client] = lambda: client
+    app.dependency_overrides[get_purchase_orders_client] = lambda: DispatchOrders(
+        client
+    )
 
     response = api_client.post(f"/api/orders/{order.id}/dispatch")
 
@@ -255,7 +282,8 @@ def test_raw_lot_traceability_reaches_customer(api_client, db_session):
     assert delivery["quantity"] == 1
 
 
-def test_concurrent_dispatch_records_one_delivery(db_session):
+@pytest.mark.parametrize("external", [False, True])
+def test_concurrent_dispatch_records_one_delivery(db_session, external):
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
@@ -283,11 +311,17 @@ def test_concurrent_dispatch_records_one_delivery(db_session):
             sku = f"KIT-CONCURRENT-{uuid4().hex}"
             units = _add_stock(session, sku=sku, days_until_expiration=[10])
             order = _add_order(session, sku=sku, quantity=1)
+            if external:
+                order.source = OrderSource.SFTP
+                order.external_order_id = "64abc123def456789012abcd"
+                order.external_status = ExternalOrderStatus.ACCEPTED
+                order.status = OrderStatus.ACCEPTED
             session.add(Location(code="dispatch", name="Despacho"))
             session.commit()
             OrderFulfillmentService(session).fulfill(order.id)
             order_id = order.id
             client = DispatchClient(units)
+            official = DispatchOrders(client) if external else None
 
         original_move = client.move_product
 
@@ -303,7 +337,7 @@ def test_concurrent_dispatch_records_one_delivery(db_session):
                 if second:
                     second_started.set()
                 return asyncio.run(
-                    OrderDispatchService(client, session).dispatch(order_id)
+                    OrderDispatchService(client, session, official).dispatch(order_id)
                 ).status
 
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -315,6 +349,7 @@ def test_concurrent_dispatch_records_one_delivery(db_session):
             assert first.result(timeout=10) == OrderStatus.DISPATCHED
             assert second.result(timeout=10) == OrderStatus.DISPATCHED
         assert len(client.moves) == 1
+        assert len(client.dispatches) == int(external)
         with Session(engine) as session:
             assert len(events(session)) == 1
     finally:

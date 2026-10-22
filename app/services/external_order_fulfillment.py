@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.orm import Session
 
 from app.clients.farma_central import FarmaCentralClient
@@ -10,7 +10,8 @@ from app.clients.farma_central_exceptions import FarmaCentralError
 from app.clients.purchase_orders import PurchaseOrdersClient
 from app.clients.purchase_orders_exceptions import PurchaseOrdersError
 from app.core.config import Settings, get_settings
-from app.models import ExternalOrderStatus, Order, OrderStatus
+from app.models import ExternalOrderStatus, Order, OrderItem, OrderStatus, OrderUnit
+from app.services.external_order_state import apply_official_state
 from app.services.order_dispatch import InvalidDispatchStateError, OrderDispatchService
 from app.services.order_fulfillment import (
     InsufficientFulfillmentStockError,
@@ -45,12 +46,30 @@ class ExternalOrderFulfillmentService:
 
     async def process_pending(self) -> ExternalOrderFulfillmentResult:
         result = ExternalOrderFulfillmentResult()
+        unresolved_dispatch = exists(
+            select(OrderUnit.id)
+            .join(OrderItem, OrderUnit.order_item_id == OrderItem.id)
+            .where(
+                OrderItem.order_id == Order.id,
+                OrderUnit.dispatched_at.is_(None),
+                OrderUnit.dispatch_expected_quantity.is_not(None),
+            )
+        )
+        pending_assignment = exists(
+            select(OrderUnit.id)
+            .join(OrderItem, OrderUnit.order_item_id == OrderItem.id)
+            .where(OrderItem.order_id == Order.id, OrderUnit.dispatched_at.is_(None))
+        )
         order_ids = self._session.scalars(
             select(Order.id)
             .where(
                 Order.external_order_id.is_not(None),
-                Order.external_status == ExternalOrderStatus.ACCEPTED,
-                Order.status.in_([OrderStatus.ACCEPTED, OrderStatus.DISPATCHED]),
+                or_(
+                    Order.status == OrderStatus.ACCEPTED,
+                    (Order.status == OrderStatus.DISPATCHED)
+                    & (Order.external_status == ExternalOrderStatus.ACCEPTED),
+                    pending_assignment,
+                ),
             )
             .order_by(Order.delivery_deadline, Order.created_at)
             .limit(self._settings.external_order_batch_size)
@@ -61,11 +80,24 @@ class ExternalOrderFulfillmentService:
                 order = self._session.get(Order, order_id)
                 if order is None or order.external_order_id is None:
                     continue
-                if order.delivery_deadline and order.delivery_deadline <= datetime.now(
-                    UTC
+                if order.external_status != ExternalOrderStatus.ACCEPTED or (
+                    order.delivery_deadline
+                    and order.delivery_deadline <= datetime.now(UTC)
                 ):
                     await self._refresh_official_state(order)
+                    if self._session.scalar(
+                        select(unresolved_dispatch)
+                        .select_from(Order)
+                        .where(Order.id == order.id)
+                    ):
+                        await OrderDispatchService(
+                            self._farma_central, self._session, self._purchase_orders
+                        ).dispatch(order_id, reconcile_only=True)
                     if order.external_status == ExternalOrderStatus.FULFILLED:
+                        if order.status != OrderStatus.DISPATCHED:
+                            raise InvalidDispatchStateError(
+                                "Official fulfillment has no confirmed local deliveries"
+                            )
                         result.completed += 1
                     else:
                         result.pending += 1
@@ -74,7 +106,7 @@ class ExternalOrderFulfillmentService:
                 if order.status == OrderStatus.ACCEPTED:
                     OrderFulfillmentService(self._session).fulfill(order_id)
                     await OrderDispatchService(
-                        self._farma_central, self._session
+                        self._farma_central, self._session, self._purchase_orders
                     ).dispatch(order_id)
 
                 order = self._session.get(Order, order_id)
@@ -103,8 +135,12 @@ class ExternalOrderFulfillmentService:
         return result
 
     async def _refresh_official_state(self, order: Order) -> None:
+        order = self._session.scalars(
+            select(Order)
+            .where(Order.id == order.id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        ).one()
         detail = await self._purchase_orders.get_order(order.external_order_id)
-        order.external_status = ExternalOrderStatus(detail.state)
-        if order.external_status == ExternalOrderStatus.EXPIRED:
-            order.status = OrderStatus.EXPIRED
+        apply_official_state(self._session, order, ExternalOrderStatus(detail.state))
         self._session.commit()

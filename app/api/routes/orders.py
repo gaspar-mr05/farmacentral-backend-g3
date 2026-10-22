@@ -4,7 +4,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_farma_central_client, get_market_price_client
+from app.api.dependencies import (
+    get_farma_central_client,
+    get_market_price_client,
+    get_purchase_orders_client,
+)
 from app.api.errors import market_price_http_exception
 from app.clients.farma_central import FarmaCentralClient
 from app.clients.farma_central_exceptions import (
@@ -13,6 +17,8 @@ from app.clients.farma_central_exceptions import (
     FarmaCentralTimeoutError,
 )
 from app.clients.market_prices import MarketPriceClient
+from app.clients.purchase_orders import PurchaseOrdersClient
+from app.clients.purchase_orders_exceptions import PurchaseOrdersError
 from app.db.session import get_session
 from app.schemas.orders import OrderCreate, OrderResponse
 from app.services.catalog import CatalogPriceUnavailableError
@@ -105,9 +111,14 @@ async def dispatch_order(
     order_id: UUID,
     session: Annotated[Session, Depends(get_session)],
     client: Annotated[FarmaCentralClient, Depends(get_farma_central_client)],
+    purchase_orders: Annotated[
+        PurchaseOrdersClient, Depends(get_purchase_orders_client)
+    ],
 ) -> OrderResponse:
     try:
-        order = await OrderDispatchService(client, session).dispatch(order_id)
+        order = await OrderDispatchService(client, session, purchase_orders).dispatch(
+            order_id
+        )
         return OrderResponse.model_validate(order)
     except OrderNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -120,4 +131,8 @@ async def dispatch_order(
     except FarmaCentralError as exc:
         raise HTTPException(
             status_code=502, detail="Dispatch could not be confirmed"
+        ) from exc
+    except PurchaseOrdersError as exc:
+        raise HTTPException(
+            status_code=503, detail="Official dispatch state could not be obtained"
         ) from exc
