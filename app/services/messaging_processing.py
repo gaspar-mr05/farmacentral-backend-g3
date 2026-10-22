@@ -3,6 +3,7 @@ import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from pydantic import ValidationError
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
@@ -28,6 +29,7 @@ from app.models import (
     MessagingDecision,
     OrderSource,
 )
+from app.schemas.messaging import MessagingWebhookPayload
 from app.services.message_interpretation import MessageInterpretationService
 from app.services.order_ingestion import OrderIngestionService
 from app.services.order_processing import (
@@ -37,6 +39,7 @@ from app.services.order_processing import (
 
 logger = logging.getLogger(__name__)
 PROCESSING_RECOVERY_DELAY = timedelta(minutes=1)
+MESSAGE_RESPONSE_WINDOW = timedelta(minutes=30)
 
 
 @dataclass
@@ -70,6 +73,7 @@ class MessagingProcessingService:
     async def process_pending(self) -> MessagingProcessingResult:
         result = MessagingProcessingResult()
         now = datetime.now(UTC)
+        self._expire_old_messages(result, now)
         event_ids = self._session.scalars(
             select(InboundEvent.id)
             .where(self._ready(now))
@@ -89,6 +93,24 @@ class MessagingProcessingService:
                 continue
             await self._process_event(event, result)
         return result
+
+    def _expire_old_messages(
+        self, result: MessagingProcessingResult, now: datetime
+    ) -> None:
+        events = self._session.scalars(
+            select(InboundEvent).where(
+                self._ready(now),
+                InboundEvent.responded_at.is_(None),
+            )
+        ).all()
+        expired = [
+            event for event in events if self._response_window_expired(event, now)
+        ]
+        for event in expired:
+            self._fail(event, "Message response window expired before processing")
+        if expired:
+            self._session.commit()
+            result.failed += len(expired)
 
     @staticmethod
     def _ready(now: datetime):
@@ -110,11 +132,18 @@ class MessagingProcessingService:
     async def _process_event(
         self, event: InboundEvent, result: MessagingProcessingResult
     ) -> None:
+        now = datetime.now(UTC)
         event.status = InboundEventStatus.PROCESSING
         event.attempt_count += 1
-        event.last_attempt_at = datetime.now(UTC)
+        event.last_attempt_at = now
         event.next_retry_at = None
         event.last_error = None
+
+        if event.responded_at is None and self._response_window_expired(event, now):
+            self._fail(event, "Message response window expired before processing")
+            self._session.commit()
+            result.failed += 1
+            return
 
         try:
             if event.decision is None:
@@ -203,6 +232,14 @@ class MessagingProcessingService:
             quantity=event.interpreted_quantity,
             delivery_date=event.interpreted_delivery_date,
         )
+
+    @staticmethod
+    def _response_window_expired(event: InboundEvent, now: datetime) -> bool:
+        try:
+            message = MessagingWebhookPayload.model_validate(event.payload)
+        except ValidationError:
+            return False
+        return message.received_at + MESSAGE_RESPONSE_WINDOW <= now
 
     def _retry_delay(self, error: MessagingError | PurchaseOrdersError) -> float | None:
         delay = self._settings.messaging_poll_interval_seconds
