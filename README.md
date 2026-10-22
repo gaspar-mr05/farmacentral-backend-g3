@@ -733,3 +733,127 @@ Aplicar la migración y ejecutar las pruebas del modelo:
 .venv/bin/alembic upgrade head
 .venv/bin/python -m pytest -q tests/models/test_inbound_event.py
 ```
+
+## Entrega 2: cliente del gateway LLM (paso 11)
+
+`LLMGatewayClient` envía texto a `POST <LLM_GATEWAY_BASE_URL>/chat/completions`
+con autenticación Bearer y solicita `response_format=json_schema` con
+`strict=true`, según la [documentación de LiteLLM](https://docs.litellm.ai/docs/completion/json_mode).
+Usa `httpx`, sin dependencia del SDK de un proveedor. Los modelos habilitados por
+el curso son `gemini-flash`, `gemini-flash-lite` y `gpt-oss-20b`. Completar en
+`.env.local` la URL y clave del grupo; por ejemplo, para usar `gemini-flash-lite`:
+
+```dotenv
+LLM_GATEWAY_BASE_URL=https://HOST_DEL_GATEWAY/v1/
+LLM_GATEWAY_API_KEY=CLAVE_DEL_GRUPO
+LLM_GATEWAY_MODEL=gemini-flash-lite
+LLM_GATEWAY_TIMEOUT_SECONDS=20
+LLM_GATEWAY_MAX_TOKENS=256
+```
+
+La URL debe incluir el prefijo de API publicado por el gateway (`/v1/` si
+corresponde). Elegir un modelo con soporte para salida estructurada `json_schema`.
+La API existente puede iniciar sin estas variables; instanciar el cliente sin
+URL, clave o modelo produce `LLMGatewayError`. La clave usa
+`SecretStr` y el cliente no registra texto, prompts ni respuestas en logs.
+
+Todas las claves del grupo comparten **5 requests por minuto**, **1.000 tokens
+por minuto entre entrada y salida** y **USD 2 cada 30 días**, según las reglas
+publicadas del gateway. El máximo de 256 tokens limita sólo la salida; el texto,
+catálogo, instrucciones y esquema también cuentan en el consumo de entrada.
+Este valor es un punto de partida: hay que comprobar el consumo real en `usage`
+con el modelo y catálogo elegidos. El cliente no envía `reasoning_effort` y no
+reintenta automáticamente al agotar tasa, tokens o presupuesto. La programación
+del worker deberá respetar el cupo compartido; este cliente no implementa un
+limitador global entre procesos o claves del grupo. Mantener la clave fuera del
+repositorio y, ante una filtración, solicitar su revocación al equipo docente.
+
+`MessageInterpretationService.propose(message)` consulta los SKU y nombres actuales de
+productos `KIT` en la base local sincronizada, incluidos los que no tienen stock.
+Envía sólo esos datos, el texto y `receivedAt` convertido a `America/Santiago`.
+No envía teléfono, nombre del remitente, precios, inventario ni credenciales de
+Farma Central. Un catálogo vacío produce `LLMGatewayError` sin llamar al
+gateway. Conviene ejecutar la sincronización de inventario antes de usarlo.
+
+La respuesta contiene una `proposal` con `is_order`, `sku`, `quantity`,
+`delivery_date`, `confidence`, `is_ambiguous` y `reason`. SKU, cantidad y fecha
+pueden ser `null` para expresar información faltante. `reason` puede ser vacío
+para pedidos claros. Se rechazan campos extra,
+tipos incorrectos, cantidades no positivas, confianza fuera de `[0, 1]`, fechas
+sin zona horaria, negativas del modelo y respuestas truncadas. La existencia del
+SKU, la coherencia entre campos y la vigencia del plazo se revisan en la validación
+determinista del paso 12; una propuesta con JSON válido todavía no es un pedido.
+
+El resultado incluye `raw_output`, con la respuesta completa y su uso de tokens,
+para que el procesamiento posterior pueda guardarlo en `InboundEvent.llm_output`.
+`LLMGatewayInvalidResponseError.raw_output` conserva también la salida inválida.
+La consulta `propose` no modifica el mensaje persistido ni crea órdenes.
+El webhook mantiene su confirmación rápida; la llamada se integrará al worker
+en el paso 13.
+
+Se distinguen `LLMGatewayTimeoutError`, `LLMGatewayConnectionError`,
+`LLMGatewayHTTPError` y `LLMGatewayBudgetExceededError`. Se reconocen los errores
+de presupuesto de LiteLLM y `insufficient_quota`; un 429 común conserva
+`retry_after_seconds` y no se confunde con presupuesto agotado. El cliente hace
+un solo intento, con timeout total y por operación HTTP y un límite de tokens de
+salida. El worker futuro deberá decidir el backoff o descarte sin crear una OC
+a partir de un fallo del modelo.
+
+Pruebas del contrato HTTP, respuestas válidas/ambiguas, validación estricta,
+errores, presupuesto y catálogo sin efectos sobre órdenes:
+
+```bash
+.venv/bin/python -m pytest -q tests/clients/test_llm_gateway.py \
+  tests/core/test_config.py tests/services/test_llm_proposals.py
+```
+
+La prueba del servicio requiere PostgreSQL con `TEST_DATABASE_URL` configurada
+para la base de pruebas local. Todas las llamadas LLM están simuladas y no
+consumen presupuesto.
+
+## Entrega 2: interpretación validada (paso 12)
+
+`MessageInterpretationService.interpret(event, now=...)` interpreta un
+`InboundEvent` persistido de mensajería y guarda `decision=order` o `discarded`.
+Reutiliza el cliente del paso 11 y los campos de auditoría del paso 10; no agrega
+tablas, dependencias ni variables de configuración.
+
+La política exige una propuesta de pedido nuevo, sin ambigüedad y con confianza
+de al menos `0.8`. Verifica que el SKU siga siendo un `KIT` del catálogo local,
+que no contradiga SKU explícitos del texto y que exista una cantidad única,
+positiva e identificable. Admite cifras, números en español de uno a veinte,
+`un par`, `media docena` y `una docena`, asociados a kits, unidades, un SKU o una
+referencia como `dos del de la diabetes`. No transforma cantidades aproximadas
+o alternativas en cantidades exactas. Consultas de estado, ayuda, cancelaciones
+y negaciones explícitas se descartan.
+
+El plazo debe ser posterior tanto a `receivedAt` del payload original como al
+momento de validación. Se contrasta con fechas ISO, `en N horas/minutos`, o
+`hoy`/`mañana` con hora explícita, usando `America/Santiago` y su cambio de hora.
+Por ejemplo, `hoy antes de las 7 de la tarde` y `mañana a las 09:00` tienen
+plazos verificables. Expresiones vagas como `mañana a primera hora`, horas sin
+AM/PM ni formato de 24 horas, y fechas fuera de esta gramática limitada se
+descartan; no se adivina una hora para completar el pedido.
+
+En caso de timeout, presupuesto agotado, salida inválida o cualquier error
+controlado del gateway, descarta con un motivo estable y sin reintentos ni
+fallback que invente un pedido. Guarda la salida cruda o el tipo de fallo en
+`llm_output`, la decisión y el motivo; sólo guarda SKU, cantidad y fecha en los
+campos `interpreted_*` si pasan la validación. Conserva el payload original.
+Una decisión ya guardada se reutiliza sin otra llamada al LLM.
+
+El servicio hace `flush`; el llamador debe confirmar la transacción con
+`session.commit()`. Mantiene el evento pendiente de respuesta: el envío a la
+plataforma, `responded_at`, la creación de la OC y el worker corresponden al
+paso 13. La disponibilidad de stock y la aceptación comercial no afectan esta
+interpretación de lo que pidió el cliente.
+
+```bash
+.venv/bin/python -m pytest -q tests/services/test_message_interpretation.py \
+  tests/services/test_llm_proposals.py tests/clients/test_llm_gateway.py
+```
+
+Las pruebas usan el LLM simulado y PostgreSQL de pruebas; no consumen el cupo del
+gateway. Cubren el ejemplo del enunciado, cantidades, ambigüedad, no pedidos,
+fechas relativas, cruce de medianoche en Chile, horario de invierno, errores y
+auditoría persistente sin creación de órdenes.
