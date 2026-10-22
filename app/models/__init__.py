@@ -6,6 +6,7 @@ from app.models.inbound_event import (
     InboundEvent,
     InboundEventSource,
     InboundEventStatus,
+    MessagingDecision,
 )
 from app.models.location import Location
 from app.models.lot import Lot, LotOrigin
@@ -36,6 +37,7 @@ __all__ = [
     "InboundEvent",
     "InboundEventSource",
     "InboundEventStatus",
+    "MessagingDecision",
     "OrderItem",
     "OrderSource",
     "OrderStatus",
