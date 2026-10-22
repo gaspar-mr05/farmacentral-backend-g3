@@ -39,6 +39,11 @@ class InboundEventStatus(StrEnum):
     FAILED = "failed"
 
 
+class MessagingDecision(StrEnum):
+    ORDER = "order"
+    DISCARDED = "discarded"
+
+
 class InboundEvent(Base):
     __tablename__ = "inbound_events"
     __table_args__ = (
@@ -50,6 +55,10 @@ class InboundEvent(Base):
             name="ck_inbound_events_external_id_not_empty",
         ),
         CheckConstraint("attempt_count >= 0", name="ck_inbound_events_attempt_count"),
+        CheckConstraint(
+            "interpreted_quantity IS NULL OR interpreted_quantity > 0",
+            name="ck_inbound_events_interpreted_quantity",
+        ),
         CheckConstraint(
             "jsonb_typeof(payload) = 'object'", name="ck_inbound_events_payload_object"
         ),
@@ -91,5 +100,21 @@ class InboundEvent(Base):
         DateTime(timezone=True), nullable=True
     )
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_output: Mapped[Any | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    interpreted_sku: Mapped[str | None] = mapped_column(String, nullable=True)
+    interpreted_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    interpreted_delivery_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    decision: Mapped[MessagingDecision | None] = mapped_column(
+        Enum(MessagingDecision), nullable=True
+    )
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_order_id: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    responded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     order: Mapped["Order | None"] = relationship(back_populates="inbound_events")

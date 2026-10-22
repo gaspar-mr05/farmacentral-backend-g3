@@ -716,3 +716,20 @@ Las pruebas cubren firma y claims inválidos, payload incompleto, deduplicación
 fallos de persistencia, reintentos, recepción en menos de 15 segundos y
 persistencia entre sesiones. No se registran tokens ni texto de mensajes en los
 logs del webhook.
+
+## Entrega 2: auditoría de mensajería (paso 10)
+
+`InboundEvent` conserva el mensaje original en `payload` y reutiliza `status`
+como estado de procesamiento. Para auditar los pasos posteriores también guarda
+la salida del LLM, la interpretación validada (`sku`, cantidad y fecha), la
+decisión `order`/`discarded`, su motivo, el ID externo de la OC y `responded_at`.
+El `order_id` existente vincula el evento con la OC local cuando ésta ya fue
+ingerida. Todos los campos nuevos son opcionales para no afectar eventos de
+sFTP, Pub/Sub ni mensajes aún pendientes.
+
+Aplicar la migración y ejecutar las pruebas del modelo:
+
+```bash
+.venv/bin/alembic upgrade head
+.venv/bin/python -m pytest -q tests/models/test_inbound_event.py
+```

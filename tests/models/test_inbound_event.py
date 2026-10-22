@@ -5,7 +5,12 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from app.models import InboundEvent, InboundEventSource, InboundEventStatus
+from app.models import (
+    InboundEvent,
+    InboundEventSource,
+    InboundEventStatus,
+    MessagingDecision,
+)
 from tests.support.orders import make_external_order
 
 
@@ -102,12 +107,71 @@ def test_failed_event_retains_retry_information(db_session):
     assert saved.processed_at is None
 
 
+def test_messaging_event_retains_complete_decision_audit(db_session):
+    responded_at = datetime.now(UTC)
+    event = InboundEvent(
+        source=InboundEventSource.MESSAGING,
+        external_event_id="message-1",
+        payload={"text": "Necesito dos kits", "receivedAt": "2026-10-27T16:05:00Z"},
+        status=InboundEventStatus.PROCESSED,
+        llm_output={"is_order": True, "confidence": 0.96},
+        interpreted_sku="KIT-RESP-ADULTO",
+        interpreted_quantity=2,
+        interpreted_delivery_date=datetime.fromisoformat("2026-10-27T22:00:00+00:00"),
+        decision=MessagingDecision.ORDER,
+        external_order_id="0123456789abcdef01234567",
+        responded_at=responded_at,
+    )
+    db_session.add(event)
+    db_session.flush()
+    db_session.expire_all()
+
+    saved = db_session.get(InboundEvent, event.id)
+    assert saved.payload["text"] == "Necesito dos kits"
+    assert saved.llm_output == {"is_order": True, "confidence": 0.96}
+    assert saved.interpreted_sku == "KIT-RESP-ADULTO"
+    assert saved.interpreted_quantity == 2
+    assert saved.interpreted_delivery_date == datetime.fromisoformat(
+        "2026-10-27T22:00:00+00:00"
+    )
+    assert saved.decision is MessagingDecision.ORDER
+    assert saved.external_order_id == "0123456789abcdef01234567"
+    assert saved.responded_at == responded_at
+
+
+def test_discarded_message_retains_raw_llm_output_and_reason(db_session):
+    event = InboundEvent(
+        source=InboundEventSource.MESSAGING,
+        external_event_id="message-discarded",
+        payload={"text": "¿Ya despacharon mi pedido?"},
+        llm_output="The message is not a new order",
+        decision=MessagingDecision.DISCARDED,
+        reason="The message asks about an existing order",
+        responded_at=datetime.now(UTC),
+    )
+    db_session.add(event)
+    db_session.flush()
+    db_session.expire_all()
+
+    saved = db_session.get(InboundEvent, event.id)
+    assert saved.payload == {"text": "¿Ya despacharon mi pedido?"}
+    assert saved.llm_output == "The message is not a new order"
+    assert saved.decision is MessagingDecision.DISCARDED
+    assert saved.reason == "The message asks about an existing order"
+    assert saved.order_id is None
+    assert saved.external_order_id is None
+
+
 @pytest.mark.parametrize(
     ("overrides", "constraint"),
     [
         ({"external_event_id": ""}, "ck_inbound_events_external_id_not_empty"),
         ({"external_event_id": "   "}, "ck_inbound_events_external_id_not_empty"),
         ({"attempt_count": -1}, "ck_inbound_events_attempt_count"),
+        (
+            {"interpreted_quantity": 0},
+            "ck_inbound_events_interpreted_quantity",
+        ),
         ({"payload": []}, "ck_inbound_events_payload_object"),
     ],
 )
