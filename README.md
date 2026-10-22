@@ -857,3 +857,55 @@ Las pruebas usan el LLM simulado y PostgreSQL de pruebas; no consumen el cupo de
 gateway. Cubren el ejemplo del enunciado, cantidades, ambigüedad, no pedidos,
 fechas relativas, cruce de medianoche en Chile, horario de invierno, errores y
 auditoría persistente sin creación de órdenes.
+
+## Entrega 2: respuesta de mensajería y creación de OC (paso 13)
+
+`MessagingProcessingService` toma eventos de mensajería pendientes, ejecuta la
+interpretación del paso 12 y responde una sola vez a
+`POST /messaging/messages/{messageId}/response`. Para un descarte envía el motivo;
+para un pedido envía SKU, cantidad y fecha de entrega, y guarda el `orderId`
+devuelto por la plataforma.
+
+La respuesta y su `orderId` se confirman en PostgreSQL antes de consultar la OC.
+Así, si falla después el sistema de órdenes, el reintento continúa desde la
+ingestión sin responder nuevamente el mensaje. La OC se incorpora con canal
+`messaging` y pasa inmediatamente por la política común de aceptación o rechazo
+del paso 7. El worker de cumplimiento del paso 8 se encarga posteriormente de
+las OCs aceptadas.
+
+Los timeouts, fallos de conexión, autenticación, `429` y errores de servidor se
+reintentan. Los errores definitivos, incluido el vencimiento de la ventana de 30
+minutos, quedan auditados sin reintento. Un `409` detiene nuevos envíos: un
+descarte se considera resuelto; en un pedido se registra el fallo porque la API
+no ofrece una consulta para recuperar el `orderId` de una respuesta anterior.
+
+La URL de mensajería se deriva del ambiente de Farma Central y se puede
+sobrescribir. El intervalo predeterminado procesa un mensaje cada 12 segundos
+para respetar el límite compartido de cinco llamadas LLM por minuto:
+
+```dotenv
+# MESSAGING_BASE_URL=https://dev.proyecto.2026-2.tallerdeintegracion.cl/messaging/
+MESSAGING_TIMEOUT_SECONDS=10
+MESSAGING_POLL_INTERVAL_SECONDS=12
+MESSAGING_BATCH_SIZE=1
+```
+
+Para ejecutar una revisión o mantener el proceso activo:
+
+```bash
+.venv/bin/python -m scripts.process_messaging --once
+.venv/bin/python -m scripts.process_messaging
+```
+
+Se deben configurar previamente las variables del gateway LLM descritas en el
+paso 11. La instalación de los workers como servicios permanentes sigue
+reservada para el paso 19.
+
+Pruebas del paso:
+
+```bash
+.venv/bin/python -m pytest -q tests/clients/test_messaging.py \
+  tests/services/test_messaging_processing.py \
+  tests/scripts/test_process_messaging.py \
+  tests/services/test_message_interpretation.py
+```
