@@ -15,7 +15,10 @@ if TYPE_CHECKING:
 
 class OrderUnit(Base):
     __tablename__ = "order_units"
-    __table_args__ = (UniqueConstraint("unit_id", name="uq_order_units_unit_id"),)
+    __table_args__ = (
+        UniqueConstraint("unit_id", name="uq_order_units_unit_id"),
+        UniqueConstraint("id", "unit_id", name="uq_order_units_id_unit_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

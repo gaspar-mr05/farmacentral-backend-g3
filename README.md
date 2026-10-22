@@ -946,3 +946,28 @@ Pruebas del paso:
   tests/services/test_recalls.py tests/core/test_config.py \
   tests/core/test_oidc.py
 ```
+
+## Entrega 2: modelo persistente de recalls (paso 15)
+
+La investigación y las acciones de cada retiro se conservan en un modelo
+separado del evento de entrada. `Recall` guarda el lote de origen, SKU, motivo,
+plazo, estado y el último reporte enviado. Puede enlazarse con el
+`InboundEvent` del webhook sin exigirlo, de modo que también admite recalls
+recuperados por el mecanismo de respaldo.
+
+Las tablas relacionadas registran los lotes afectados y su generación, las
+unidades encontradas en stock y su ubicación original, las unidades ya
+entregadas con su OC y cliente, y la notificación única de cada OC. Las claves
+foráneas compuestas impiden asociar una unidad a un lote distinto del suyo o a
+un lote que no fue incorporado en la investigación del mismo recall.
+
+Este paso sólo incorpora persistencia e integridad. El recorrido del linaje,
+la cuarentena, las llamadas externas y la API de consulta corresponden a los
+pasos 16–18.
+
+Aplicar la migración y ejecutar las pruebas del modelo:
+
+```bash
+.venv/bin/alembic upgrade head
+.venv/bin/python -m pytest -q tests/models/test_recalls.py
+```

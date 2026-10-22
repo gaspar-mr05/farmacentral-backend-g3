@@ -23,6 +23,16 @@ from app.models.product import Product, ProductCategory
 from app.models.production_input import ProductionInput
 from app.models.production_input_unit import ProductionInputUnit
 from app.models.production_run import ProductionRun
+from app.models.recall import (
+    Recall,
+    RecallDelivery,
+    RecallLot,
+    RecallNotification,
+    RecallNotificationStatus,
+    RecallOrder,
+    RecallStatus,
+    RecallUnit,
+)
 from app.models.unit import Unit
 
 __all__ = [
@@ -50,4 +60,12 @@ __all__ = [
     "ProductionRun",
     "ProductionInput",
     "ProductionInputUnit",
+    "Recall",
+    "RecallStatus",
+    "RecallLot",
+    "RecallUnit",
+    "RecallOrder",
+    "RecallDelivery",
+    "RecallNotification",
+    "RecallNotificationStatus",
 ]
