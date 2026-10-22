@@ -26,7 +26,9 @@ class Unit(Base, TimestampMixin):
     external_unit_id: Mapped[str] = mapped_column(
         String, unique=True, nullable=False, index=True
     )
-    lot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("lots.id"), nullable=False)
+    lot_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("lots.id"), nullable=False, index=True
+    )
     current_location_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("locations.id"), nullable=False
     )

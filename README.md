@@ -971,3 +971,79 @@ Aplicar la migración y ejecutar las pruebas del modelo:
 .venv/bin/alembic upgrade head
 .venv/bin/python -m pytest -q tests/models/test_recalls.py
 ```
+
+## Entrega 2: investigación recursiva del recall (paso 16)
+
+`RecallInvestigationService(session).investigate(recall_id)` investiga un retiro
+ya recibido, usando exclusivamente PostgreSQL. Si el webhook sólo dejó un
+`InboundEvent`, crea y enlaza el `Recall` del paso 15 en la misma transacción.
+También admite un `Recall` registrado por otro canal. El lote debe existir con
+el `batch` externo exacto y coincidir con el SKU del aviso; no se seleccionan
+otros lotes del mismo producto. Un lote todavía no sincronizado produce un error
+controlado y puede investigarse después de sincronizar el inventario.
+
+Una CTE recursiva sigue `ProductionInput` → `ProductionRun.output_lot_id`, con
+consumo positivo y salida identificada. `UNION` evita repetir lotes en ciclos o
+rutas compartidas. La consulta devuelve sólo el origen y sus descendientes:
+excluye antecesores, ramas hermanas e ingredientes que sólo participaron en una
+misma receta. El resultado incluye todas las aristas afectadas del grafo; para
+el árbol persistente de `RecallLot` se elige un padre determinista y la distancia
+mínima al origen, con generación cero para el lote retirado.
+
+El objeto `RecallInvestigation` contiene:
+
+- `lots` y `production_links`: lotes afectados, SKU, generación y linaje.
+- `stock_units`: unidades físicas `available`, `reserved`, `quarantined` o
+  `expired`, con identificador y ubicación actual y original. Incluye recepción,
+  acondicionamiento, despacho, bodega externa y cuarentena, aunque no sean áreas
+  vendibles. No se filtra por fecha de vencimiento para investigar un retiro.
+- `orders`: OCs o ventas web con entregas afectadas, cliente y unidades concretas.
+  La evidencia es `OrderUnit.dispatched_at`, incluso si la orden está parcialmente
+  cumplida. Una reserva sin despacho no genera un cliente afectado. Las ventas
+  web conservan su correo y un `external_order_id` nulo.
+- `elapsed_ms`: tiempo total de consulta y persistencia.
+
+Las unidades consumidas, despachadas o ausentes del inventario no se consideran
+stock. Las relaciones de consumo y entrega prevalecen sobre un estado local
+desactualizado. Las consultas se restringen a los IDs de lote afectados y el
+nuevo índice `ix_units_lot_id` permite localizar sus unidades. El stock se bloquea
+durante la investigación para que no se consuma o despache mientras se clasifica;
+la espera por bloqueos está limitada a tres segundos y cada sentencia a quince.
+
+Se guardan `RecallLot`, `RecallUnit`, `RecallOrder` y `RecallDelivery` sin duplicar
+registros al reintentar. Las investigaciones de un mismo retiro se serializan.
+Se conserva la primera ubicación identificada, los tiempos de cuarentena, las
+notificaciones y el reporte anterior. Los snapshots históricos no se borran si
+una unidad cambia de estado: **el objeto devuelto contiene el stock actual** y
+debe usarse para decidir las siguientes acciones. Un snapshot con lotes ajenos
+al linaje se rechaza en vez de incorporarlo al resultado.
+
+El retiro queda en `investigating`; no se declara completado por descubrir los
+afectados. Los movimientos, las notificaciones y el reporte pertenecen al paso
+17; los endpoints para frontend pertenecen al paso 18. Esta investigación no
+llama a Farma Central ni al LLM.
+
+Aplicar la migración y ejecutar una investigación local:
+
+```bash
+.venv/bin/alembic upgrade head
+.venv/bin/python -m scripts.investigate_recall RECALL_ID
+```
+
+El script imprime el objeto en JSON. Si el retiro no existe, el origen no coincide
+o hay un error de persistencia, termina con código distinto de cero y revierte
+los cambios de esa investigación.
+
+```bash
+.venv/bin/python -m pytest -q tests/services/test_recall_investigation.py \
+  tests/scripts/test_investigate_recall.py
+.venv/bin/python -m pytest -q -s \
+  tests/services/test_recall_investigation_performance.py
+```
+
+La prueba de volumen usa un esquema PostgreSQL aislado con **2.101 lotes,
+20.303 unidades y 2.099 vínculos de producción**. Investiga 101 lotes afectados
+en una cadena de 100 generaciones, 300 unidades en stock y tres entregas. Una
+medición local obtuvo aproximadamente **60 ms y 19 sentencias SQL**; el test
+verifica un máximo de 20 sentencias y cinco segundos en ese escenario. Los
+tiempos dependen del equipo y de la carga de la base.
