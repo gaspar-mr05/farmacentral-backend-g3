@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated
 
 from pydantic import AwareDatetime, BaseModel, Field, StringConstraints, model_validator
@@ -49,3 +50,27 @@ class RecallReportRequest(BaseModel):
     in_stock: list[RecallStockReport] = Field(alias="inStock")
     derived_batches: list[RecallDerivedBatchReport] = Field(alias="derivedBatches")
     deliveries: list[RecallDeliveryReport]
+
+
+class RecallSummaryResponse(BaseModel):
+    recall_id: str
+    batch: str
+    sku: str
+    reason: str
+    issued_at: datetime
+    deadline: datetime
+    status: str
+    reported_at: datetime | None
+
+
+class RecalledUnitResponse(BaseModel):
+    product_id: str
+    sku: str
+    batch: str
+    original_location: str
+    current_location: str
+    quarantined_at: datetime | None
+
+
+class RecallDetailResponse(RecallSummaryResponse):
+    units: list[RecalledUnitResponse]
