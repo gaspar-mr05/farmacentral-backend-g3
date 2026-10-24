@@ -4,13 +4,14 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy import func, select
 
-from app.clients.llm_gateway import LLMGatewayClient, LLMGatewayResult
-from app.clients.llm_gateway_exceptions import (
+from app.clients.llm_gateway import (
     LLMGatewayBudgetExceededError,
+    LLMGatewayClient,
     LLMGatewayConnectionError,
     LLMGatewayError,
     LLMGatewayHTTPError,
     LLMGatewayInvalidResponseError,
+    LLMGatewayResult,
     LLMGatewayTimeoutError,
 )
 from app.models import (
@@ -23,7 +24,7 @@ from app.models import (
     ProductCategory,
 )
 from app.schemas.llm_gateway import LLMOrderProposal
-from app.services.message_interpretation import MessageInterpretationService
+from app.services.messaging import MessageInterpretationService
 
 RECEIVED = datetime(2026, 10, 27, 16, 5, tzinfo=UTC)
 NOW = RECEIVED + timedelta(minutes=1)

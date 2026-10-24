@@ -4,8 +4,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from app.clients.farma_central import FarmaCentralClient
-from app.clients.farma_central_exceptions import FarmaCentralHTTPError
+from app.clients.farma_central import FarmaCentralClient, FarmaCentralHTTPError
 from app.schemas.recalls import RecallNotificationRequest, RecallReportRequest
 from tests.support.farma_central import make_settings
 
@@ -88,7 +87,9 @@ async def test_get_retries_rate_limit_response() -> None:
         transport=httpx.MockTransport(handler),
     ) as http_client:
         client = FarmaCentralClient(settings=make_settings(), http_client=http_client)
-        with patch("app.clients.farma_central.asyncio.sleep", new=AsyncMock()) as sleep:
+        with patch(
+            "app.clients.farma_central.client.asyncio.sleep", new=AsyncMock()
+        ) as sleep:
             response = await client.get("/products")
 
     assert response == {"status": "ok"}

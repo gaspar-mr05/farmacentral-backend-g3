@@ -2,7 +2,7 @@ from math import ceil
 
 from fastapi import HTTPException, status
 
-from app.clients.farma_central_exceptions import (
+from app.clients.farma_central import (
     FarmaCentralConnectionError,
     FarmaCentralError,
     FarmaCentralHTTPError,

@@ -4,8 +4,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.clients.farma_central import FarmaCentralClient
-from app.clients.farma_central_exceptions import FarmaCentralInvalidResponseError
+from app.clients.farma_central import (
+    FarmaCentralClient,
+    FarmaCentralInvalidResponseError,
+)
 from app.clients.purchase_orders import PurchaseOrdersClient
 from app.models import (
     CustodyEvent,
@@ -20,8 +22,9 @@ from app.models import (
 )
 from app.schemas.farma_central import FarmaCentralSpace, FarmaCentralUnit
 from app.services.custody.events import record_move
-from app.services.external_order_state import apply_official_state
-from app.services.orders import OrderNotFoundError, get_order
+
+from .service import OrderNotFoundError, get_order
+from .state import apply_official_state
 
 
 class InvalidDispatchStateError(Exception):

@@ -7,20 +7,21 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from app.clients.purchase_orders import PurchaseOrdersClient
-from app.clients.purchase_orders_exceptions import (
+from app.clients.pubsub import PubSubOrdersClient, PubSubOrdersError
+from app.clients.purchase_orders import (
     PurchaseOrdersAuthenticationError,
+    PurchaseOrdersClient,
     PurchaseOrdersError,
     PurchaseOrdersHTTPError,
 )
-from app.clients.sftp_orders import SFTPOrdersClient, SFTPOrdersError
 from app.core.config import Settings, get_settings
 from app.db.external_orders import InvalidExternalOrderError
-from app.db.inbound_events import known_sftp_paths, record_sftp_files
+from app.db.inbound_events import record_pubsub_messages
 from app.models import InboundEvent, InboundEventSource, InboundEventStatus, OrderSource
-from app.schemas.sftp_orders import InvalidSFTPOrderError, extract_order_id
-from app.services.order_ingestion import OrderIngestionService
-from app.services.order_processing import (
+from app.schemas.pubsub_orders import InvalidPubSubOrderError, extract_order_id
+
+from .ingestion import OrderIngestionService
+from .processing import (
     InvalidExternalOrderStateError,
     OrderProcessingService,
 )
@@ -29,24 +30,25 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class SFTPPollResult:
+class PubSubPollResult:
     received: int = 0
     processed: int = 0
     failed: int = 0
     connection_failed: bool = False
+    acknowledgement_failed: bool = False
     retry_after_seconds: float = 0
 
 
-class SFTPOrderIngestionService:
+class PubSubOrderIngestionService:
     def __init__(
         self,
-        sftp: SFTPOrdersClient,
+        pubsub: PubSubOrdersClient,
         orders: PurchaseOrdersClient,
         session: Session,
         *,
         settings: Settings | None = None,
     ) -> None:
-        self._sftp = sftp
+        self._pubsub = pubsub
         self._session = session
         self._settings = settings or get_settings()
         self._ingestion = OrderIngestionService(
@@ -56,19 +58,26 @@ class SFTPOrderIngestionService:
         )
         self._processing = OrderProcessingService(orders, session)
 
-    async def poll(self) -> SFTPPollResult:
-        result = SFTPPollResult()
+    async def poll(self) -> PubSubPollResult:
+        result = PubSubPollResult()
         try:
-            paths = known_sftp_paths(self._session)
-            self._session.commit()
             try:
-                files = await self._sftp.fetch_files(skip_paths=paths)
-            except SFTPOrdersError as exc:
+                messages = await self._pubsub.pull()
+            except PubSubOrdersError as exc:
+                messages = []
                 result.connection_failed = True
-                logger.warning("sFTP poll failed: %s", exc)
+                logger.warning("Pub/Sub pull failed: %s", exc)
             else:
-                result.received = record_sftp_files(self._session, files)
+                result.received = record_pubsub_messages(self._session, messages)
                 self._session.commit()
+                try:
+                    await self._pubsub.acknowledge(
+                        [message.ack_id for message in messages]
+                    )
+                except PubSubOrdersError as exc:
+                    result.acknowledgement_failed = True
+                    logger.warning("Pub/Sub acknowledgement failed: %s", exc)
+
             await self._process_pending(result)
             return result
         except Exception:
@@ -78,7 +87,7 @@ class SFTPOrderIngestionService:
     @staticmethod
     def _ready():
         return and_(
-            InboundEvent.source == InboundEventSource.SFTP,
+            InboundEvent.source == InboundEventSource.PUBSUB,
             or_(
                 InboundEvent.status == InboundEventStatus.PENDING,
                 and_(
@@ -88,12 +97,12 @@ class SFTPOrderIngestionService:
             ),
         )
 
-    async def _process_pending(self, result: SFTPPollResult) -> None:
+    async def _process_pending(self, result: PubSubPollResult) -> None:
         event_ids = self._session.scalars(
             select(InboundEvent.id)
             .where(self._ready())
             .order_by(InboundEvent.received_at)
-            .limit(self._settings.sftp_batch_size)
+            .limit(self._settings.pubsub_batch_size)
         ).all()
         for event_id in event_ids:
             event = self._session.scalar(
@@ -105,27 +114,24 @@ class SFTPOrderIngestionService:
             if event is None:
                 self._session.commit()
                 continue
+
             event.status = InboundEventStatus.PROCESSING
             event.attempt_count += 1
             event.last_attempt_at = datetime.now(UTC)
             pause = False
             try:
                 try:
-                    content = base64.b64decode(
-                        event.payload["xml_base64"], validate=True
-                    )
+                    data = base64.b64decode(event.payload["data_base64"], validate=True)
                 except (KeyError, ValueError, TypeError) as exc:
-                    raise InvalidSFTPOrderError(
-                        "Invalid persisted XML payload"
+                    raise InvalidPubSubOrderError(
+                        "Invalid persisted Pub/Sub payload"
                     ) from exc
-                order_id = extract_order_id(
-                    content, max_bytes=self._settings.sftp_max_file_bytes
-                )
+                order_id = extract_order_id(data)
                 event.payload = {**event.payload, "order_id": order_id}
-                order = await self._ingestion.ingest(order_id, OrderSource.SFTP)
+                order = await self._ingestion.ingest(order_id, OrderSource.PUBSUB)
                 order = await self._processing.process_order(order.id)
             except (
-                InvalidSFTPOrderError,
+                InvalidPubSubOrderError,
                 InvalidExternalOrderError,
                 InvalidExternalOrderStateError,
             ) as exc:
@@ -148,7 +154,7 @@ class SFTPOrderIngestionService:
                 event.last_error = None
                 result.processed += 1
                 logger.info(
-                    "sFTP order imported: path=%s order_id=%s",
+                    "Pub/Sub order imported: message_id=%s order_id=%s",
                     event.external_event_id,
                     order_id,
                 )
@@ -157,7 +163,7 @@ class SFTPOrderIngestionService:
                 break
 
     def _retry_delay(self, error: PurchaseOrdersError) -> float | None:
-        delay = self._settings.sftp_poll_interval_seconds
+        delay = self._settings.pubsub_poll_interval_seconds
         if isinstance(error, PurchaseOrdersHTTPError):
             if (
                 not isinstance(error, PurchaseOrdersAuthenticationError)
@@ -182,7 +188,7 @@ class SFTPOrderIngestionService:
             else None
         )
         logger.warning(
-            "sFTP event failed: path=%s order_id=%s error=%s",
+            "Pub/Sub event failed: message_id=%s order_id=%s error=%s",
             event.external_event_id,
             event.payload.get("order_id"),
             error,

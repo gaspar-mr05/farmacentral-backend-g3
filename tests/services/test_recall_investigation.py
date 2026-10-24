@@ -17,11 +17,11 @@ from app.models import (
     RecallUnit,
 )
 from app.schemas.recalls import RecallWebhookPayload
-from app.services.recall_investigation import (
+from app.services.recalls import (
     RecallInvestigationError,
     RecallInvestigationService,
+    RecallWebhookService,
 )
-from app.services.recalls import RecallWebhookService
 from tests.services.test_recalls import recall_database as recall_database
 from tests.support.recalls import RecallInventory
 

@@ -27,7 +27,8 @@ from app.schemas.recalls import (
     RecallStockReport,
 )
 from app.services.custody.events import record_move
-from app.services.recall_investigation import RecallInvestigationService
+
+from .investigation import RecallInvestigationService
 
 logger = logging.getLogger(__name__)
 

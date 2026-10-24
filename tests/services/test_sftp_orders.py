@@ -5,8 +5,8 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.clients.purchase_orders_exceptions import PurchaseOrdersHTTPError
-from app.clients.sftp_orders import SFTPOrderFile, SFTPOrdersError
+from app.clients.purchase_orders import PurchaseOrdersHTTPError
+from app.clients.sftp import SFTPOrderFile, SFTPOrdersError
 from app.models import (
     InboundEvent,
     InboundEventSource,
@@ -15,7 +15,7 @@ from app.models import (
     OrderItem,
     OrderSource,
 )
-from app.services.sftp_orders import SFTPOrderIngestionService
+from app.services.orders import SFTPOrderIngestionService
 from tests.support.farma_central import make_settings
 from tests.support.orders import EXTERNAL_ORDER_ID, make_purchase_order
 
@@ -330,7 +330,7 @@ async def test_received_event_survives_closing_session_before_processing(test_en
 
 @pytest.mark.anyio
 async def test_database_failure_does_not_leave_a_partial_order(db_session, monkeypatch):
-    import app.services.order_ingestion as module
+    import app.services.orders.ingestion as module
 
     original = module.upsert_external_order
 

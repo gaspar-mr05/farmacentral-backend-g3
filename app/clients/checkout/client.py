@@ -2,13 +2,14 @@ from typing import Any
 
 import httpx
 
-from app.clients.checkout_exceptions import (
+from app.core.config import Settings, get_settings
+
+from .exceptions import (
     CheckoutConnectionError,
     CheckoutHTTPError,
     CheckoutInvalidResponseError,
     CheckoutTimeoutError,
 )
-from app.core.config import Settings, get_settings
 
 
 class CheckoutClient:

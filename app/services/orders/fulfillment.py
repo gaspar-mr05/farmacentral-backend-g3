@@ -14,7 +14,8 @@ from app.models import (
     Product,
     Unit,
 )
-from app.services.orders import OrderNotFoundError
+
+from .service import OrderNotFoundError
 
 
 class OrderNotPaidError(Exception):

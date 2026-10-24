@@ -5,7 +5,7 @@ import pytest
 
 from app.core.config import Settings
 from app.models import ExternalOrderStatus, Location, OrderItem, OrderStatus
-from app.services.external_order_fulfillment import ExternalOrderFulfillmentService
+from app.services.orders import ExternalOrderFulfillmentService
 from tests.api.test_order_dispatch import DispatchClient, DispatchOrders
 from tests.api.test_order_fulfillment import _add_stock
 from tests.support.farma_central import make_settings

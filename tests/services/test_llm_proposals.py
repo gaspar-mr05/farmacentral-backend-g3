@@ -14,7 +14,7 @@ from app.models import (
 from app.models.product import ProductCategory
 from app.schemas.llm_gateway import LLMCatalogItem, LLMOrderProposal
 from app.schemas.messaging import MessagingWebhookPayload
-from app.services.message_interpretation import MessageInterpretationService
+from app.services.messaging import MessageInterpretationService
 
 
 @pytest.mark.anyio

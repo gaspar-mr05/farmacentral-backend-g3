@@ -1,9 +1,9 @@
 import pytest
 from sqlalchemy import func, select
 
-from app.clients.pubsub_orders import PubSubOrderMessage, PubSubOrdersError
+from app.clients.pubsub import PubSubOrderMessage, PubSubOrdersError
 from app.models import InboundEvent, InboundEventStatus, Order, OrderSource
-from app.services.pubsub_orders import PubSubOrderIngestionService
+from app.services.orders import PubSubOrderIngestionService
 from tests.support.farma_central import make_settings
 from tests.support.orders import EXTERNAL_ORDER_ID, make_purchase_order
 

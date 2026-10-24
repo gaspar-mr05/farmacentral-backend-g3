@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_market_price_client
 from app.api.errors import market_price_http_exception
-from app.clients.farma_central_exceptions import FarmaCentralError
+from app.clients.farma_central import FarmaCentralError
 from app.clients.market_prices import MarketPriceClient
 from app.db.session import get_session
 from app.schemas.catalog import CatalogItemResponse

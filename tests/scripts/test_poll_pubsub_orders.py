@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.pubsub_orders import PubSubPollResult
+from app.services.orders import PubSubPollResult
 from scripts import poll_pubsub_orders as module
 
 

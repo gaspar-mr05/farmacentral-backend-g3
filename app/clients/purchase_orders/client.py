@@ -6,19 +6,20 @@ from typing import Any
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
-from app.clients.purchase_orders_exceptions import (
-    PurchaseOrdersAuthenticationError,
-    PurchaseOrdersConnectionError,
-    PurchaseOrdersHTTPError,
-    PurchaseOrdersInvalidResponseError,
-    PurchaseOrdersTimeoutError,
-)
 from app.core.config import Settings, get_settings
 from app.schemas.purchase_orders import (
     PurchaseOrder,
     PurchaseOrderDecision,
     PurchaseOrderId,
     PurchaseOrderStateUpdate,
+)
+
+from .exceptions import (
+    PurchaseOrdersAuthenticationError,
+    PurchaseOrdersConnectionError,
+    PurchaseOrdersHTTPError,
+    PurchaseOrdersInvalidResponseError,
+    PurchaseOrdersTimeoutError,
 )
 
 logger = logging.getLogger(__name__)

@@ -2,7 +2,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models import Order, OrderItem, OrderSource
-from app.services.order_ingestion import OrderIngestionService
+from app.services.orders import OrderIngestionService
 from tests.support.orders import EXTERNAL_ORDER_ID, make_purchase_order
 
 

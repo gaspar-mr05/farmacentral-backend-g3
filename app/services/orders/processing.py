@@ -18,8 +18,9 @@ from app.models import (
     ProductionRun,
     Unit,
 )
-from app.services.external_order_state import apply_official_state
-from app.services.orders import OrderNotFoundError
+
+from .service import OrderNotFoundError
+from .state import apply_official_state
 
 
 class InvalidExternalOrderStateError(Exception):

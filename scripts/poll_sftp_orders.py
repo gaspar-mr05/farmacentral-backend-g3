@@ -8,10 +8,10 @@ from contextlib import suppress
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.clients.purchase_orders import PurchaseOrdersClient
-from app.clients.sftp_orders import SFTPOrdersClient
+from app.clients.sftp import SFTPOrdersClient
 from app.core.config import get_settings
 from app.db.session import SessionLocal
-from app.services.sftp_orders import SFTPOrderIngestionService
+from app.services.orders import SFTPOrderIngestionService
 
 logger = logging.getLogger(__name__)
 

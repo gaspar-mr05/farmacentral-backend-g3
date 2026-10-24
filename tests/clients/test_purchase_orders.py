@@ -6,9 +6,9 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from app.clients.purchase_orders import PurchaseOrdersClient
-from app.clients.purchase_orders_exceptions import (
+from app.clients.purchase_orders import (
     PurchaseOrdersAuthenticationError,
+    PurchaseOrdersClient,
     PurchaseOrdersConnectionError,
     PurchaseOrdersHTTPError,
     PurchaseOrdersInvalidResponseError,

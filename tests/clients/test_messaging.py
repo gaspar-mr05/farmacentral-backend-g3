@@ -4,10 +4,10 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
-from app.clients.messaging import MessagingClient
-from app.clients.messaging_exceptions import (
+from app.clients.messaging import (
     MessagingAlreadyRespondedError,
     MessagingAuthenticationError,
+    MessagingClient,
     MessagingConnectionError,
     MessagingHTTPError,
     MessagingInvalidResponseError,

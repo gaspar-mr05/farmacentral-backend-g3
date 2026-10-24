@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from google.api_core.exceptions import AlreadyExists, DeadlineExceeded
 
-from app.clients.pubsub_orders import PubSubOrdersClient
+from app.clients.pubsub import PubSubOrdersClient
 from tests.support.farma_central import make_settings
 
 

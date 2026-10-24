@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import select
 
 from app.api.dependencies import get_farma_central_client, get_purchase_orders_client
-from app.clients.farma_central_exceptions import FarmaCentralTimeoutError
+from app.clients.farma_central import FarmaCentralTimeoutError
 from app.db.units import upsert_units
 from app.main import app
 from app.models import (
@@ -292,8 +292,7 @@ def test_concurrent_dispatch_records_one_delivery(db_session, external):
     from sqlalchemy.orm import Session
 
     from app.db.base import Base
-    from app.services.order_dispatch import OrderDispatchService
-    from app.services.order_fulfillment import OrderFulfillmentService
+    from app.services.orders import OrderDispatchService, OrderFulfillmentService
 
     original_engine = db_session.get_bind().engine
     schema = f"dispatch_test_{uuid4().hex}"

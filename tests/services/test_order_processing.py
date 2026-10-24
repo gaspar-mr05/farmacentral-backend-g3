@@ -15,7 +15,7 @@ from app.models import (
     ProductionRun,
     Unit,
 )
-from app.services.order_processing import OrderProcessingService
+from app.services.orders import OrderProcessingService
 from tests.support.orders import make_external_order
 
 

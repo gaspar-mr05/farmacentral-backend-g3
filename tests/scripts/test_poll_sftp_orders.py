@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.services.sftp_orders import SFTPPollResult
+from app.services.orders import SFTPPollResult
 from scripts import poll_sftp_orders as module
 
 

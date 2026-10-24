@@ -1,4 +1,4 @@
-from app.clients.farma_central_exceptions import FarmaCentralInvalidResponseError
+from app.clients.farma_central import FarmaCentralInvalidResponseError
 from app.models import LotOrigin, ProductCategory
 from app.schemas.farma_central import (
     FarmaCentralProduct,

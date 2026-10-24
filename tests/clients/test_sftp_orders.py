@@ -8,9 +8,9 @@ import pytest
 from sqlalchemy import select
 
 from app.clients.purchase_orders import PurchaseOrdersClient
-from app.clients.sftp_orders import SFTPOrdersClient, SFTPOrdersError
+from app.clients.sftp import SFTPOrdersClient, SFTPOrdersError
 from app.models import Order
-from app.services.sftp_orders import SFTPOrderIngestionService
+from app.services.orders import SFTPOrderIngestionService
 from tests.support.farma_central import make_settings
 from tests.support.orders import EXTERNAL_ORDER_ID, make_purchase_order
 

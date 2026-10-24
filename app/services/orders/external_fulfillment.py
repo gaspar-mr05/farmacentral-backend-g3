@@ -5,20 +5,19 @@ from datetime import UTC, datetime
 from sqlalchemy import exists, or_, select
 from sqlalchemy.orm import Session
 
-from app.clients.farma_central import FarmaCentralClient
-from app.clients.farma_central_exceptions import FarmaCentralError
-from app.clients.purchase_orders import PurchaseOrdersClient
-from app.clients.purchase_orders_exceptions import PurchaseOrdersError
+from app.clients.farma_central import FarmaCentralClient, FarmaCentralError
+from app.clients.purchase_orders import PurchaseOrdersClient, PurchaseOrdersError
 from app.core.config import Settings, get_settings
 from app.models import ExternalOrderStatus, Order, OrderItem, OrderStatus, OrderUnit
-from app.services.external_order_state import apply_official_state
-from app.services.order_dispatch import InvalidDispatchStateError, OrderDispatchService
-from app.services.order_fulfillment import (
+
+from .dispatch import InvalidDispatchStateError, OrderDispatchService
+from .fulfillment import (
     InsufficientFulfillmentStockError,
     InvalidFulfillmentStateError,
     OrderFulfillmentService,
     OrderNotPaidError,
 )
+from .state import apply_official_state
 
 logger = logging.getLogger(__name__)
 

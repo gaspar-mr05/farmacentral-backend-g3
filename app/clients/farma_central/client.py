@@ -3,19 +3,20 @@ from typing import Any
 
 import httpx
 
-from app.clients.farma_central_exceptions import (
-    FarmaCentralAuthenticationError,
-    FarmaCentralConnectionError,
-    FarmaCentralHTTPError,
-    FarmaCentralInvalidResponseError,
-    FarmaCentralTimeoutError,
-)
 from app.core.config import Settings, get_settings
 from app.schemas.farma_central import (
     FarmaCentralChallengeRequest,
     FarmaCentralProductRequest,
 )
 from app.schemas.recalls import RecallNotificationRequest, RecallReportRequest
+
+from .exceptions import (
+    FarmaCentralAuthenticationError,
+    FarmaCentralConnectionError,
+    FarmaCentralHTTPError,
+    FarmaCentralInvalidResponseError,
+    FarmaCentralTimeoutError,
+)
 
 JSONResponse = dict[str, Any] | list[Any]
 

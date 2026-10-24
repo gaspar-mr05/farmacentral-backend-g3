@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.messaging_processing import MessagingProcessingResult
+from app.services.messaging import MessagingProcessingResult
 from scripts import process_messaging as module
 
 

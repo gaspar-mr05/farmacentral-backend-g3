@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.external_order_fulfillment import ExternalOrderFulfillmentResult
+from app.services.orders import ExternalOrderFulfillmentResult
 from scripts import fulfill_external_orders as module
 
 

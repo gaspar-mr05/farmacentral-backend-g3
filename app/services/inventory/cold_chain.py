@@ -1,8 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.clients.farma_central import FarmaCentralClient
-from app.clients.farma_central_exceptions import FarmaCentralHTTPError
+from app.clients.farma_central import FarmaCentralClient, FarmaCentralHTTPError
 from app.models import Location, Lot, Product, Unit
 from app.schemas.movements import ProductMovementResponse
 from app.services.inventory.movements import ProductMovementService
