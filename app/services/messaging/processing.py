@@ -180,7 +180,10 @@ class MessagingProcessingService:
                 result.processed += 1
             else:
                 self._fail(
-                    event, "Message was already answered; order ID is unavailable"
+                    event,
+                    "Message was already answered; order ID is unavailable. "
+                    "Recover with scripts.recover_messaging_order "
+                    "and the official OC ID",
                 )
                 result.failed += 1
             self._session.commit()

@@ -21,12 +21,14 @@ from app.services.orders import (
     OrderFulfillmentService,
     OrderProcessingService,
 )
+from app.services.recalls import RecallInvestigationService
 from tests.api.test_order_dispatch import DispatchClient, DispatchOrders, events
 from tests.api.test_order_fulfillment import _add_stock
 from tests.services.test_external_order_fulfillment import add_accepted_order
 from tests.services.test_order_processing import FakeOrders, add_order
 from tests.support.farma_central import make_settings
 from tests.support.orders import make_purchase_order
+from tests.support.recalls import RecallInventory
 
 
 def prepare_dispatch(session, quantity=1):
@@ -45,6 +47,40 @@ def prepare_dispatch(session, quantity=1):
     client = DispatchClient(units, destination)
     official = DispatchOrders(client, quantity)
     return order, units, client, official
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("delivered", [False, True])
+@pytest.mark.parametrize("quantity", [1, 2])
+async def test_recall_resolves_existing_dispatch_intent_without_sending_again(
+    db_session, delivered, quantity
+):
+    order, units, client, official = prepare_dispatch(db_session, quantity=quantity)
+    OrderFulfillmentService(db_session).fulfill(order.id)
+    assignment = order.items[0].assigned_units[0]
+    unit = assignment.unit
+    destination = db_session.scalar(
+        select(Location).where(Location.code == client.spaces[0]["_id"])
+    )
+    assignment.dispatch_expected_quantity = 1
+    unit.current_location_id = destination.id
+    if delivered:
+        client.dispatches.append((unit.external_unit_id, order.external_order_id))
+    else:
+        client.positions[unit.external_unit_id] = destination.code
+    inventory = RecallInventory(db_session)
+    recall = inventory.recall(unit.lot)
+    db_session.commit()
+    RecallInvestigationService(db_session).investigate(
+        recall.recall_id, block_stock=True
+    )
+
+    await OrderDispatchService(client, db_session, official).dispatch(order.id)
+
+    assert assignment.dispatch_expected_quantity is None
+    assert len(client.dispatches) == int(delivered)
+    assert unit.status == ("dispatched" if delivered else "recall_pending")
+    assert (assignment.dispatched_at is not None) == delivered
 
 
 @pytest.mark.anyio

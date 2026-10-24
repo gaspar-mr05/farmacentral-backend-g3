@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -151,3 +152,65 @@ async def test_resumes_after_a_partial_external_dispatch(db_session):
         (units[1].external_unit_id, order.external_order_id),
     ]
     assert farma_central.moves.count(units[0].external_unit_id) == 1
+
+
+@pytest.mark.anyio
+async def test_worker_rejects_persisted_undecided_order_and_does_not_decide_twice(
+    db_session,
+):
+    order = make_external_order()
+    db_session.add(order)
+    db_session.commit()
+    official = AsyncMock()
+    official.get_order.return_value = make_purchase_order(
+        vencimiento=order.delivery_deadline
+    )
+    service = ExternalOrderFulfillmentService(
+        DispatchClient([]), official, db_session, settings=make_settings()
+    )
+
+    first = await service.process_pending()
+    second = await service.process_pending()
+
+    assert first.pending == 1
+    assert second.pending == second.failed == second.completed == 0
+    assert order.status is OrderStatus.REJECTED
+    assert order.decision_at is not None
+    official.update_order_state.assert_awaited_once_with(
+        order.external_order_id, "rechazada"
+    )
+
+
+@pytest.mark.anyio
+async def test_worker_accepts_and_fulfills_a_persisted_undecided_order(db_session):
+    sku = f"KIT-UNDECIDED-{uuid4().hex}"
+    units = _add_stock(db_session, sku=sku, days_until_expiration=[10])
+    order = make_external_order(items=[OrderItem(sku=sku, quantity=1, unit_price=1500)])
+    destination = f"OUT-{uuid4().hex}"
+    db_session.add_all(
+        [order, Location(code=destination, name="Despacho", is_sellable=False)]
+    )
+    db_session.commit()
+    farma = DispatchClient(units, destination)
+
+    class UndecidedOrders(DispatchOrders):
+        state = "creada"
+
+        async def get_order(self, order_id):
+            detail = await super().get_order(order_id)
+            return detail.model_copy(
+                update={"state": detail.state if self.client.dispatches else self.state}
+            )
+
+        async def update_order_state(self, order_id, state):
+            self.state = ExternalOrderStatus(state)
+
+    official = UndecidedOrders(farma)
+    official.state = ExternalOrderStatus.CREATED
+    result = await ExternalOrderFulfillmentService(
+        farma, official, db_session, settings=make_settings()
+    ).process_pending()
+
+    assert result.completed == 1
+    assert order.status is OrderStatus.DISPATCHED
+    assert farma.dispatches == [(units[0].external_unit_id, order.external_order_id)]

@@ -23,12 +23,15 @@ async def run(*, once: bool = False) -> None:
                     result = await RecallWorkerService(
                         client, session, settings=settings
                     ).poll()
-                failed = result.connection_failed or result.failed > 0
+                failed = (
+                    result.connection_failed or result.failed > 0 or result.invalid > 0
+                )
                 logger.info(
-                    "Recall processing: received=%s completed=%s failed=%s",
+                    "Recall processing: received=%s completed=%s failed=%s invalid=%s",
                     result.received,
                     result.completed,
                     result.failed,
+                    result.invalid,
                 )
             except Exception:
                 failed = True

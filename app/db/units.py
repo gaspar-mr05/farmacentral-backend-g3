@@ -5,7 +5,15 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Location, Lot, ProductionInputUnit, Unit
+from app.models import (
+    Location,
+    Lot,
+    ProductionInputUnit,
+    Recall,
+    RecallLot,
+    RecallStatus,
+    Unit,
+)
 from app.schemas.units import UnitData
 
 
@@ -50,9 +58,30 @@ def upsert_units(
 ) -> UnitUpsertResult:
     records = tuple(records)
     units = {
-        unit.external_unit_id: unit for unit in session.scalars(select(Unit)).all()
+        unit.external_unit_id: unit
+        for unit in session.scalars(
+            select(Unit)
+            .order_by(Unit.external_unit_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
     }
     consumed_unit_ids = set(session.scalars(select(ProductionInputUnit.unit_id)))
+    blocked_lot_ids = set(
+        session.scalars(
+            select(RecallLot.lot_id)
+            .join(Recall, Recall.id == RecallLot.recall_id)
+            .where(
+                Recall.status.in_(
+                    [
+                        RecallStatus.RESPONDING,
+                        RecallStatus.FAILED,
+                        RecallStatus.COMPLETED,
+                    ]
+                )
+            )
+        )
+    )
     location_changes: list[UnitLocationChange] = []
     created_units: list[Unit] = []
     created = updated = 0
@@ -67,7 +96,9 @@ def upsert_units(
                 external_unit_id=record.external_unit_id,
                 lot_id=incoming_lot.id,
                 current_location_id=location.id,
-                status=record.status,
+                status="recall_pending"
+                if incoming_lot.id in blocked_lot_ids
+                else record.status,
                 effective_expires_at=record.effective_expires_at,
             )
             session.add(unit)
@@ -83,6 +114,10 @@ def upsert_units(
             if record.lot_external_id.startswith("unreported:")
             else incoming_lot
         )
+        # A remote inventory snapshot may have been collected before a recall
+        # movement. It cannot release the durable local block or undo quarantine.
+        if unit.status in {"recall_pending", "quarantined"}:
+            continue
         synchronized_status = (
             "consumed"
             if unit.id in consumed_unit_ids
@@ -91,6 +126,11 @@ def upsert_units(
             or (unit.status == "reserved" and record.status == "available")
             else record.status
         )
+        if lot.id in blocked_lot_ids and synchronized_status not in {
+            "consumed",
+            "dispatched",
+        }:
+            synchronized_status = "recall_pending"
         previous_location_id = unit.current_location_id
         changed = (
             unit.lot_id != lot.id

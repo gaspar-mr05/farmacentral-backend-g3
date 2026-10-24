@@ -126,3 +126,82 @@ async def test_completed_recall_is_not_processed_twice(recall_database):
         assert second.received == 0
         assert second.completed == 0
         client.report_recall.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_invalid_active_recall_does_not_block_valid_recalls(
+    recall_database, caplog
+):
+    with Session(recall_database) as session:
+        inventory = RecallInventory(session)
+        origin = inventory.lot("valid-origin")
+        inventory.unit("stock", origin)
+        session.commit()
+        valid = {
+            "recallId": "valid-recall",
+            "batch": origin.external_lot_id,
+            "sku": origin.product.sku,
+            "reason": "Calidad",
+            "issuedAt": inventory.now,
+            "deadline": inventory.expiry,
+        }
+        client = AsyncMock()
+        client.get_active_recalls.return_value = [
+            {**valid, "recallId": "bad", "batch": None, "sku": None, "reason": None},
+            valid,
+            "untrusted-private-payload",
+        ]
+        client.get_spaces.return_value = [
+            {"_id": inventory.locations["quarantine"].code, "quarantine": True}
+        ]
+
+        result = await RecallWorkerService(
+            client, session, settings=make_settings()
+        ).poll()
+
+        assert result.invalid == 2
+        assert result.received == result.completed == 1
+        assert result.failed == 0
+        assert not result.connection_failed
+        assert (
+            session.scalars(select(InboundEvent)).one().external_event_id
+            == "valid-recall"
+        )
+        assert "untrusted-private-payload" not in caplog.text
+        client.report_recall.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_bad_active_list_still_allows_persisted_webhook_to_complete(
+    recall_database,
+):
+    with Session(recall_database) as session:
+        inventory = RecallInventory(session)
+        origin = inventory.lot("webhook-origin")
+        inventory.unit("stock", origin)
+        from app.schemas.recalls import RecallWebhookPayload
+        from app.services.recalls import RecallWebhookService
+
+        RecallWebhookService(session).receive(
+            RecallWebhookPayload(
+                recallId="webhook-recall",
+                batch=origin.external_lot_id,
+                sku=origin.product.sku,
+                reason="Calidad",
+                issuedAt=inventory.now,
+                deadline=inventory.expiry,
+            )
+        )
+        client = AsyncMock()
+        client.get_active_recalls.return_value = [{"batch": None}]
+        client.get_spaces.return_value = [
+            {"_id": inventory.locations["quarantine"].code, "quarantine": True}
+        ]
+
+        result = await RecallWorkerService(
+            client, session, settings=make_settings()
+        ).poll()
+
+        assert result.invalid == 1
+        assert result.completed == 1
+        assert result.failed == 0

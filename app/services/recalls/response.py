@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session, joinedload
 from app.clients.farma_central import FarmaCentralClient
 from app.models import (
     Location,
+    OrderUnit,
+    ProductionInputUnit,
     Recall,
     RecallNotification,
     RecallNotificationStatus,
@@ -50,18 +52,32 @@ class RecallResponseService:
         self._session = session
 
     async def respond(self, recall_id: str) -> RecallResponseResult:
-        investigation = RecallInvestigationService(self._session).investigate(recall_id)
+        investigation = RecallInvestigationService(self._session).investigate(
+            recall_id, block_stock=True
+        )
         recall = self._get_recall(recall_id)
-        recall.status = RecallStatus.RESPONDING
         self._session.commit()
 
         try:
+            self._check_deadline(recall)
             quarantine = await self._get_quarantine()
-            quarantined = await self._quarantine_units(
-                recall, investigation, quarantine
-            )
+            quarantined = 0
+            while True:
+                quarantined += await self._quarantine_units(
+                    recall, investigation, quarantine
+                )
+                # Deliveries and production can finish while the initial stock
+                # locks are acquired. Use current findings for the final report.
+                investigation = RecallInvestigationService(self._session).investigate(
+                    recall_id, block_stock=True
+                )
+                if all(
+                    unit.status == "quarantined" for unit in investigation.stock_units
+                ):
+                    break
             notified = await self._notify_orders(recall)
             report = self._build_report(investigation)
+            self._check_deadline(recall)
             await self._client.report_recall(recall_id, report)
 
             recall = self._get_recall(recall_id)
@@ -110,6 +126,7 @@ class RecallResponseService:
     ) -> int:
         moved = 0
         for finding in investigation.stock_units:
+            self._check_deadline(recall)
             snapshot = self._session.scalar(
                 select(RecallUnit)
                 .where(
@@ -118,13 +135,31 @@ class RecallResponseService:
                 )
                 .with_for_update()
             )
-            unit = self._session.get(Unit, finding.unit_id, with_for_update=True)
+            unit = self._session.get(
+                Unit, finding.unit_id, with_for_update=True, populate_existing=True
+            )
             if snapshot is None or unit is None:
                 raise RecallResponseError("Recall stock changed during response")
             if snapshot.quarantined_at is not None:
                 continue
 
-            assignment = unit.order_assignment
+            assignment = self._session.scalar(
+                select(OrderUnit)
+                .where(OrderUnit.unit_id == unit.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if (
+                unit.status in {"dispatched", "consumed"}
+                or (assignment is not None and assignment.dispatched_at is not None)
+                or self._session.scalar(
+                    select(ProductionInputUnit.id).where(
+                        ProductionInputUnit.unit_id == unit.id
+                    )
+                )
+                is not None
+            ):
+                continue
             if assignment is not None and assignment.dispatched_at is None:
                 if assignment.dispatch_expected_quantity is not None:
                     raise RecallResponseError(
@@ -156,6 +191,7 @@ class RecallResponseService:
         )
         sent = 0
         for affected in orders:
+            self._check_deadline(recall)
             if (
                 affected.notification is not None
                 and affected.notification.status == RecallNotificationStatus.SENT
@@ -235,6 +271,11 @@ class RecallResponseService:
         if recall is None:
             raise RecallResponseError(f"Recall {recall_id} was not found")
         return recall
+
+    @staticmethod
+    def _check_deadline(recall: Recall) -> None:
+        if recall.deadline <= datetime.now(UTC):
+            raise RecallResponseError("Recall deadline has expired")
 
     def _mark_failed(self, recall_id: str) -> None:
         try:

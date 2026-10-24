@@ -1,3 +1,5 @@
+import logging
+
 from app.clients.farma_central import FarmaCentralInvalidResponseError
 from app.models import LotOrigin, ProductCategory
 from app.schemas.farma_central import (
@@ -11,6 +13,8 @@ from app.schemas.lots import LotData
 from app.schemas.products import ProductData
 from app.schemas.units import UnitData
 
+logger = logging.getLogger(__name__)
+
 
 def normalize_inventory(
     catalog: list[FarmaCentralProduct],
@@ -18,6 +22,14 @@ def normalize_inventory(
     external_units: list[FarmaCentralUnit],
 ) -> InventoryData:
     """Converts external contracts into persistence-oriented inventory data."""
+    missing = [unit for unit in external_units if unit.batch is None]
+    if missing:
+        logger.warning(
+            "Official inventory omitted batch: units=%s skus=%s; "
+            "provisional identities cannot establish recall membership",
+            len(missing),
+            ", ".join(sorted({unit.sku for unit in missing})),
+        )
     products = tuple(_normalize_product(product) for product in catalog)
     locations = tuple(_normalize_location(space) for space in spaces)
     lots, units = _normalize_stock(

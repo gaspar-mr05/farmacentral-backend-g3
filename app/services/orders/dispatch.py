@@ -80,6 +80,9 @@ class OrderDispatchService:
                 if destination is None:
                     destination = await self._get_destination()
                 assignment = pending[0]
+                if assignment.unit.status == "recall_pending":
+                    # Resolve an existing intent without issuing a new dispatch.
+                    reconcile_only = True
                 if order.external_order_id is not None:
                     if self._purchase_orders is None:
                         raise InvalidDispatchStateError(
@@ -94,6 +97,9 @@ class OrderDispatchService:
                     await self._resolve_external_dispatch(
                         assignment, destination, reconcile_only=reconcile_only
                     )
+                    if assignment.unit.status == "recall_pending":
+                        self._session.commit()
+                        return get_order(self._session, order_id)
                 else:
                     await self._move_to_dispatch(assignment, destination)
                     self._record_dispatch(assignment, destination)
@@ -158,9 +164,27 @@ class OrderDispatchService:
             .order_by(Unit.id)
             .with_for_update()
             .execution_options(populate_existing=True)
-        )
+        ).all()
+        if any(unit.status == "recall_pending" for unit in units):
+            # Finish resolving persisted intents even when other assignments
+            # were blocked by the same recall. Do not start new dispatches.
+            pending = [
+                assignment
+                for assignment in pending
+                if assignment.dispatch_expected_quantity is not None
+            ]
+            pending_ids = {assignment.unit_id for assignment in pending}
+            units = [unit for unit in units if unit.id in pending_ids]
+        intent_units = {
+            assignment.unit_id
+            for assignment in pending
+            if assignment.dispatch_expected_quantity is not None
+        }
         if any(
-            unit.status != "reserved"
+            (
+                unit.status != "reserved"
+                and not (unit.status == "recall_pending" and unit.id in intent_units)
+            )
             or (unit.effective_expires_at <= datetime.now(UTC) and not has_intent)
             for unit in units
         ):
@@ -242,6 +266,14 @@ class OrderDispatchService:
             return
         if detail.dispatched_quantity != expected - 1 or not at_dispatch:
             raise InvalidDispatchStateError("The pending dispatch cannot be reconciled")
+        if assignment.unit.status == "recall_pending":
+            # The official count and physical inventory prove it was not sent.
+            # Release the intent so the recall worker can quarantine the unit.
+            assignment.dispatch_expected_quantity = None
+            apply_official_state(
+                self._session, order, ExternalOrderStatus(detail.state)
+            )
+            return
         if detail.state != ExternalOrderStatus.ACCEPTED:
             if detail.state not in {
                 ExternalOrderStatus.EXPIRED,

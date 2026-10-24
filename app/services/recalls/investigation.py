@@ -37,7 +37,9 @@ class RecallInvestigationService:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def investigate(self, recall_id: str) -> RecallInvestigation:
+    def investigate(
+        self, recall_id: str, *, block_stock: bool = False
+    ) -> RecallInvestigation:
         started = perf_counter()
         try:
             self._session.execute(select(func.set_config("lock_timeout", "3000", True)))
@@ -48,7 +50,9 @@ class RecallInvestigationService:
             origin = get_origin_lot(self._session, recall.batch)
             if origin is None:
                 raise RecallInvestigationError(
-                    f"Origin batch {recall.batch} is not synchronized"
+                    f"Origin batch {recall.batch} is not synchronized. "
+                    f"Run scripts.audit_lot_identities --sku {recall.sku}; "
+                    "official unit-to-batch evidence is required"
                 )
             if origin.product.sku != recall.sku:
                 raise RecallInvestigationError(
@@ -115,7 +119,14 @@ class RecallInvestigationService:
                 snapshot = snapshots[unit.unit_id]
                 unit.original_location_id = snapshot.original_location_id
                 unit.original_location_code = snapshot.original_location.code
-            if recall.status in {RecallStatus.RECEIVED, RecallStatus.FAILED}:
+            if block_stock:
+                # Persist the block while the stock locks are still held. Other
+                # workers must not sell or consume it during external API calls.
+                for unit in units:
+                    if unit.status != "quarantined":
+                        unit.status = "recall_pending"
+                recall.status = RecallStatus.RESPONDING
+            elif recall.status in {RecallStatus.RECEIVED, RecallStatus.FAILED}:
                 recall.status = RecallStatus.INVESTIGATING
             self._session.commit()
         except Exception:

@@ -24,6 +24,7 @@ class RecallWorkerResult:
     received: int = 0
     completed: int = 0
     failed: int = 0
+    invalid: int = 0
     connection_failed: bool = False
 
 
@@ -50,14 +51,27 @@ class RecallWorkerService:
             payload = await self._client.get_active_recalls()
             if not isinstance(payload, list):
                 raise ValueError("Farma Central recalls must be a list")
-            recalls = [RecallWebhookPayload.model_validate(item) for item in payload]
-        except (FarmaCentralError, ValidationError, ValueError) as exc:
+        except (FarmaCentralError, ValueError) as exc:
             result.connection_failed = True
             logger.warning("Recall polling failed: %s", exc)
             return
 
         try:
-            for recall in recalls:
+            for index, item in enumerate(payload):
+                try:
+                    recall = RecallWebhookPayload.model_validate(item)
+                except ValidationError as exc:
+                    result.invalid += 1
+                    # Log field names, not an unvalidated body or its values.
+                    fields = [
+                        ".".join(map(str, error["loc"])) for error in exc.errors()
+                    ]
+                    logger.warning(
+                        "Skipping invalid active recall: index=%s fields=%s",
+                        index,
+                        ", ".join(fields),
+                    )
+                    continue
                 if record_recall(self._session, recall):
                     result.received += 1
             self._session.commit()

@@ -12,7 +12,7 @@ from app.models import (
     Unit,
 )
 
-STOCK_STATUSES = ("available", "reserved", "quarantined", "expired")
+STOCK_STATUSES = ("available", "reserved", "recall_pending", "quarantined", "expired")
 
 
 def get_origin_lot(session: Session, batch: str) -> Lot | None:

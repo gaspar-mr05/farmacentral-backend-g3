@@ -14,6 +14,7 @@ from app.models import CustodyEventType, Lot, LotOrigin, Product, ProductionRun,
 from app.schemas.inventory import InventoryData
 from app.services.custody import events as custody_events
 from app.services.inventory.collection import InventoryCollector
+from app.services.inventory.lot_identity import recover_reported_lots
 from app.services.inventory.normalization import normalize_inventory
 from app.services.production.runs import link_production_run_to_existing_lot
 
@@ -86,6 +87,11 @@ def sync_inventory(
     locations = upsert_locations(session, data.locations)
     session.flush()
 
+    recover_reported_lots(
+        session,
+        data.units,
+        {lot.external_lot_id: lot.product_sku for lot in data.lots},
+    )
     lots = upsert_lots(session, data.lots, products.by_sku)
     session.flush()
 

@@ -10,6 +10,7 @@ from app.models.inbound_event import (
 )
 from app.models.location import Location
 from app.models.lot import Lot, LotOrigin
+from app.models.lot_identity_repair import LotIdentityRepair
 from app.models.order import (
     ExternalOrderStatus,
     Order,
@@ -42,6 +43,7 @@ __all__ = [
     "Location",
     "Lot",
     "LotOrigin",
+    "LotIdentityRepair",
     "Order",
     "ExternalOrderStatus",
     "InboundEvent",

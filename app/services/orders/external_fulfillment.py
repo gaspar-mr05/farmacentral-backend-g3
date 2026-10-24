@@ -17,6 +17,7 @@ from .fulfillment import (
     OrderFulfillmentService,
     OrderNotPaidError,
 )
+from .processing import InvalidExternalOrderStateError, OrderProcessingService
 from .state import apply_official_state
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ class ExternalOrderFulfillmentService:
             .where(
                 Order.external_order_id.is_not(None),
                 or_(
+                    Order.status == OrderStatus.RECEIVED,
                     Order.status == OrderStatus.ACCEPTED,
                     (Order.status == OrderStatus.DISPATCHED)
                     & (Order.external_status == ExternalOrderStatus.ACCEPTED),
@@ -79,6 +81,15 @@ class ExternalOrderFulfillmentService:
                 order = self._session.get(Order, order_id)
                 if order is None or order.external_order_id is None:
                     continue
+                if order.status == OrderStatus.RECEIVED:
+                    await self._refresh_official_state(order)
+                    order = await OrderProcessingService(
+                        self._purchase_orders, self._session
+                    ).process_order(order_id)
+                    self._session.commit()
+                    if order.status != OrderStatus.ACCEPTED:
+                        result.pending += 1
+                        continue
                 if order.external_status != ExternalOrderStatus.ACCEPTED or (
                     order.delivery_deadline
                     and order.delivery_deadline <= datetime.now(UTC)
@@ -121,6 +132,7 @@ class ExternalOrderFulfillmentService:
                 FarmaCentralError,
                 PurchaseOrdersError,
                 InvalidDispatchStateError,
+                InvalidExternalOrderStateError,
                 InvalidFulfillmentStateError,
                 OrderNotPaidError,
             ) as exc:

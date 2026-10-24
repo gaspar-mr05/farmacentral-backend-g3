@@ -1099,3 +1099,86 @@ Pruebas específicas:
 .venv/bin/python -m pytest -q tests/services/test_recall_worker.py \
   tests/scripts/test_process_recalls.py tests/clients/test_farma_central.py
 ```
+
+### Recuperación y bloqueo de stock
+
+La respuesta al recall guarda el estado `recall_pending` para todo el stock
+afectado en la misma transacción que la investigación, antes de llamar a Farma
+Central. Ese estado excluye venta, asignación, movimientos normales y consumo.
+Tras confirmar el movimiento se guarda `quarantined` y su evento de custodia.
+La sincronización conserva ambos estados y no restaura ubicaciones de una
+lectura anterior; las unidades nuevas de lotes ya bloqueados también quedan
+como `recall_pending` hasta que se ejecute nuevamente la respuesta al recall.
+
+Un despacho con intención persistida se reconcilia con el conteo oficial y el
+inventario del área de despacho: se registra la entrega si ya ocurrió o se
+libera la intención si se prueba que la unidad sigue allí, sin despacharla de
+nuevo. Antes de notificar y reportar se actualiza la investigación para incluir
+las entregas confirmadas durante el procesamiento. Las acciones externas se
+detienen al vencer el deadline.
+
+El worker de cumplimiento también revisa OCs locales `received`, actualiza su
+estado oficial y aplica la política normal de aceptación/rechazo. Las aceptadas
+continúan hacia asignación y despacho.
+
+Si Mensajería creó una OC pero se perdió la respuesta, su API puede devolver
+`409` sin el ID original y no ofrece un endpoint de consulta de mensajes.
+La recuperación automática de ese ID no está disponible. Una vez identificado
+el ID de la OC de forma independiente, ejecutar:
+
+```bash
+.venv/bin/python -m scripts.recover_messaging_order MESSAGE_ID ORDER_ID
+```
+
+El comando valida proveedor, cliente, SKU, cantidad y plazo contra la
+interpretación persistida, vincula la OC y la acepta o rechaza con la política
+normal. No vuelve a responder el mensaje, no crea otra OC y no llama al LLM.
+Un ID incompatible se rechaza sin guardar cambios.
+
+El frontend del repositorio `farmacentral-frontend-g3` incorpora `/recalls` y
+`/recalls/:recallId` para consultar listado, estado y unidades con SKU e ID.
+
+Estas verificaciones usan PostgreSQL con esquemas temporales y clientes externos
+simulados. No habilitar `process_messaging` para ejecutar pruebas: el worker real
+sí consume LLM. El tamaño máximo de salida y el intervalo de procesamiento no
+equivalen a un presupuesto diario local; el cupo monetario sigue dependiendo del
+gateway del grupo.
+
+### Recalls inválidos e identidades de lote pendientes
+
+El polling valida cada retiro por separado. Un elemento con `batch`, `sku` o
+`reason` nulos incrementa `invalid`, registra los campos inválidos sin volcar su
+contenido y no bloquea los retiros válidos ni los webhooks ya persistidos.
+`scripts.process_recalls --once` devuelve un código de error si encontró elementos
+inválidos, aunque haya completado los demás retiros.
+
+Antes de desplegar esta recuperación, aplicar la migración
+`8c62e71f4b09` con `.venv/bin/alembic upgrade head`. Agrega exclusivamente la
+tabla de auditoría `lot_identity_repairs`; no cambia asociaciones históricas por
+sí sola.
+
+Cuando el inventario oficial vuelve a informar `batch` para IDs de unidades ya
+conocidos, la sincronización recupera el lote provisional `unreported:` o
+`production:`. Mantiene el UUID cuando puede renombrarlo y, cuando consolida
+varios lotes provisionales, conserva las unidades, entregas y referencias de
+consumo/producción. Registra por unidad el identificador previo y el oficial.
+Rechaza evidencia incompleta, SKUs incompatibles, agrupaciones de varias
+producciones y consolidaciones que reescribirían snapshots de recalls.
+
+Para detectar identidades pendientes, sin escribir ni llamar a ninguna API:
+
+```bash
+.venv/bin/python -m scripts.audit_lot_identities
+.venv/bin/python -m scripts.audit_lot_identities --sku API-LOSARTAN-50
+```
+
+El comando devuelve `1` cuando quedan unidades con lotes provisionales, y `0`
+cuando no encuentra ninguna en el alcance consultado. Un resultado `0` no
+demuestra por sí solo que exista el lote exacto de un recall: también deben
+comprobarse sus datos y trazabilidad.
+
+Si las unidades históricas ya no aparecen en Farma Central y no existe un
+respaldo con su relación unidad/lote, su `batch` no se puede deducir del SKU,
+vencimiento o del nombre del recall. Esos datos siguen pendientes de una fuente
+oficial; no se crea un lote ficticio ni se asignan todas las unidades del SKU al
+retiro. La respuesta del recall continúa fallando explícitamente en ese caso.
