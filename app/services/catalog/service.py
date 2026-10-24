@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.orm import Session
 
-from app.clients.farma_central_exceptions import FarmaCentralInvalidResponseError
+from app.clients.farma_central import FarmaCentralInvalidResponseError
 from app.clients.market_prices import MarketPriceClient
 from app.queries.catalog import list_sellable_catalog
 from app.schemas.catalog import CatalogItemResponse, CatalogLotResponse, MarketPrice

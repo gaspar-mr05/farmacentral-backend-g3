@@ -7,11 +7,11 @@ from contextlib import suppress
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.clients.pubsub_orders import PubSubOrdersClient
+from app.clients.pubsub import PubSubOrdersClient
 from app.clients.purchase_orders import PurchaseOrdersClient
 from app.core.config import get_settings
 from app.db.session import SessionLocal
-from app.services.pubsub_orders import PubSubOrderIngestionService
+from app.services.orders import PubSubOrderIngestionService
 
 logger = logging.getLogger(__name__)
 

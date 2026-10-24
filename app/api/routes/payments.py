@@ -7,14 +7,14 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_checkout_client, get_farma_central_client
-from app.clients.checkout import CheckoutClient
-from app.clients.checkout_exceptions import (
+from app.clients.checkout import (
+    CheckoutClient,
     CheckoutConnectionError,
     CheckoutError,
     CheckoutTimeoutError,
 )
-from app.clients.farma_central import FarmaCentralClient
-from app.clients.farma_central_exceptions import (
+from app.clients.farma_central import (
+    FarmaCentralClient,
     FarmaCentralConnectionError,
     FarmaCentralError,
     FarmaCentralTimeoutError,
@@ -23,14 +23,16 @@ from app.core.config import Settings, get_settings
 from app.db.session import get_session
 from app.models import OrderStatus, PaymentStatus
 from app.schemas.payments import PaymentResponse, PaymentStartResponse
-from app.services.order_dispatch import InvalidDispatchStateError, OrderDispatchService
-from app.services.order_fulfillment import (
+from app.services.orders import (
     InsufficientFulfillmentStockError,
+    InvalidDispatchStateError,
     InvalidFulfillmentStateError,
+    OrderDispatchService,
     OrderFulfillmentService,
+    OrderNotFoundError,
     OrderNotPaidError,
+    get_order,
 )
-from app.services.orders import OrderNotFoundError, get_order
 from app.services.payments import (
     OrderAlreadyPaidError,
     PaymentAlreadyPendingError,

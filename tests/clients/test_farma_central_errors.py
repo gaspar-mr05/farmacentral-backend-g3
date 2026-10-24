@@ -1,9 +1,9 @@
 import httpx
 import pytest
 
-from app.clients.farma_central import FarmaCentralClient
-from app.clients.farma_central_exceptions import (
+from app.clients.farma_central import (
     FarmaCentralAuthenticationError,
+    FarmaCentralClient,
     FarmaCentralInvalidResponseError,
     FarmaCentralTimeoutError,
 )

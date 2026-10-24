@@ -4,7 +4,7 @@ from sqlalchemy import event, insert
 from sqlalchemy.orm import Session
 
 from app.models import Lot, LotOrigin, ProductionInput, ProductionRun, Unit
-from app.services.recall_investigation import RecallInvestigationService
+from app.services.recalls import RecallInvestigationService
 from tests.services.test_recalls import recall_database as recall_database
 from tests.support.recalls import RecallInventory
 

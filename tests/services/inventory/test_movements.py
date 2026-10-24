@@ -2,7 +2,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.clients.farma_central_exceptions import FarmaCentralHTTPError
+from app.clients.farma_central import FarmaCentralHTTPError
 from app.models import CustodyEvent, CustodyEventType, Unit
 from app.services.inventory.movements import ProductMovementService
 from tests.support.inventory import create_movement_scenario

@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_market_price_client
-from app.clients.farma_central_exceptions import FarmaCentralHTTPError
+from app.clients.farma_central import FarmaCentralHTTPError
 from app.main import app
 from app.models import Location, Lot, LotOrigin, Product, ProductCategory, Unit
 

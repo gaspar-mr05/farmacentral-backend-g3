@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
-from app.clients.farma_central_exceptions import FarmaCentralTimeoutError
+from app.clients.farma_central import FarmaCentralTimeoutError
 from app.db.external_orders import upsert_external_order
 from app.models import (
     ExternalOrderStatus,
@@ -14,10 +14,13 @@ from app.models import (
     OrderUnit,
     Unit,
 )
-from app.services.external_order_fulfillment import ExternalOrderFulfillmentService
-from app.services.order_dispatch import InvalidDispatchStateError, OrderDispatchService
-from app.services.order_fulfillment import OrderFulfillmentService
-from app.services.order_processing import OrderProcessingService
+from app.services.orders import (
+    ExternalOrderFulfillmentService,
+    InvalidDispatchStateError,
+    OrderDispatchService,
+    OrderFulfillmentService,
+    OrderProcessingService,
+)
 from tests.api.test_order_dispatch import DispatchClient, DispatchOrders, events
 from tests.api.test_order_fulfillment import _add_stock
 from tests.services.test_external_order_fulfillment import add_accepted_order

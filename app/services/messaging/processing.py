@@ -7,16 +7,16 @@ from pydantic import ValidationError
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from app.clients.messaging import MessagingClient
-from app.clients.messaging_exceptions import (
+from app.clients.messaging import (
     MessagingAlreadyRespondedError,
     MessagingAuthenticationError,
+    MessagingClient,
     MessagingError,
     MessagingHTTPError,
 )
-from app.clients.purchase_orders import PurchaseOrdersClient
-from app.clients.purchase_orders_exceptions import (
+from app.clients.purchase_orders import (
     PurchaseOrdersAuthenticationError,
+    PurchaseOrdersClient,
     PurchaseOrdersError,
     PurchaseOrdersHTTPError,
 )
@@ -30,12 +30,13 @@ from app.models import (
     OrderSource,
 )
 from app.schemas.messaging import MessagingWebhookPayload
-from app.services.message_interpretation import MessageInterpretationService
-from app.services.order_ingestion import OrderIngestionService
-from app.services.order_processing import (
+from app.services.orders import (
     InvalidExternalOrderStateError,
+    OrderIngestionService,
     OrderProcessingService,
 )
+
+from .interpretation import MessageInterpretationService
 
 logger = logging.getLogger(__name__)
 PROCESSING_RECOVERY_DELAY = timedelta(minutes=1)

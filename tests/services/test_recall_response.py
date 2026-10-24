@@ -11,7 +11,7 @@ from app.models import (
     RecallStatus,
     RecallUnit,
 )
-from app.services.recall_response import RecallResponseService
+from app.services.recalls import RecallResponseService
 from tests.services.test_recalls import recall_database as recall_database
 from tests.support.recalls import RecallInventory
 

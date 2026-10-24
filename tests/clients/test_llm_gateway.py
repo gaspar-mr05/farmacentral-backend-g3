@@ -5,9 +5,9 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
-from app.clients.llm_gateway import LLMGatewayClient
-from app.clients.llm_gateway_exceptions import (
+from app.clients.llm_gateway import (
     LLMGatewayBudgetExceededError,
+    LLMGatewayClient,
     LLMGatewayConnectionError,
     LLMGatewayError,
     LLMGatewayHTTPError,

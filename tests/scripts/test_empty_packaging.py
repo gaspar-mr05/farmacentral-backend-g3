@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.clients.farma_central_exceptions import FarmaCentralInvalidResponseError
+from app.clients.farma_central import FarmaCentralInvalidResponseError
 from scripts import empty_packaging as module
 
 

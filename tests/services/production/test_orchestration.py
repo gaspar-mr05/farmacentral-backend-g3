@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.clients.farma_central_exceptions import FarmaCentralHTTPError
+from app.clients.farma_central import FarmaCentralHTTPError
 from app.models import Location, Lot, LotOrigin, Product, ProductCategory, Unit
 from app.services.production.orchestration import (
     InvalidProductionQuantityError,

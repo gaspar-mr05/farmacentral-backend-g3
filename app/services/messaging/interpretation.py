@@ -7,11 +7,12 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.clients.llm_gateway import LLMGatewayClient, LLMGatewayResult
-from app.clients.llm_gateway_exceptions import (
+from app.clients.llm_gateway import (
     LLMGatewayBudgetExceededError,
+    LLMGatewayClient,
     LLMGatewayError,
     LLMGatewayInvalidResponseError,
+    LLMGatewayResult,
     LLMGatewayTimeoutError,
 )
 from app.models import (

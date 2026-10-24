@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.clients.farma_central_exceptions import FarmaCentralHTTPError
+from app.clients.farma_central import FarmaCentralHTTPError
 from app.models import (
     CustodyEvent,
     CustodyEventType,

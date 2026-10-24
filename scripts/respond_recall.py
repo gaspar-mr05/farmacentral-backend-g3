@@ -6,7 +6,7 @@ import logging
 
 from app.clients.farma_central import FarmaCentralClient
 from app.db.session import SessionLocal
-from app.services.recall_response import RecallResponseService
+from app.services.recalls import RecallResponseService
 
 logger = logging.getLogger(__name__)
 

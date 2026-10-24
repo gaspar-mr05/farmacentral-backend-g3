@@ -11,8 +11,7 @@ from app.api.dependencies import get_oidc_verifier
 from app.main import app
 from app.models import InboundEvent, InboundEventSource, InboundEventStatus
 from app.schemas.recalls import RecallWebhookPayload
-from app.services.recall_investigation import RecallInvestigationService
-from app.services.recalls import RecallWebhookService
+from app.services.recalls import RecallInvestigationService, RecallWebhookService
 from tests.support.farma_central import make_settings
 from tests.support.oidc import SERVICE_ACCOUNT, TestTokenIssuer
 from tests.support.recalls import RecallInventory

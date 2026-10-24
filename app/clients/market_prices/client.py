@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 
-from app.clients.farma_central_exceptions import (
+from app.clients.farma_central import (
     FarmaCentralConnectionError,
     FarmaCentralHTTPError,
     FarmaCentralInvalidResponseError,

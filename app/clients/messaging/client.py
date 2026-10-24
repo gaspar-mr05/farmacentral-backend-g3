@@ -9,20 +9,21 @@ from urllib.parse import quote
 import httpx
 from pydantic import ValidationError
 
-from app.clients.messaging_exceptions import (
-    MessagingAlreadyRespondedError,
-    MessagingAuthenticationError,
-    MessagingConnectionError,
-    MessagingHTTPError,
-    MessagingInvalidResponseError,
-    MessagingTimeoutError,
-)
 from app.core.config import Settings, get_settings
 from app.schemas.messaging import (
     MessagingDiscardRequest,
     MessagingOrderInterpretation,
     MessagingOrderRequest,
     MessagingResponse,
+)
+
+from .exceptions import (
+    MessagingAlreadyRespondedError,
+    MessagingAuthenticationError,
+    MessagingConnectionError,
+    MessagingHTTPError,
+    MessagingInvalidResponseError,
+    MessagingTimeoutError,
 )
 
 logger = logging.getLogger(__name__)

@@ -4,8 +4,11 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
-from app.clients.farma_central import FarmaCentralClient, JSONResponse
-from app.clients.farma_central_exceptions import FarmaCentralInvalidResponseError
+from app.clients.farma_central import (
+    FarmaCentralClient,
+    FarmaCentralInvalidResponseError,
+    JSONResponse,
+)
 from app.db.products import get_product_by_sku
 from app.models import ProductCategory
 from app.schemas.farma_central import (

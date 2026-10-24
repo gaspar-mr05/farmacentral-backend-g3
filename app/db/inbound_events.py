@@ -5,8 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from app.clients.pubsub_orders import PubSubOrderMessage
-from app.clients.sftp_orders import SFTPOrderFile
+from app.clients.pubsub import PubSubOrderMessage
+from app.clients.sftp import SFTPOrderFile
 from app.models import InboundEvent, InboundEventSource
 from app.schemas.messaging import MessagingWebhookPayload
 from app.schemas.recalls import RecallWebhookPayload

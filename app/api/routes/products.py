@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_farma_central_client
-from app.clients.farma_central import FarmaCentralClient
-from app.clients.farma_central_exceptions import (
+from app.clients.farma_central import (
+    FarmaCentralClient,
     FarmaCentralError,
     FarmaCentralHTTPError,
 )

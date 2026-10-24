@@ -12,8 +12,10 @@ from app.clients.messaging import MessagingClient
 from app.clients.purchase_orders import PurchaseOrdersClient
 from app.core.config import get_settings
 from app.db.session import SessionLocal
-from app.services.message_interpretation import MessageInterpretationService
-from app.services.messaging_processing import MessagingProcessingService
+from app.services.messaging import (
+    MessageInterpretationService,
+    MessagingProcessingService,
+)
 
 logger = logging.getLogger(__name__)
 

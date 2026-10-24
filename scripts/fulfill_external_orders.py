@@ -11,7 +11,7 @@ from app.clients.farma_central import FarmaCentralClient
 from app.clients.purchase_orders import PurchaseOrdersClient
 from app.core.config import get_settings
 from app.db.session import SessionLocal
-from app.services.external_order_fulfillment import ExternalOrderFulfillmentService
+from app.services.orders import ExternalOrderFulfillmentService
 
 logger = logging.getLogger(__name__)
 

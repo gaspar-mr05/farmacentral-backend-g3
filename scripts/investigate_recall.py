@@ -7,7 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.recalls import RecallSnapshotConflictError
 from app.db.session import SessionLocal
-from app.services.recall_investigation import (
+from app.services.recalls import (
     RecallInvestigationError,
     RecallInvestigationService,
 )

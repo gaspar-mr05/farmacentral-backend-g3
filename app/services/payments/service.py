@@ -4,8 +4,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.clients.checkout import CheckoutClient
-from app.clients.checkout_exceptions import CheckoutInvalidResponseError
+from app.clients.checkout import CheckoutClient, CheckoutInvalidResponseError
 from app.core.config import Settings, get_settings
 from app.models import Order, OrderStatus, Payment, PaymentStatus
 from app.schemas.payments import PaymentStartResponse

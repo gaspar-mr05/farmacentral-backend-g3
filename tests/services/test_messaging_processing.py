@@ -3,12 +3,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
-from app.clients.messaging_exceptions import (
+from app.clients.messaging import (
     MessagingAlreadyRespondedError,
     MessagingHTTPError,
     MessagingTimeoutError,
 )
-from app.clients.purchase_orders_exceptions import PurchaseOrdersConnectionError
+from app.clients.purchase_orders import PurchaseOrdersConnectionError
 from app.models import (
     InboundEvent,
     InboundEventSource,
@@ -17,7 +17,7 @@ from app.models import (
     Order,
     OrderSource,
 )
-from app.services.messaging_processing import MessagingProcessingService
+from app.services.messaging import MessagingProcessingService
 from tests.support.farma_central import make_settings
 from tests.support.orders import EXTERNAL_ORDER_ID, make_purchase_order
 

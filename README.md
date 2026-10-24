@@ -325,7 +325,7 @@ valida que el grupo y el estado actual permitan la transición. Una actualizaci�
 exitosa devuelve HTTP 204. `cumplida` y `vencida` son estados administrados por el
 servicio y no se envían con este método.
 
-Las excepciones de `app.clients.purchase_orders_exceptions` distinguen
+Las excepciones exportadas por `app.clients.purchase_orders` distinguen
 autenticación, timeout, conexión, errores HTTP y respuestas inválidas. Los errores
 HTTP conservan `status_code` y, para 429, `retry_after_seconds` cuando el servidor
 envía un valor numérico. Ante timeout, 429 o 5xx el cliente devuelve el error al

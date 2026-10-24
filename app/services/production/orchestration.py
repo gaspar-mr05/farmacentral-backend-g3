@@ -7,12 +7,12 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.clients.farma_central import FarmaCentralClient
-from app.clients.farma_central_exceptions import (
+from app.clients.farma_central import (
+    FarmaCentralClient,
     FarmaCentralHTTPError,
     FarmaCentralInvalidResponseError,
+    solve_challenge,
 )
-from app.clients.farma_central_pow import solve_challenge
 from app.models import Location, Lot, Product, ProductionRun, Unit
 from app.schemas.farma_central import (
     FarmaCentralChallengeResponse,
