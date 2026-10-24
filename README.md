@@ -1182,3 +1182,78 @@ respaldo con su relación unidad/lote, su `batch` no se puede deducir del SKU,
 vencimiento o del nombre del recall. Esos datos siguen pendientes de una fuente
 oficial; no se crea un lote ficticio ni se asignan todas las unidades del SKU al
 retiro. La respuesta del recall continúa fallando explícitamente en ese caso.
+
+### Validar un flujo real de la entrega 2 sin consumir LLM
+
+Ejecutar desde la raíz del backend y con la configuración de **desarrollo**.
+`scripts.validate_e2_flow` utiliza `.env` y `.env.local` con la misma precedencia
+que la aplicación. No necesita abrir el frontend. La ejecución inicial consulta
+PostgreSQL y `/api/health`, sin cambiar datos ni llamar a servicios externos:
+
+```bash
+.venv/bin/python -m scripts.validate_e2_flow
+```
+
+La salida muestra las migraciones, las cantidades históricas producidas por SKU
+(`inventory.completed_quantities`) y cuántas unidades históricas siguen sin lote
+oficial. Los IDs de OC y recall faltantes quedan como `pending`.
+Si falta una migración, aplicarla con `.venv/bin/alembic upgrade head`.
+
+Para preparar productos, elegir un kit del catálogo y una **meta acumulada**
+mayor que su producción histórica. Por ejemplo, si ya se produjeron 30 unidades,
+esta ejecución solicita las 2 restantes hasta llegar a 32, redondeadas al tamaño
+de lote. Repetir la misma meta evita volver a solicitar kits ya completados:
+
+```bash
+.venv/bin/python -m scripts.validate_e2_flow \
+  --prepare --sku KIT-ANALGESIA --target 32
+```
+
+`--prepare` sí compra insumos, consume materiales, fabrica y mueve unidades entre
+acondicionamiento y buffer. Reutiliza stock con batches oficiales y trazabilidad
+completa, solicita los insumos faltantes mediante abastecimiento normal y deja
+los productos terminados en buffer. No usa el sandbox de creación de unidades.
+No ejecutarlo mientras otro operador o proceso esté fabricando en la misma área.
+La cantidad preparada debe alcanzar para las OCs y dejar unidades en stock para
+comprobar también la cuarentena. Una respuesta fallida de abastecimiento puede
+haber creado insumos: revisar inventario antes de repetir la preparación.
+
+Con los workers ya activos, recibir una OC real por sFTP y otra por Pub/Sub.
+Desde el portal del curso, generar un **nuevo** recall de desarrollo dentro de
+su plazo. El script no puede originar esas OCs como proveedor ni generar recalls
+mediante las APIs documentadas. El portal selecciona el lote; comprobar que el
+retiro corresponda al material de este flujo. Un retiro histórico vencido no se
+reactiva y los batches históricos desconocidos siguen necesitando evidencia
+oficial. Reemplazar los tres IDs del comando:
+
+```bash
+.venv/bin/python -m scripts.validate_e2_flow \
+  --order-id ID_OC_SFTP --order-id ID_OC_PUBSUB \
+  --recall-id ID_RECALL_NUEVO --wait-seconds 180 \
+  --output /tmp/validacion-e2.json
+```
+
+Se pueden observar las OCs antes de generar el retiro omitiendo `--recall-id`.
+El script consulta cada 10 segundos, deja trabajar a los workers existentes y no
+consume ni confirma mensajes de las colas. Comprueba cumplimiento oficial de
+las OCs, plazo, trazabilidad y custodia; para el recall compara el reporte con
+la investigación, las notificaciones y el stock observado en la cuarentena
+oficial. Exige que las OCs de ambos canales estén incluidas en el mismo retiro
+y que este cubra stock, entregas y al menos dos generaciones de derivados.
+Las lecturas de cuarentena están limitadas a 200 unidades por SKU; si no puede
+confirmar todas las unidades, deja la comprobación pendiente.
+
+La evidencia JSON distingue `passed`, `pending` y `failed`. El código de salida
+es `0` para las comprobaciones solicitadas aprobadas, `1` ante fallas y `2` si
+queda algo pendiente. Un `0` no certifica toda la entrega: aún se debe comparar
+con la solución esperada del portal y validar operación continua. La mensajería
+real queda fuera de este script: **no llama al LLM ni inicia su worker**.
+Los archivos de evidencia existentes no se sobrescriben; usar otra ruta en cada
+ejecución. No es necesario subirlos a Git.
+
+Pruebas aisladas del validador y del servicio de producción:
+
+```bash
+.venv/bin/python -m pytest -q tests/scripts/test_validate_e2_flow.py \
+  tests/services/production/test_kits.py
+```

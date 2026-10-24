@@ -17,6 +17,7 @@ from app.models import Location, Lot, Product, ProductionRun, Unit
 from app.schemas.farma_central import FarmaCentralProduct
 from app.services.inventory.movements import ProductMovementService
 from app.services.inventory.sync import InventorySyncService
+from app.services.production.lineage import has_official_lineage
 from app.services.production.orchestration import produce
 from app.services.supply.requests import SupplyRequestService
 
@@ -47,10 +48,12 @@ class KitProductionService:
         session: Session,
         *,
         raw_material_source: RawMaterialSource,
+        require_official_batches: bool = False,
     ) -> None:
         self._client = client
         self._session = session
         self._raw_material_source = raw_material_source
+        self._require_official_batches = require_official_batches
         self._catalog: dict[str, FarmaCentralProduct] = {}
         self._packaging_code = ""
         self._buffer_code = ""
@@ -352,7 +355,10 @@ class KitProductionService:
         catalog_product = self._catalog.get(sku)
         if catalog_product is not None and catalog_product.production.at == "packaging":
             statement = statement.where(Lot.produced_by.has())
-        return list(self._session.scalars(statement))
+        units = list(self._session.scalars(statement))
+        if self._require_official_batches:
+            units = [unit for unit in units if has_official_lineage(unit.lot)]
+        return units
 
     def _location(self, code: str) -> Location:
         location = self._session.scalar(select(Location).where(Location.code == code))
