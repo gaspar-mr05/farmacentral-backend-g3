@@ -6,10 +6,36 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import require_recall_oidc
 from app.db.session import get_session
-from app.schemas.recalls import RecallWebhookPayload
-from app.services.recalls import RecallWebhookService
+from app.schemas.recalls import (
+    RecallDetailResponse,
+    RecallSummaryResponse,
+    RecallWebhookPayload,
+)
+from app.services.recalls import (
+    RecallNotFoundError,
+    RecallQueryService,
+    RecallWebhookService,
+)
 
 router = APIRouter(tags=["recalls"])
+
+
+@router.get("/recalls", response_model=list[RecallSummaryResponse])
+def list_recalls(
+    session: Annotated[Session, Depends(get_session)],
+) -> list[RecallSummaryResponse]:
+    return RecallQueryService(session).list_recalls()
+
+
+@router.get("/recalls/{recall_id}", response_model=RecallDetailResponse)
+def get_recall(
+    recall_id: str,
+    session: Annotated[Session, Depends(get_session)],
+) -> RecallDetailResponse:
+    try:
+        return RecallQueryService(session).get_recall(recall_id)
+    except RecallNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post(

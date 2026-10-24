@@ -10,8 +10,12 @@ from app.api import dependencies
 from app.api.dependencies import get_oidc_verifier
 from app.main import app
 from app.models import InboundEvent, InboundEventSource, InboundEventStatus
+from app.schemas.recalls import RecallWebhookPayload
+from app.services.recall_investigation import RecallInvestigationService
+from app.services.recalls import RecallWebhookService
 from tests.support.farma_central import make_settings
 from tests.support.oidc import SERVICE_ACCOUNT, TestTokenIssuer
+from tests.support.recalls import RecallInventory
 
 AUDIENCE = "https://choripan3.ing.uc.cl/api/recalls"
 
@@ -191,3 +195,56 @@ def test_database_failure_returns_503_then_redelivery_can_succeed(
     assert db_session.scalar(select(func.count()).select_from(InboundEvent)) == 0
     assert post(client, issuer).status_code == 204
     assert db_session.scalar(select(func.count()).select_from(InboundEvent)) == 1
+
+
+def test_lists_received_recalls_before_investigation(api_client, db_session):
+    payload = RecallWebhookPayload.model_validate(recall())
+    RecallWebhookService(db_session).receive(payload)
+
+    response = api_client.get("/api/recalls")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "recall_id": payload.recall_id,
+            "batch": payload.batch,
+            "sku": payload.sku,
+            "reason": payload.reason,
+            "issued_at": "2026-10-28T14:12:00Z",
+            "deadline": "2026-10-28T14:42:00Z",
+            "status": "received",
+            "reported_at": None,
+        }
+    ]
+
+
+def test_returns_recall_detail_with_affected_units(api_client, db_session):
+    inventory = RecallInventory(db_session)
+    origin = inventory.lot("origin")
+    unit = inventory.unit("affected", origin)
+    saved = inventory.recall(origin)
+    db_session.commit()
+    RecallInvestigationService(db_session).investigate(saved.recall_id)
+
+    response = api_client.get(f"/api/recalls/{saved.recall_id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recall_id"] == saved.recall_id
+    assert body["status"] == "investigating"
+    assert body["units"] == [
+        {
+            "product_id": unit.external_unit_id,
+            "sku": origin.product.sku,
+            "batch": origin.external_lot_id,
+            "original_location": inventory.locations["storage"].code,
+            "current_location": inventory.locations["storage"].code,
+            "quarantined_at": None,
+        }
+    ]
+
+
+def test_returns_404_for_unknown_recall(api_client):
+    response = api_client.get("/api/recalls/unknown")
+
+    assert response.status_code == 404
