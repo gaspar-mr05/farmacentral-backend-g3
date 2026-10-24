@@ -6,6 +6,7 @@ import pytest
 
 from app.clients.farma_central import FarmaCentralClient
 from app.clients.farma_central_exceptions import FarmaCentralHTTPError
+from app.schemas.recalls import RecallNotificationRequest, RecallReportRequest
 from tests.support.farma_central import make_settings
 
 
@@ -165,6 +166,50 @@ async def test_dispatch_product_sends_product_and_purchase_order_ids() -> None:
         )
 
     assert result is None
+
+
+@pytest.mark.anyio
+async def test_recall_operations_use_expected_endpoints_and_payloads() -> None:
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/auth":
+            return httpx.Response(200, json={"token": "test-token"})
+        requests.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(202)
+
+    async with httpx.AsyncClient(
+        base_url="https://example.test/api/",
+        transport=httpx.MockTransport(handler),
+    ) as http_client:
+        client = FarmaCentralClient(settings=make_settings(), http_client=http_client)
+        await client.notify_recall(
+            "recall-1",
+            RecallNotificationRequest(
+                orderId="order-1",
+                customerName="Farmacia",
+                productIds=["unit-1"],
+            ),
+        )
+        await client.report_recall(
+            "recall-1",
+            RecallReportRequest(inStock=[], derivedBatches=[], deliveries=[]),
+        )
+
+    assert requests == [
+        (
+            "/api/recalls/recall-1/notifications",
+            {
+                "orderId": "order-1",
+                "customerName": "Farmacia",
+                "productIds": ["unit-1"],
+            },
+        ),
+        (
+            "/api/recalls/recall-1/report",
+            {"inStock": [], "derivedBatches": [], "deliveries": []},
+        ),
+    ]
 
 
 @pytest.mark.anyio

@@ -15,6 +15,7 @@ from app.schemas.farma_central import (
     FarmaCentralChallengeRequest,
     FarmaCentralProductRequest,
 )
+from app.schemas.recalls import RecallNotificationRequest, RecallReportRequest
 
 JSONResponse = dict[str, Any] | list[Any]
 
@@ -82,6 +83,24 @@ class FarmaCentralClient:
             "POST",
             "/dispatch",
             json={"productId": product_id, "orderId": order_id},
+            allow_empty=True,
+        )
+
+    async def notify_recall(
+        self, recall_id: str, notification: RecallNotificationRequest
+    ) -> None:
+        await self._request(
+            "POST",
+            f"/recalls/{recall_id}/notifications",
+            json=notification.model_dump(by_alias=True, exclude_none=True),
+            allow_empty=True,
+        )
+
+    async def report_recall(self, recall_id: str, report: RecallReportRequest) -> None:
+        await self._request(
+            "POST",
+            f"/recalls/{recall_id}/report",
+            json=report.model_dump(by_alias=True),
             allow_empty=True,
         )
 
