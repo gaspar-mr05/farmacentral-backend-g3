@@ -1,5 +1,6 @@
 [Unit]
 Description=Run Farmacentral inventory synchronization periodically
+PartOf=farmacentral-backend.service
 
 [Timer]
 OnActiveSec=30s

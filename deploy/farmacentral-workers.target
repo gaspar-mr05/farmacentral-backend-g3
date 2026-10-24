@@ -1,0 +1,12 @@
+[Unit]
+Description=Farmacentral background workers
+PartOf=farmacentral-backend.service
+Wants=farmacentral-worker@poll_sftp_orders.service
+Wants=farmacentral-worker@poll_pubsub_orders.service
+Wants=farmacentral-worker@process_messaging.service
+Wants=farmacentral-worker@fulfill_external_orders.service
+Wants=farmacentral-worker@process_recalls.service
+After=network-online.target postgresql.service
+
+[Install]
+WantedBy=multi-user.target

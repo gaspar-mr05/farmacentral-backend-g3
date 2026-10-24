@@ -56,6 +56,8 @@ class Settings(BaseSettings):
         default="mensajeria@taller-integracion-310700.iam.gserviceaccount.com",
         min_length=1,
     )
+    recall_poll_interval_seconds: float = Field(default=30, gt=0)
+    recall_batch_size: int = Field(default=20, ge=1)
     oidc_timeout_seconds: float = Field(default=3, gt=0, le=5)
     llm_gateway_base_url: AnyHttpUrl | None = None
     llm_gateway_api_key: SecretStr | None = Field(default=None, min_length=1)

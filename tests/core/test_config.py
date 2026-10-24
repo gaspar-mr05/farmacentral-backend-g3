@@ -178,6 +178,13 @@ def test_recall_audience_can_be_overridden():
     assert settings.recall_oidc_service_account == "recalls@example.test"
 
 
+def test_recall_worker_defaults_are_bounded():
+    settings = make_settings()
+
+    assert settings.recall_poll_interval_seconds == 30
+    assert settings.recall_batch_size == 20
+
+
 def test_llm_gateway_is_optional_and_key_is_redacted():
     assert make_settings().llm_gateway_base_url is None
     settings = make_settings(llm_gateway_api_key="private-llm-key")
