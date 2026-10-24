@@ -71,6 +71,9 @@ class FarmaCentralClient:
             params["limit"] = limit
         return await self.get(f"/spaces/{store_id}/products", params=params)
 
+    async def get_active_recalls(self) -> JSONResponse:
+        return await self.get("/recalls")
+
     async def move_product(self, product_id: str, store_id: str) -> None:
         await self._request(
             "PATCH",

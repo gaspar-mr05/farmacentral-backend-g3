@@ -214,6 +214,25 @@ async def test_recall_operations_use_expected_endpoints_and_payloads() -> None:
 
 
 @pytest.mark.anyio
+async def test_get_active_recalls_uses_recall_collection_endpoint() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/auth":
+            return httpx.Response(200, json={"token": "test-token"})
+        assert request.method == "GET"
+        assert request.url.path == "/api/recalls"
+        return httpx.Response(200, json=[])
+
+    async with httpx.AsyncClient(
+        base_url="https://example.test/api/",
+        transport=httpx.MockTransport(handler),
+    ) as http_client:
+        client = FarmaCentralClient(settings=make_settings(), http_client=http_client)
+        response = await client.get_active_recalls()
+
+    assert response == []
+
+
+@pytest.mark.anyio
 async def test_supply_operations_use_expected_payloads() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/auth":

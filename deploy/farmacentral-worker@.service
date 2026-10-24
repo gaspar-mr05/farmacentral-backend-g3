@@ -1,0 +1,23 @@
+[Unit]
+Description=Farmacentral worker %i
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+PartOf=farmacentral-workers.target
+
+[Service]
+Type=simple
+User=integracion
+Group=integracion
+WorkingDirectory=/home/integracion/farmacentral-backend
+EnvironmentFile=/home/integracion/farmacentral-backend/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/integracion/farmacentral-backend/.venv/bin/python -m scripts.%i
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+UMask=0077

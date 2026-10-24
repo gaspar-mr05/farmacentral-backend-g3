@@ -93,6 +93,8 @@ sudo -u postgres pg_isready
 sudo cp deploy/farmacentral-backend.service /etc/systemd/system/
 sudo cp deploy/farmacentral-inventory-sync.service /etc/systemd/system/
 sudo cp deploy/farmacentral-inventory-sync.timer /etc/systemd/system/
+sudo cp deploy/farmacentral-worker@.service /etc/systemd/system/
+sudo cp deploy/farmacentral-workers.target /etc/systemd/system/
 sudo cp deploy/nginx.conf /etc/nginx/sites-available/farmacentral-backend
 sudo ln -sfn /etc/nginx/sites-available/farmacentral-backend \
   /etc/nginx/sites-enabled/farmacentral-backend
@@ -204,8 +206,7 @@ La instalación de los archivos de systemd es un paso manual único porque el
 workflow de despliegue no tiene permisos para escribir en
 `/etc/systemd/system`. Si esos archivos cambian, deben copiarse nuevamente y
 ejecutarse `sudo systemctl daemon-reload`. Los despliegues posteriores reinician
-el timer solo si ya estaba habilitado; no lo activan automáticamente en un
-ambiente nuevo.
+el backend, y systemd reinicia junto a él el timer y los workers instalados.
 
 Si aparece `FarmaCentralConnectionError`, el problema ocurre antes de acceder a
 PostgreSQL: el backend no pudo abrir una conexión con
@@ -1047,3 +1048,54 @@ en una cadena de 100 generaciones, 300 unidades en stock y tres entregas. Una
 medición local obtuvo aproximadamente **60 ms y 19 sentencias SQL**; el test
 verifica un máximo de 20 sentencias y cinco segundos en ese escenario. Los
 tiempos dependen del equipo y de la carga de la base.
+
+## Entrega 2: workers autónomos (paso 19)
+
+Los procesos de sFTP, Pub/Sub, mensajería, cumplimiento de OCs y recalls se
+ejecutan separados de FastAPI. Cada uno reutiliza el loop y el estado durable en
+PostgreSQL de su integración; si una API externa falla, espera su intervalo antes
+de volver a intentar y no bloquea los demás canales.
+
+El worker de recalls consulta `GET /farma-central/recalls` como respaldo del
+webhook. Persiste retiros nuevos sin duplicarlos y procesa eventos pendientes o
+fallidos antes del deadline. Una respuesta interrumpida queda reintentable; un
+retiro vencido queda fallido sin generar llamadas tardías.
+
+Para ejecutar una revisión manual:
+
+```bash
+.venv/bin/python -m scripts.process_recalls --once
+```
+
+En el servidor, instalar una vez la plantilla y el target de systemd:
+
+```bash
+sudo cp deploy/farmacentral-backend.service /etc/systemd/system/
+sudo cp deploy/farmacentral-inventory-sync.timer /etc/systemd/system/
+sudo cp deploy/farmacentral-worker@.service /etc/systemd/system/
+sudo cp deploy/farmacentral-workers.target /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now farmacentral-inventory-sync.timer
+sudo systemctl enable --now farmacentral-workers.target
+sudo systemctl restart farmacentral-backend.service
+```
+
+El target inicia cinco servicios independientes. El backend los agrupa para que
+un despliegue los reinicie sin ejecutar comandos privilegiados adicionales:
+
+```bash
+systemctl status farmacentral-workers.target --no-pager
+systemctl list-units 'farmacentral-worker@*' --no-pager
+sudo journalctl -u 'farmacentral-worker@*' -n 100 --no-pager
+```
+
+Antes de habilitarlos deben estar configuradas las credenciales sFTP, Pub/Sub y
+LLM descritas en los pasos anteriores. Los intervalos de recalls se pueden
+ajustar con `RECALL_POLL_INTERVAL_SECONDS` y `RECALL_BATCH_SIZE`.
+
+Pruebas específicas:
+
+```bash
+.venv/bin/python -m pytest -q tests/services/test_recall_worker.py \
+  tests/scripts/test_process_recalls.py tests/clients/test_farma_central.py
+```
