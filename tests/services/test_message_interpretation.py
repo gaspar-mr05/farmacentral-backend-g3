@@ -40,6 +40,7 @@ def service(db_session):
     for sku, category in (
         ("KIT-RESP-ADULTO", ProductCategory.KIT),
         ("KIT-DIABETES", ProductCategory.KIT),
+        ("KIT-ANALGESIA", ProductCategory.KIT),
         ("AMOXICILINA", ProductCategory.INSUMO),
         ("AMOX-ACOND", ProductCategory.ACONDICIONADO),
     ):
@@ -158,6 +159,56 @@ async def test_quantity_with_an_explicit_sku(db_session, service, quantity_text)
     gateway_returns(client, proposal())
     await interpreter.interpret(incoming, now=NOW)
     assert incoming.decision is MessagingDecision.ORDER
+
+
+@pytest.mark.anyio
+async def test_portal_order_with_required_singular_kit_and_same_day_clock(
+    db_session,
+    service,
+):
+    interpreter, client = service
+    received = datetime(2026, 10, 25, 19, 45, 28, tzinfo=UTC)
+    deadline = datetime(2026, 10, 25, 21, 15, tzinfo=UTC)
+    incoming = event(
+        db_session,
+        "Buen día, requerimos el kit de analgesia hospitalaria para nuestro box, "
+        "antes de las 18:15 hrs.",
+        received,
+    )
+    gateway_returns(
+        client,
+        proposal(
+            sku="KIT-ANALGESIA",
+            quantity=1,
+            delivery_date=deadline,
+            confidence=0.9,
+        ),
+    )
+
+    await interpreter.interpret(incoming, now=received + timedelta(minutes=1))
+
+    assert incoming.decision is MessagingDecision.ORDER, incoming.reason
+    assert incoming.interpreted_sku == "KIT-ANALGESIA"
+    assert incoming.interpreted_quantity == 1
+    assert incoming.interpreted_delivery_date == deadline
+
+
+@pytest.mark.anyio
+async def test_singular_kit_does_not_validate_a_proposed_plural_quantity(
+    db_session,
+    service,
+):
+    interpreter, client = service
+    incoming = event(
+        db_session,
+        "Requerimos el kit respiratorio para hoy a las 19:00.",
+    )
+    gateway_returns(client, proposal(quantity=2))
+
+    await interpreter.interpret(incoming, now=NOW)
+
+    assert incoming.decision is MessagingDecision.DISCARDED
+    assert "cantidad" in incoming.reason.casefold()
 
 
 @pytest.mark.anyio

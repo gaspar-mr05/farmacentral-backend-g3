@@ -145,9 +145,9 @@ def _discard_reason(
 ) -> str | None:
     text = _normalize(message.text)
     intent = re.search(
-        r"\b(necesito|necesitamos|quiero|queremos|quisiera|quisieramos|solicito|"
-        r"solicitamos|pido|pedimos|comprar|encargar|enviar|enviarnos|enviame|"
-        r"envienme|mandar|mandame|mandenme)\b",
+        r"\b(necesito|necesitamos|requiero|requerimos|quiero|queremos|quisiera|"
+        r"quisieramos|solicito|solicitamos|pido|pedimos|comprar|encargar|enviar|"
+        r"enviarnos|enviame|envienme|mandar|mandame|mandenme)\b",
         text,
     )
     other_request = re.search(
@@ -170,11 +170,17 @@ def _discard_reason(
     if mentioned and mentioned != {proposal.sku.casefold()}:
         return "El SKU propuesto no coincide con un único kit mencionado."
 
-    quantities = re.findall(
-        rf"(?<![\w.,-])({NUMBER})\s+(?:de\s+)?"
-        rf"(?:kits?\b|unidades?\b|del\b|{re.escape(proposal.sku.casefold())}\b)",
-        text,
-    )
+    quantities = [
+        _number(value)
+        for value in re.findall(
+            rf"(?<![\w.,-])({NUMBER})\s+(?:de\s+)?"
+            rf"(?:kits?\b|unidades?\b|del\b|{re.escape(proposal.sku.casefold())}\b)",
+            text,
+        )
+    ]
+    # A definite singular kit is as precise as "un kit" in natural requests.
+    if re.search(r"\bel\s+kit\b", text):
+        quantities.append(1)
     uncertain_quantity = re.search(
         rf"\b(?:unos|unas|aproximadamente|alrededor de|cerca de|mas de|menos de|"
         rf"al menos)\s+{NUMBER}\b|"
@@ -187,7 +193,7 @@ def _discard_reason(
         or proposal.quantity <= 0
         or uncertain_quantity
         or len(quantities) != 1
-        or _number(quantities[0]) != proposal.quantity
+        or quantities[0] != proposal.quantity
     ):
         return "La cantidad no es única, positiva y explícita en el mensaje."
     if proposal.delivery_date is None:
@@ -241,7 +247,7 @@ def _deadline_matches(text: str, received_at: datetime, deadline: datetime) -> b
         r"(?::([0-5]\d))?\s*(am|pm)?\b",
         clock_text,
     ) or re.findall(r"\b(\d{1,2}):([0-5]\d)\s*(am|pm)?\b", clock_text)
-    if len(days) != 1 or len(clocks) != 1:
+    if len(days) > 1 or len(clocks) != 1:
         return False
     hour_text, minute_text, meridian = clocks[0]
     hour, minute = _number(hour_text), int(minute_text or 0)
@@ -251,8 +257,12 @@ def _deadline_matches(text: str, received_at: datetime, deadline: datetime) -> b
         hour = hour % 12 + (12 if meridian == "pm" else 0)
     elif hour > 23 or (1 <= hour <= 12 and not minute_text):
         return False
-    day = received_at.astimezone(CHILE).date() + timedelta(
-        days={"hoy": 0, "manana": 1, "ayer": -1}[days.pop()]
+    received_day = received_at.astimezone(CHILE).date()
+    day = (
+        received_day
+        if not days
+        else received_day
+        + timedelta(days={"hoy": 0, "manana": 1, "ayer": -1}[days.pop()])
     )
     local = deadline.astimezone(CHILE)
     if local.replace(fold=0).utcoffset() != local.replace(fold=1).utcoffset():

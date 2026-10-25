@@ -828,17 +828,20 @@ de al menos `0.8`. Verifica que el SKU siga siendo un `KIT` del catálogo local,
 que no contradiga SKU explícitos del texto y que exista una cantidad única,
 positiva e identificable. Admite cifras, números en español de uno a veinte,
 `un par`, `media docena` y `una docena`, asociados a kits, unidades, un SKU o una
-referencia como `dos del de la diabetes`. No transforma cantidades aproximadas
-o alternativas en cantidades exactas. Consultas de estado, ayuda, cancelaciones
-y negaciones explícitas se descartan.
+referencia como `dos del de la diabetes`. También reconoce un kit singular
+determinado, por ejemplo `requerimos el kit de analgesia`, como una unidad. No
+transforma cantidades aproximadas o alternativas en cantidades exactas.
+Consultas de estado, ayuda, cancelaciones y negaciones explícitas se descartan.
 
 El plazo debe ser posterior tanto a `receivedAt` del payload original como al
 momento de validación. Se contrasta con fechas ISO, `en N horas/minutos`, o
 `hoy`/`mañana` con hora explícita, usando `America/Santiago` y su cambio de hora.
-Por ejemplo, `hoy antes de las 7 de la tarde` y `mañana a las 09:00` tienen
-plazos verificables. Expresiones vagas como `mañana a primera hora`, horas sin
-AM/PM ni formato de 24 horas, y fechas fuera de esta gramática limitada se
-descartan; no se adivina una hora para completar el pedido.
+Una hora inequívoca en formato de 24 horas sin día, como `antes de las 18:15`,
+se refiere al día local de recepción. Por ejemplo, `hoy antes de las 7 de la
+tarde` y `mañana a las 09:00` tienen plazos verificables. Expresiones vagas como
+`mañana a primera hora`, horas sin AM/PM ni formato de 24 horas, y fechas fuera
+de esta gramática limitada se descartan; no se adivina una hora para completar
+el pedido.
 
 En caso de timeout, presupuesto agotado, salida inválida o cualquier error
 controlado del gateway, descarta con un motivo estable y sin reintentos ni
