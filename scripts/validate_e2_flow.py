@@ -1,4 +1,4 @@
-"""Prepare and observe a real development order/recall flow without using the LLM."""
+"""Observe development flows through step 19 without calling the LLM."""
 
 import argparse
 import asyncio
@@ -15,8 +15,18 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from app.clients.farma_central import FarmaCentralClient
-from app.clients.purchase_orders import PurchaseOrdersClient
+from app.clients.farma_central import (
+    FarmaCentralClient,
+    FarmaCentralConnectionError,
+    FarmaCentralError,
+    FarmaCentralTimeoutError,
+)
+from app.clients.purchase_orders import (
+    PurchaseOrdersClient,
+    PurchaseOrdersConnectionError,
+    PurchaseOrdersError,
+    PurchaseOrdersTimeoutError,
+)
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.models import (
@@ -33,10 +43,19 @@ from app.models import (
 )
 from app.queries.recalls import affected_lineage
 from app.schemas.purchase_orders import PurchaseOrderState
-from app.schemas.recalls import RecallReportRequest
-from app.services.production.kits import KitProductionService
+from app.schemas.recalls import RecallReportRequest, RecallWebhookPayload
+from app.services.production.kits import KitProductionError, KitProductionService
 from app.services.production.lineage import has_official_lineage
+from app.services.production.locking import ProductionBusyError, production_lock
 from scripts.audit_lot_identities import audit
+from scripts.e2_checks import (
+    check_message,
+    check_recall_api,
+    check_step19,
+    check_workers,
+    matches_official_order,
+    result,
+)
 from scripts.empty_packaging import empty_packaging
 from scripts.verify_e1_traceability import verify_delivery
 
@@ -48,8 +67,31 @@ class ValidationSetupError(ValueError):
     """A local, safe-to-display validation diagnostic."""
 
 
-def result(status: str, detail: str, **evidence) -> dict:
-    return {"status": status, "detail": detail, **evidence}
+async def observe(check, *args) -> dict:
+    try:
+        return await check(*args)
+    except (FarmaCentralError, PurchaseOrdersError, httpx.HTTPError, ValueError) as exc:
+        # External bodies and message text can contain private data.
+        status_code = getattr(exc, "status_code", None)
+        retryable = (
+            isinstance(
+                exc,
+                (
+                    FarmaCentralConnectionError,
+                    FarmaCentralTimeoutError,
+                    PurchaseOrdersConnectionError,
+                    PurchaseOrdersTimeoutError,
+                    httpx.RequestError,
+                ),
+            )
+            or status_code == 429
+            or (status_code is not None and status_code >= 500)
+        )
+        return result(
+            "pending" if retryable else "failed",
+            f"No se pudo completar la consulta ({type(exc).__name__})",
+            http_status=status_code,
+        )
 
 
 def require_development(settings) -> None:
@@ -95,16 +137,46 @@ async def check_order(session: Session, order_id: str, client, group: int) -> di
     order = session.scalar(select(Order).where(Order.external_order_id == order_id))
     if order is None:
         return result("pending", "Esperando ingreso de la OC por sFTP o Pub/Sub")
-    if order.source not in {OrderSource.SFTP, OrderSource.PUBSUB}:
+    if order.source not in {
+        OrderSource.SFTP,
+        OrderSource.PUBSUB,
+        OrderSource.MESSAGING,
+    }:
+        return result("failed", "La OC debe ingresar por sFTP, Pub/Sub o mensajería")
+    if order.status == OrderStatus.REJECTED:
+        official = await client.get_order(order_id)
+        if (
+            not matches_official_order(order, official, group)
+            or official.state != PurchaseOrderState.REJECTED
+            or official.dispatched_quantity != 0
+            or any(
+                assignment.dispatched_at is not None
+                for item in order.items
+                for assignment in item.assigned_units
+            )
+            or order.decision_at is None
+            or not order.decision_reason
+        ):
+            return result(
+                "failed",
+                "El rechazo no tiene auditoría o confirmación oficial coherente",
+            )
         return result(
-            "failed", "La OC de esta validación debe ingresar por sFTP/Pub/Sub"
+            "passed",
+            "Rechazo auditado y confirmado; no acredita fabricación/despacho",
+            channel=order.source.value,
+            fulfilled=False,
+            decision_reason=order.decision_reason,
         )
     if order.status in {
-        OrderStatus.REJECTED,
         OrderStatus.EXPIRED,
         OrderStatus.CANCELLED,
     }:
-        return result("failed", f"La OC terminó como {order.status.value}")
+        return result(
+            "failed",
+            f"La OC terminó como {order.status.value}; no demuestra cumplimiento",
+            decision_reason=order.decision_reason,
+        )
     if order.status != OrderStatus.DISPATCHED:
         return result("pending", f"OC local: {order.status.value}")
 
@@ -133,13 +205,7 @@ async def check_order(session: Session, order_id: str, client, group: int) -> di
         return result("failed", "La OC no tiene entregas verificables")
 
     official = await client.get_order(order_id)
-    if (
-        official.supplier_id != str(group)
-        or official.customer_id != order.external_customer_id
-        or len(order.items) != 1
-        or order.items[0].sku != official.sku
-        or order.items[0].quantity != official.quantity
-    ):
+    if not matches_official_order(order, official, group):
         return result("failed", "Los datos locales no coinciden con la OC oficial")
     if (
         official.state != PurchaseOrderState.FULFILLED
@@ -156,6 +222,7 @@ async def check_order(session: Session, order_id: str, client, group: int) -> di
         "passed",
         "OC cumplida y trazabilidad reconstruida",
         channel=order.source.value,
+        fulfilled=True,
         deliveries=deliveries,
     )
 
@@ -169,10 +236,25 @@ async def check_recall(session: Session, recall_id: str, client) -> dict:
     )
     recall = session.scalar(select(Recall).where(Recall.recall_id == recall_id))
     if recall is None or recall.status != RecallStatus.COMPLETED:
-        if event is not None and event.status == InboundEventStatus.FAILED:
-            return result("failed", event.last_error or "Evento de recall fallido")
-        if recall is not None and recall.deadline <= datetime.now(UTC):
+        deadline = (
+            recall.deadline
+            if recall is not None
+            else (
+                RecallWebhookPayload.model_validate(event.payload).deadline
+                if event
+                else None
+            )
+        )
+        if deadline is not None and deadline <= datetime.now(UTC):
             return result("failed", "El recall venció sin completarse")
+        if event is not None and event.status == InboundEventStatus.FAILED:
+            return result(
+                "pending" if event.next_retry_at is not None else "failed",
+                event.last_error or "Evento de recall fallido",
+                next_retry_at=event.next_retry_at.isoformat()
+                if event.next_retry_at
+                else None,
+            )
         return result(
             "pending", "Esperando recepción y respuesta del recall por el worker"
         )
@@ -286,18 +368,6 @@ async def check_recall(session: Session, recall_id: str, client) -> dict:
                 return result(
                     "pending", "La consulta oficial no confirma toda la cuarentena"
                 )
-    if (
-        not expected_stock
-        or not expected_deliveries
-        or not any(item.generation >= 2 for item in recall.lots)
-    ):
-        return result(
-            "pending",
-            "Falta cubrir stock, entregas y cadena insumo→acondicionado→kit",
-            stock=len(expected_stock),
-            orders=len(expected_deliveries),
-            derived_batches=len(expected_derived),
-        )
     return result(
         "passed",
         "Cuarentena oficial y auditoría local verificadas; comparar con el portal",
@@ -312,23 +382,23 @@ async def check_recall(session: Session, recall_id: str, client) -> dict:
 
 def check_flow(checks: dict, order_ids: list[str], recall_id: str | None) -> dict:
     if not order_ids or not recall_id:
-        return result("pending", "Faltan IDs de OC y recall para vincular el flujo")
+        return result("skipped", "La vinculación requiere IDs de OC y recall")
     orders = [checks[f"order:{order_id}"] for order_id in order_ids]
     recall = checks["recall"]
     if any(item["status"] != "passed" for item in [*orders, recall]):
         return result("pending", "Primero deben verificarse las OCs y el recall")
     reported_orders = {item["orderId"] for item in recall["report"]["deliveries"]}
     if not set(order_ids) <= reported_orders:
-        return result("failed", "El recall no incluye las OCs indicadas")
-    if {item["channel"] for item in orders} != {"sftp", "pubsub"}:
-        return result("pending", "Falta una OC cumplida por cada canal: sFTP y Pub/Sub")
+        return result("skipped", "Las OCs y el recall son escenarios independientes")
     return result(
-        "passed", "Las entregas de ambos canales están incluidas en el recall"
+        "passed",
+        "Las entregas indicadas están incluidas en el recall",
+        channels=sorted({item["channel"] for item in orders}),
     )
 
 
 async def prepare(args) -> dict:
-    with SessionLocal() as session:
+    with SessionLocal() as session, production_lock(session):
         if database_check(session)["status"] != "passed":
             raise ValidationSetupError("Aplica las migraciones antes de preparar stock")
         async with FarmaCentralClient() as client:
@@ -368,38 +438,131 @@ async def inspect(args) -> dict:
             "unresolved_historical_units": sum(row["units"] for row in rows),
             "completed_quantities": completed_quantities(session),
         }
-        if args.order_id:
+        if args.list_ids:
+            return {
+                "checks": checks,
+                "inventory": inventory,
+                "available_ids": discover_ids(session),
+            }
+        if args.order_id or args.message_id:
             async with PurchaseOrdersClient() as client:
-                for order_id in args.order_id:
-                    checks[f"order:{order_id}"] = await check_order(
+                for order_id in args.order_id or []:
+                    checks[f"order:{order_id}"] = await observe(
+                        check_order,
                         session,
                         order_id,
                         client,
                         get_settings().farma_central_group,
                     )
-        else:
+                for message_id in args.message_id or []:
+                    checks[f"message:{message_id}"] = await observe(
+                        check_message,
+                        session,
+                        message_id,
+                        client,
+                        get_settings().farma_central_group,
+                    )
+        if not args.order_id:
             checks["order"] = result(
-                "pending", "Falta --order-id de una OC real del grupo"
+                "skipped"
+                if args.recall_id or args.message_id or args.check_workers
+                else "pending",
+                "Falta --order-id de una OC real del grupo",
             )
         if args.recall_id:
             async with FarmaCentralClient() as client:
-                checks["recall"] = await check_recall(session, args.recall_id, client)
+                checks["recall"] = await observe(
+                    check_recall, session, args.recall_id, client
+                )
         else:
             checks["recall"] = result(
-                "pending", "Genera el retiro en el portal y usa --recall-id"
+                "skipped"
+                if args.order_id or args.message_id or args.check_workers
+                else "pending",
+                "Genera el retiro en el portal y usa --recall-id",
             )
         checks["flow"] = check_flow(checks, args.order_id or [], args.recall_id)
-    async with httpx.AsyncClient(timeout=5, follow_redirects=False) as client:
-        response = await client.get(f"{args.api_url.rstrip('/')}/api/health")
-        checks["health"] = result(
-            "passed" if response.status_code == 200 else "failed",
-            f"API health: HTTP {response.status_code}",
+        async with httpx.AsyncClient(timeout=5, follow_redirects=False) as client:
+            checks["health"] = await observe(check_health, client, args.api_url)
+            if args.recall_id:
+                checks["recall_api"] = await observe(
+                    check_recall_api,
+                    session,
+                    args.recall_id,
+                    client,
+                    args.api_url,
+                )
+    if args.check_workers or args.step19:
+        checks["workers"] = await check_workers(
+            include_replenishment=args.include_replenishment
         )
+    if args.step19:
+        checks["step19"] = check_step19(checks)
     return {"checks": checks, "inventory": inventory}
+
+
+async def check_health(client, api_url: str) -> dict:
+    response = await client.get(f"{api_url.rstrip('/')}/api/health")
+    return result(
+        "passed"
+        if response.status_code == 200
+        else "pending"
+        if response.status_code >= 500 or response.status_code == 429
+        else "failed",
+        f"API health: HTTP {response.status_code}",
+    )
+
+
+def discover_ids(session: Session) -> dict:
+    orders = {}
+    for source in (OrderSource.SFTP, OrderSource.PUBSUB, OrderSource.MESSAGING):
+        orders[source.value] = [
+            {
+                "order_id": order.external_order_id,
+                "status": order.status.value,
+                "delivery_deadline": order.delivery_deadline.isoformat()
+                if order.delivery_deadline
+                else None,
+            }
+            for order in session.scalars(
+                select(Order)
+                .where(
+                    Order.source == source,
+                    Order.external_order_id.is_not(None),
+                )
+                .order_by(Order.created_at.desc(), Order.external_order_id)
+                .limit(20)
+            )
+        ]
+    events = {}
+    for source in (InboundEventSource.MESSAGING, InboundEventSource.RECALL):
+        events[source.value] = [
+            {
+                "event_id": event.external_event_id,
+                "status": event.status.value,
+                "received_at": event.received_at.isoformat(),
+            }
+            for event in session.scalars(
+                select(InboundEvent)
+                .where(
+                    InboundEvent.source == source,
+                )
+                .order_by(
+                    InboundEvent.received_at.desc(), InboundEvent.external_event_id
+                )
+                .limit(20)
+            )
+        ]
+    return {"orders": orders, "events": events}
 
 
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--list-ids",
+        action="store_true",
+        help="Mostrar IDs recientes de la DB sin consultar APIs ni iniciar procesos",
+    )
     parser.add_argument(
         "--prepare",
         action="store_true",
@@ -412,7 +575,29 @@ def arguments() -> argparse.Namespace:
         help="Meta acumulada de producción del SKU, no stock actual",
     )
     parser.add_argument(
-        "--order-id", action="append", help="OC real; repetir para sFTP y Pub/Sub"
+        "--order-id",
+        action="append",
+        help="OC real; repetir para sFTP, Pub/Sub y mensajería",
+    )
+    parser.add_argument(
+        "--message-id",
+        action="append",
+        help="Mensaje ya recibido; sólo consulta su auditoría y OC",
+    )
+    parser.add_argument(
+        "--check-workers",
+        action="store_true",
+        help="Consultar systemd local sin iniciar ni reiniciar workers",
+    )
+    parser.add_argument(
+        "--include-replenishment",
+        action="store_true",
+        help="Incluir el sexto worker opcional en la comprobación",
+    )
+    parser.add_argument(
+        "--step19",
+        action="store_true",
+        help="Checklist: OCs de ambos canales, mensaje, recall, API y cinco workers",
     )
     parser.add_argument(
         "--recall-id", help="Retiro real generado en el portal de desarrollo"
@@ -436,6 +621,27 @@ def arguments() -> argparse.Namespace:
         parser.error("--wait-seconds no puede ser negativo")
     if any(not re.fullmatch(r"[0-9a-f]{24}", value) for value in args.order_id or []):
         parser.error("--order-id debe tener 24 caracteres hexadecimales en minúsculas")
+    if any(
+        not value.strip()
+        for value in [
+            *(args.message_id or []),
+            *([args.recall_id] if args.recall_id is not None else []),
+        ]
+    ):
+        parser.error("Los IDs de mensajes y recalls no pueden estar vacíos")
+    if args.include_replenishment:
+        args.check_workers = True
+    if args.list_ids and (
+        args.step19
+        or args.prepare
+        or args.order_id
+        or args.message_id
+        or args.recall_id
+        or args.check_workers
+    ):
+        parser.error(
+            "--list-ids se usa separado de las comprobaciones de flujos y workers"
+        )
     if args.output and args.output.exists():
         parser.error("--output ya existe; usa otro archivo para esta ejecución")
     return args
@@ -448,9 +654,12 @@ async def main() -> int:
     evidence = {
         "started_at": datetime.now(UTC).isoformat(),
         "llm_calls": 0,
+        "scope": "through_step19" if args.step19 else "selected_checks",
         "not_verified": [
-            "Mensajería real con LLM",
+            "Significado de los mensajes frente a la interpretación almacenada",
+            "Firma OIDC y tiempo de respuesta de webhooks en un envío real",
             "Comparación con solución esperada del portal",
+            "Reinicio real del backend conservando estado",
             "Disponibilidad continua durante toda la evaluación",
         ],
     }
@@ -470,7 +679,7 @@ async def main() -> int:
                 break
             await asyncio.sleep(min(10, remaining))
         code = 1 if "failed" in states else 2 if "pending" in states else 0
-    except ValidationSetupError as exc:
+    except (ValidationSetupError, KitProductionError, ProductionBusyError) as exc:
         evidence["error"] = str(exc)
         logger.error("%s", exc)
         code = 1

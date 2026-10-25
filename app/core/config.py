@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urljoin
 
-from pydantic import AnyHttpUrl, Field, SecretStr
+from pydantic import AnyHttpUrl, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     pubsub_batch_size: int = Field(default=100, ge=1)
     external_order_poll_interval_seconds: float = Field(default=5, gt=0)
     external_order_batch_size: int = Field(default=100, ge=1)
+    replenishment_poll_interval_seconds: float = Field(default=60, gt=0)
+    replenishment_minimum_stock: int = Field(default=2, ge=1)
+    replenishment_target_stock: int = Field(default=6, ge=1)
+    replenishment_minimum_lifetime_seconds: float = Field(default=14400, ge=0)
     messaging_oidc_audience: AnyHttpUrl | None = None
     messaging_oidc_service_account: str = Field(
         default="mensajeria@taller-integracion-310700.iam.gserviceaccount.com",
@@ -72,6 +76,14 @@ class Settings(BaseSettings):
     app_public_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:8000/")
     frontend_public_url: AnyHttpUrl | None = None
     cors_origins: str = ""
+
+    @model_validator(mode="after")
+    def validate_replenishment_stock(self) -> "Settings":
+        if self.replenishment_target_stock < self.replenishment_minimum_stock:
+            raise ValueError(
+                "REPLENISHMENT_TARGET_STOCK must be >= REPLENISHMENT_MINIMUM_STOCK"
+            )
+        return self
 
     @property
     def effective_purchase_orders_base_url(self) -> str:

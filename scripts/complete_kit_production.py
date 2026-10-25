@@ -9,6 +9,7 @@ from app.clients.farma_central import FarmaCentralClient
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.services.production.kits import KitProductionService
+from app.services.production.locking import production_lock
 from scripts.empty_packaging import empty_packaging
 
 
@@ -46,7 +47,7 @@ async def main() -> None:
     if is_production and args.raw_material_source == "sandbox":
         raise SystemExit("Sandbox provisioning is not allowed in production")
 
-    with SessionLocal() as session:
+    with SessionLocal() as session, production_lock(session):
         async with FarmaCentralClient() as client:
             service = KitProductionService(
                 client,

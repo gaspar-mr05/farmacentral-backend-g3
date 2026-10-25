@@ -11,6 +11,7 @@ from app.db.production_runs import find_pending_runs_for_sku
 from app.db.products import upsert_products
 from app.db.units import UnitLocationChange, upsert_units
 from app.models import CustodyEventType, Lot, LotOrigin, Product, ProductionRun, Unit
+from app.queries.recalls import block_recalled_stock
 from app.schemas.inventory import InventoryData
 from app.services.custody import events as custody_events
 from app.services.inventory.collection import InventoryCollector
@@ -103,6 +104,8 @@ def sync_inventory(
         incomplete_groups=incomplete_groups,
     )
     _link_new_production_outputs(session, units.created_units)
+    session.flush()
+    block_recalled_stock(session)
     _record_custody_changes(session, units.location_changes)
     _delete_empty_unreported_lots(session)
     session.flush()

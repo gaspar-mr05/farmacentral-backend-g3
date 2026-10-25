@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import exists, select
+from sqlalchemy import Select, exists, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
@@ -9,10 +9,49 @@ from app.models import (
     ProductionInput,
     ProductionInputUnit,
     ProductionRun,
+    Recall,
+    RecallDelivery,
+    RecallLot,
+    RecallStatus,
+    RecallUnit,
     Unit,
 )
 
 STOCK_STATUSES = ("available", "reserved", "recall_pending", "quarantined", "expired")
+
+
+def blocked_lots():
+    """Include outputs linked after an investigation, even after its deadline."""
+    affected = (
+        select(RecallLot.lot_id)
+        .join(Recall, Recall.id == RecallLot.recall_id)
+        .where(
+            Recall.status.in_(
+                [
+                    RecallStatus.RESPONDING,
+                    RecallStatus.FAILED,
+                    RecallStatus.COMPLETED,
+                ]
+            )
+        )
+        .cte("blocked_lots", recursive=True)
+    )
+    return affected.union(
+        select(ProductionRun.output_lot_id)
+        .join(ProductionInput, ProductionInput.production_run_id == ProductionRun.id)
+        .join(affected, affected.c.lot_id == ProductionInput.input_lot_id)
+        .where(
+            ProductionRun.output_lot_id.is_not(None),
+            ProductionInput.quantity_consumed > 0,
+        )
+    )
+
+
+def block_recalled_stock(session: Session) -> None:
+    affected = blocked_lots()
+    for unit in stock_units(session, select(affected.c.lot_id)):
+        if unit.status != "quarantined":
+            unit.status = "recall_pending"
 
 
 def get_origin_lot(session: Session, batch: str) -> Lot | None:
@@ -68,7 +107,7 @@ def affected_lots(session: Session, lot_ids: set[UUID]) -> list[Lot]:
     )
 
 
-def stock_units(session: Session, lot_ids: set[UUID]) -> list[Unit]:
+def stock_units(session: Session, lot_ids: set[UUID] | Select) -> list[Unit]:
     return list(
         session.scalars(
             select(Unit)
@@ -83,3 +122,41 @@ def stock_units(session: Session, lot_ids: set[UUID]) -> list[Unit]:
             .with_for_update(of=Unit)
         )
     )
+
+
+def findings_changed(session: Session, recall: Recall) -> bool:
+    affected = {row.lot_id for row in affected_lineage(session, recall.origin_lot_id)}
+    recorded = set(
+        session.scalars(
+            select(RecallLot.lot_id).where(RecallLot.recall_id == recall.id)
+        )
+    )
+    quarantined = set(
+        session.scalars(
+            select(RecallUnit.unit_id).where(
+                RecallUnit.recall_id == recall.id,
+                RecallUnit.quarantined_at.is_not(None),
+            )
+        )
+    )
+    stock_changed = any(
+        unit.id not in quarantined for unit in stock_units(session, affected)
+    )
+    deliveries = set(
+        session.scalars(
+            select(OrderUnit.id)
+            .join(Unit)
+            .where(
+                Unit.lot_id.in_(affected),
+                OrderUnit.dispatched_at.is_not(None),
+            )
+        )
+    )
+    recorded_deliveries = set(
+        session.scalars(
+            select(RecallDelivery.order_unit_id).where(
+                RecallDelivery.recall_id == recall.id
+            )
+        )
+    )
+    return affected != recorded or stock_changed or deliveries != recorded_deliveries

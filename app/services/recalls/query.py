@@ -100,6 +100,11 @@ class RecallQueryService:
             reason=payload.reason,
             issued_at=payload.issued_at,
             deadline=payload.deadline,
-            status="received",
+            status={
+                "pending": "received",
+                "processing": "investigating",
+                "processed": "completed",
+                "failed": "failed",
+            }[event.status.value],
             reported_at=None,
         )

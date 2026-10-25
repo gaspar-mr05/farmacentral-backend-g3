@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.clients.purchase_orders import PurchaseOrdersClient
 from app.core.config import Settings, get_settings
+from app.db.operation_locks import operation_lock
 from app.models import (
     InboundEvent,
     InboundEventSource,
@@ -40,6 +41,12 @@ class MessagingRecoveryService:
         self._settings = settings or get_settings()
 
     async def recover(self, message_id: str, order_id: str) -> Order:
+        with operation_lock(self._session, f"message:{message_id}") as acquired:
+            if not acquired:
+                raise MessagingRecoveryError("Message is already being processed")
+            return await self._recover(message_id, order_id)
+
+    async def _recover(self, message_id: str, order_id: str) -> Order:
         try:
             event = self._session.scalar(
                 select(InboundEvent)

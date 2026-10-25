@@ -18,6 +18,7 @@ from app.schemas.farma_central import (
 )
 from app.services.inventory.movements import ProductMovementService
 from app.services.inventory.sync import InventorySyncService
+from app.services.production.locking import production_lock
 
 
 class PendingProductionRunsError(RuntimeError):
@@ -28,6 +29,11 @@ async def empty_packaging(
     client: FarmaCentralClient,
     session: Session,
 ) -> int:
+    with production_lock(session):
+        return await _empty_packaging(client, session)
+
+
+async def _empty_packaging(client: FarmaCentralClient, session: Session) -> int:
     if session.scalar(
         select(ProductionRun.id).where(ProductionRun.completed_at.is_(None)).limit(1)
     ):

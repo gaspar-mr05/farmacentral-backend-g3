@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -5,6 +6,11 @@ import pytest
 
 from app.clients.farma_central import FarmaCentralInvalidResponseError
 from scripts import empty_packaging as module
+
+
+@pytest.fixture(autouse=True)
+def packaging_lock(monkeypatch):
+    monkeypatch.setattr(module, "production_lock", lambda session: nullcontext())
 
 
 class FakeSession:

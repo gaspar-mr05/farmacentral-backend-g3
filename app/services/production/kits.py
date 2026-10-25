@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from math import ceil
 from typing import Literal
 
@@ -18,6 +18,7 @@ from app.schemas.farma_central import FarmaCentralProduct
 from app.services.inventory.movements import ProductMovementService
 from app.services.inventory.sync import InventorySyncService
 from app.services.production.lineage import has_official_lineage
+from app.services.production.locking import production_lock
 from app.services.production.orchestration import produce
 from app.services.supply.requests import SupplyRequestService
 
@@ -63,35 +64,39 @@ class KitProductionService:
     async def produce_all_kits(
         self, *, quantity_per_sku: int = 30
     ) -> dict[str, list[ProductionRun]]:
-        await self._initialize()
-        kits = sorted(
-            (
-                product
-                for product in self._catalog.values()
-                if product.sellable and product.production.at == "packaging"
-            ),
-            key=lambda product: product.sku,
-        )
-        if not kits:
-            raise ProductionCatalogError("The catalog does not contain sellable kits")
+        with production_lock(self._session):
+            await self._initialize()
+            kits = sorted(
+                (
+                    product
+                    for product in self._catalog.values()
+                    if product.sellable and product.production.at == "packaging"
+                ),
+                key=lambda product: product.sku,
+            )
+            if not kits:
+                raise ProductionCatalogError(
+                    "The catalog does not contain sellable kits"
+                )
 
-        return await self._produce_kits(kits, quantity_per_sku)
+            return await self._produce_kits(kits, quantity_per_sku)
 
     async def produce_kits(
         self, *, skus: list[str], quantity_per_sku: int
     ) -> dict[str, list[ProductionRun]]:
-        await self._initialize()
-        kits = []
-        for sku in skus:
-            product = self._catalog.get(sku)
-            if (
-                product is None
-                or not product.sellable
-                or product.production.at != "packaging"
-            ):
-                raise ProductionCatalogError(f"{sku} is not a sellable kit")
-            kits.append(product)
-        return await self._produce_kits(kits, quantity_per_sku)
+        with production_lock(self._session):
+            await self._initialize()
+            kits = []
+            for sku in skus:
+                product = self._catalog.get(sku)
+                if (
+                    product is None
+                    or not product.sellable
+                    or product.production.at != "packaging"
+                ):
+                    raise ProductionCatalogError(f"{sku} is not a sellable kit")
+                kits.append(product)
+            return await self._produce_kits(kits, quantity_per_sku)
 
     async def _produce_kits(
         self, kits: list[FarmaCentralProduct], quantity_per_sku: int
@@ -121,6 +126,83 @@ class KitProductionService:
                 kit, remaining, dependency_path=()
             )
         return result
+
+    async def maintain_kit_stock(
+        self, *, minimum: int, target: int, minimum_lifetime_seconds: float
+    ) -> dict[str, list[ProductionRun]]:
+        if minimum < 1 or target < minimum or minimum_lifetime_seconds < 0:
+            raise ValueError("Require 1 <= minimum <= target and nonnegative lifetime")
+        with production_lock(self._session):
+            await self._initialize()
+            # Also publish outputs recovered from an interrupted manual process.
+            await self._clear_packaging()
+            kits = [
+                p
+                for p in self._catalog.values()
+                if p.sellable and p.production.at == "packaging"
+            ]
+            if not kits:
+                raise ProductionCatalogError(
+                    "The catalog does not contain sellable kits"
+                )
+            kits.sort(
+                key=lambda p: (
+                    self._usable_stock(p.sku, minimum_lifetime_seconds),
+                    p.sku,
+                )
+            )
+            result = {}
+            failed_skus = []
+            for kit in kits:
+                stock = self._usable_stock(kit.sku, minimum_lifetime_seconds)
+                if stock >= minimum:
+                    continue
+                logger.info(
+                    "Replenishing %s: usable=%s minimum=%s target=%s",
+                    kit.sku,
+                    stock,
+                    minimum,
+                    target,
+                )
+                # Bound physical stock too when shelf life is shorter than
+                # the configured threshold, avoiding repeated purchases.
+                quantity = min(target - stock, target - self._usable_stock(kit.sku, 0))
+                if quantity <= 0:
+                    logger.warning(
+                        "%s has short-lived stock; waiting for consumption/expiry",
+                        kit.sku,
+                    )
+                    continue
+                try:
+                    result[kit.sku] = await self._produce_quantity(
+                        kit, quantity, dependency_path=()
+                    )
+                    await self._clear_packaging()
+                except KitProductionError as exc:
+                    self._session.rollback()
+                    # Never disturb an unresolved production in shared packaging.
+                    if self._session.scalar(
+                        select(ProductionRun.id)
+                        .where(ProductionRun.completed_at.is_(None))
+                        .limit(1)
+                    ):
+                        raise
+                    failed_skus.append(kit.sku)
+                    logger.warning(
+                        "Replenishment skipped %s (%s)", kit.sku, type(exc).__name__
+                    )
+            if failed_skus:
+                raise KitProductionError(
+                    "Failed to replenish: " + ", ".join(failed_skus)
+                )
+            return result
+
+    def _usable_stock(self, sku: str, minimum_lifetime_seconds: float) -> int:
+        cutoff = datetime.now(UTC) + timedelta(seconds=minimum_lifetime_seconds)
+        return sum(
+            unit.effective_expires_at > cutoff and unit.current_location.is_sellable
+            for unit in self._available_units(sku)
+        )
 
     def _completed_quantity(self, sku: str) -> int:
         quantity = self._session.scalar(
@@ -269,6 +351,11 @@ class KitProductionService:
         response = await SupplyRequestService(self._client, self._session).request(
             sku=product.sku, quantity=requested_quantity
         )
+        logger.info(
+            "Supply %s accepted; available at %s",
+            product.sku,
+            response.available_at.isoformat(),
+        )
         await _wait_until(response.available_at)
 
     async def _wait_for_available_units(
@@ -348,6 +435,7 @@ class KitProductionService:
             .where(
                 Product.sku == sku,
                 Unit.status == "available",
+                ~Unit.order_assignment.has(),
                 Unit.effective_expires_at > datetime.now(UTC),
             )
             .order_by(Unit.effective_expires_at, Unit.id)
@@ -432,6 +520,10 @@ def _split_quantity(quantity: int, maximum_chunk: int) -> list[int]:
 async def _wait_until(available_at: datetime) -> None:
     if available_at.tzinfo is None:
         available_at = available_at.replace(tzinfo=UTC)
-    seconds = (available_at - datetime.now(UTC)).total_seconds()
-    if seconds > 0:
-        await asyncio.sleep(seconds + 2)
+    while (seconds := (available_at - datetime.now(UTC)).total_seconds()) > 0:
+        logger.info(
+            "Waiting for production/supply: %.0f seconds until %s",
+            seconds,
+            available_at.isoformat(),
+        )
+        await asyncio.sleep(min(seconds + 2, 30))

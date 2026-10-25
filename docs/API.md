@@ -43,6 +43,8 @@ La documentación interactiva generada por FastAPI está disponible en:
 | `GET` | `/api/payments/{payment_id}/return/{result}` | Confirmar el resultado de un pago. |
 | `POST` | `/api/messaging` | Recibir y persistir mensajes autenticados, sin duplicados. |
 | `POST` | `/api/recalls` | Recibir y persistir retiros autenticados, sin duplicados. |
+| `GET` | `/api/recalls` | Listar los retiros y su estado de procesamiento. |
+| `GET` | `/api/recalls/{recall_id}` | Consultar un retiro y las unidades de stock identificadas. |
 
 ## Salud
 
@@ -716,3 +718,19 @@ al LLM ni se crea una OC en esta operación.
 Errores: `401` para Bearer ausente o token inválido, `422` para payload inválido
 y `503` si no se pueden verificar certificados o confirmar la persistencia.
 Un error no confirma la recepción: la plataforma puede reintentar el mismo ID.
+
+
+## Consulta pública de retiros
+
+`GET /api/recalls` devuelve una lista ordenada por emisión descendente. Cada
+retiro incluye `recall_id`, `batch`, `sku`, `reason`, `issued_at`, `deadline`,
+`status` y `reported_at`. Se muestran también los avisos persistidos que todavía
+no tienen investigación: `received` si están pendientes, `investigating` durante
+procesamiento y `failed` si ocurrió un error.
+
+`GET /api/recalls/{recall_id}` agrega `units`, con `product_id`, `sku`, `batch`,
+`original_location`, `current_location` y `quarantined_at`. Antes de identificar
+el lote, `units` puede estar vacío, incluido en un retiro fallido; no demuestra
+que el retiro carezca de productos afectados. Devuelve `404` si no existe el ID.
+La sincronización bloquea también los derivados tardíos. Si queda plazo, el
+worker actualiza la investigación y el reporte para incorporarlos.

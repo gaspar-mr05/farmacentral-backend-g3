@@ -22,6 +22,7 @@ from app.clients.purchase_orders import (
 )
 from app.core.config import Settings, get_settings
 from app.db.external_orders import InvalidExternalOrderError
+from app.db.operation_locks import operation_lock
 from app.models import (
     InboundEvent,
     InboundEventSource,
@@ -75,24 +76,31 @@ class MessagingProcessingService:
         result = MessagingProcessingResult()
         now = datetime.now(UTC)
         self._expire_old_messages(result, now)
-        event_ids = self._session.scalars(
-            select(InboundEvent.id)
+        events = self._session.execute(
+            select(InboundEvent.id, InboundEvent.external_event_id)
             .where(self._ready(now))
             .order_by(InboundEvent.received_at)
             .limit(self._settings.messaging_batch_size)
         ).all()
 
-        for event_id in event_ids:
-            event = self._session.scalar(
-                select(InboundEvent)
-                .where(InboundEvent.id == event_id, self._ready(datetime.now(UTC)))
-                .with_for_update(skip_locked=True)
-                .execution_options(populate_existing=True)
-            )
-            if event is None:
-                self._session.commit()
-                continue
-            await self._process_event(event, result)
+        for candidate in events:
+            with operation_lock(
+                self._session, f"message:{candidate.external_event_id}"
+            ) as acquired:
+                if not acquired:
+                    continue
+                event = self._session.scalar(
+                    select(InboundEvent)
+                    .where(
+                        InboundEvent.id == candidate.id, self._ready(datetime.now(UTC))
+                    )
+                    .with_for_update(skip_locked=True)
+                    .execution_options(populate_existing=True)
+                )
+                if event is None:
+                    self._session.commit()
+                    continue
+                await self._process_event(event, result)
         return result
 
     def _expire_old_messages(
@@ -107,11 +115,33 @@ class MessagingProcessingService:
         expired = [
             event for event in events if self._response_window_expired(event, now)
         ]
-        for event in expired:
-            self._fail(event, "Message response window expired before processing")
-        if expired:
-            self._session.commit()
-            result.failed += len(expired)
+        for candidate in expired:
+            with operation_lock(
+                self._session, f"message:{candidate.external_event_id}"
+            ) as acquired:
+                if not acquired:
+                    continue
+                event = self._session.scalar(
+                    select(InboundEvent)
+                    .where(
+                        InboundEvent.id == candidate.id,
+                        self._ready(now),
+                    )
+                    .with_for_update(skip_locked=True)
+                    .execution_options(populate_existing=True)
+                )
+                if event is None:
+                    self._session.commit()
+                    continue
+                if (
+                    self._response_window_expired(event, now)
+                    and event.responded_at is None
+                ):
+                    self._fail(
+                        event, "Message response window expired before processing"
+                    )
+                    result.failed += 1
+                self._session.commit()
 
     @staticmethod
     def _ready(now: datetime):
@@ -152,6 +182,13 @@ class MessagingProcessingService:
                 self._session.commit()
 
             if event.responded_at is None:
+                if self._response_window_expired(event, datetime.now(UTC)):
+                    self._fail(
+                        event, "Message response window expired during interpretation"
+                    )
+                    self._session.commit()
+                    result.failed += 1
+                    return
                 await self._respond(event)
                 event.responded_at = datetime.now(UTC)
                 self._session.commit()

@@ -9,11 +9,9 @@ from app.models import (
     Location,
     Lot,
     ProductionInputUnit,
-    Recall,
-    RecallLot,
-    RecallStatus,
     Unit,
 )
+from app.queries.recalls import blocked_lots
 from app.schemas.units import UnitData
 
 
@@ -67,21 +65,8 @@ def upsert_units(
         )
     }
     consumed_unit_ids = set(session.scalars(select(ProductionInputUnit.unit_id)))
-    blocked_lot_ids = set(
-        session.scalars(
-            select(RecallLot.lot_id)
-            .join(Recall, Recall.id == RecallLot.recall_id)
-            .where(
-                Recall.status.in_(
-                    [
-                        RecallStatus.RESPONDING,
-                        RecallStatus.FAILED,
-                        RecallStatus.COMPLETED,
-                    ]
-                )
-            )
-        )
-    )
+    affected = blocked_lots()
+    blocked_lot_ids = set(session.scalars(select(affected.c.lot_id)))
     location_changes: list[UnitLocationChange] = []
     created_units: list[Unit] = []
     created = updated = 0

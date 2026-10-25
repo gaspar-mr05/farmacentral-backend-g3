@@ -52,7 +52,11 @@ class OrderProcessingService:
             self._session.flush()
             return order
 
-        if order.status in {OrderStatus.ACCEPTED, OrderStatus.REJECTED}:
+        if order.status in {
+            OrderStatus.ACCEPTED,
+            OrderStatus.REJECTED,
+            OrderStatus.DISPATCHED,
+        }:
             self._complete_missing_audit(order, now)
             return order
 
@@ -177,6 +181,7 @@ class OrderProcessingService:
             select(Order)
             .options(selectinload(Order.items))
             .where(Order.id == order_id)
+            .execution_options(populate_existing=True)
             .with_for_update()
         )
         if order is None:

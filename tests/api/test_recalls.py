@@ -86,6 +86,25 @@ def test_persists_recall_before_ack_without_processing(
     assert saved.attempt_count == 0
 
 
+def test_query_exposes_failure_before_investigation_exists(
+    authenticated_client, issuer, db_session
+):
+    client, _ = authenticated_client
+    assert post(client, issuer).status_code == 204
+    event = db_session.scalars(select(InboundEvent)).one()
+    event.status = InboundEventStatus.FAILED
+    event.last_error = "Origin batch is not synchronized"
+    db_session.commit()
+
+    detail = client.get(f"/api/recalls/{event.external_event_id}")
+    assert detail.status_code == 200
+    assert detail.json()["status"] == "failed"
+    assert detail.json()["units"] == []
+    listing = client.get("/api/recalls")
+    assert listing.status_code == 200
+    assert listing.json()[0]["status"] == "failed"
+
+
 @pytest.mark.parametrize("already_processed", [False, True])
 def test_duplicate_preserves_the_original_recall(
     authenticated_client, issuer, db_session, already_processed

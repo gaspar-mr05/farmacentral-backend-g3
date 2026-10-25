@@ -6,7 +6,8 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.clients.farma_central import FarmaCentralClient
+from app.clients.farma_central import FarmaCentralClient, FarmaCentralHTTPError
+from app.db.operation_locks import operation_lock
 from app.models import (
     Location,
     OrderUnit,
@@ -39,6 +40,16 @@ class RecallResponseError(Exception):
     pass
 
 
+class RecallNotificationUncertainError(RecallResponseError):
+    """The API offers neither a receipt lookup nor a deduplication guarantee."""
+
+    def __init__(self, recall_id: str, order_id: str):
+        super().__init__(
+            f"Notification outcome unknown: recall={recall_id}, order={order_id}. "
+            "Resolve with scripts.resolve_recall_notification and official evidence"
+        )
+
+
 @dataclass(frozen=True)
 class RecallResponseResult:
     recall_id: str
@@ -50,8 +61,22 @@ class RecallResponseService:
     def __init__(self, client: FarmaCentralClient, session: Session) -> None:
         self._client = client
         self._session = session
+        self._resume_quarantine = False
 
     async def respond(self, recall_id: str) -> RecallResponseResult:
+        with operation_lock(self._session, f"recall:{recall_id}") as acquired:
+            if not acquired:
+                raise RecallResponseError("Recall is already being processed")
+            previous = self._session.scalar(
+                select(Recall.status).where(Recall.recall_id == recall_id)
+            )
+            self._resume_quarantine = previous in {
+                RecallStatus.RESPONDING,
+                RecallStatus.FAILED,
+            }
+            return await self._respond(recall_id)
+
+    async def _respond(self, recall_id: str) -> RecallResponseResult:
         investigation = RecallInvestigationService(self._session).investigate(
             recall_id, block_stock=True
         )
@@ -168,7 +193,30 @@ class RecallResponseService:
                 self._session.delete(assignment)
 
             if unit.current_location_id != quarantine.id:
-                await self._client.move_product(unit.external_unit_id, quarantine.code)
+                present = False
+                if self._resume_quarantine:
+                    observed = await self._client.get_space_products(
+                        quarantine.code, unit.lot.product.sku, limit=200
+                    )
+                    if not isinstance(observed, list) or any(
+                        not isinstance(item, dict) or "_id" not in item
+                        for item in observed
+                    ):
+                        raise RecallResponseError(
+                            "Cannot reconcile quarantine inventory"
+                        )
+                    present = any(
+                        item["_id"] == unit.external_unit_id for item in observed
+                    )
+                    if not present and len(observed) >= 200:
+                        raise RecallResponseError(
+                            "Quarantine listing is truncated; "
+                            "cannot prove whether the move completed"
+                        )
+                if not present:
+                    await self._client.move_product(
+                        unit.external_unit_id, quarantine.code
+                    )
                 record_move(self._session, unit=unit, to_location_id=quarantine.id)
                 moved += 1
             unit.status = "quarantined"
@@ -186,36 +234,63 @@ class RecallResponseService:
                     joinedload(RecallOrder.deliveries),
                     joinedload(RecallOrder.notification),
                 )
+                .execution_options(populate_existing=True)
                 .order_by(RecallOrder.id)
             ).unique()
         )
         sent = 0
         for affected in orders:
             self._check_deadline(recall)
-            if (
-                affected.notification is not None
-                and affected.notification.status == RecallNotificationStatus.SENT
-            ):
-                continue
             request = RecallNotificationRequest(
                 orderId=affected.order.external_order_id or str(affected.order.id),
                 customerName=affected.order.buyer_name,
-                productIds=[
+                productIds=sorted(
                     delivery.unit.external_unit_id for delivery in affected.deliveries
-                ],
+                ),
                 message=f"Retiro de productos por {recall.reason}",
             )
             notification = affected.notification
+            payload = request.model_dump(by_alias=True, exclude_none=True)
+            if (
+                notification is not None
+                and notification.status == RecallNotificationStatus.SENT
+                and notification.payload.get("orderId") == request.order_id
+                and set(notification.payload.get("productIds", []))
+                == set(request.product_ids)
+            ):
+                continue
+            if (
+                notification is not None
+                and notification.attempt_count
+                and (
+                    notification.status == RecallNotificationStatus.PENDING
+                    or (notification.response or {}).get("delivery_state")
+                    == "uncertain"
+                    or (
+                        notification.status == RecallNotificationStatus.FAILED
+                        and notification.response is None
+                    )
+                )
+            ):
+                raise RecallNotificationUncertainError(
+                    recall.recall_id, request.order_id
+                )
             if notification is None:
                 notification = RecallNotification(
                     recall_order=affected,
-                    payload=request.model_dump(by_alias=True, exclude_none=True),
+                    payload=payload,
                     attempt_count=0,
                 )
                 self._session.add(notification)
+            notification.payload = payload
             notification.status = RecallNotificationStatus.PENDING
+            notification.sent_at = None
             notification.attempt_count += 1
             notification.last_error = None
+            notification.response = {
+                **(notification.response or {}),
+                "delivery_state": "pending",
+            }
             self._session.commit()
 
             try:
@@ -223,10 +298,28 @@ class RecallResponseService:
             except Exception as exc:
                 notification.status = RecallNotificationStatus.FAILED
                 notification.last_error = str(exc)[:1000]
+                rejected = (
+                    isinstance(exc, FarmaCentralHTTPError)
+                    and 400 <= exc.status_code < 500
+                    and exc.status_code != 408
+                )
+                notification.response = {
+                    **(notification.response or {}),
+                    "delivery_state": "rejected" if rejected else "uncertain",
+                }
                 self._session.commit()
+                if not rejected:
+                    raise RecallNotificationUncertainError(
+                        recall.recall_id, request.order_id
+                    ) from exc
                 raise
+            response = {
+                **(notification.response or {}),
+                "delivery_state": "confirmed",
+            }
             notification.status = RecallNotificationStatus.SENT
             notification.sent_at = datetime.now(UTC)
+            notification.response = response
             self._session.commit()
             sent += 1
         return sent

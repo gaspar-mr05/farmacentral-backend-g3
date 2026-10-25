@@ -20,6 +20,7 @@ from app.schemas.farma_central import (
     FarmaCentralSupplyResponse,
 )
 from app.services.production.consumption import consume_units_for_run
+from app.services.production.locking import ProductionBusyError, production_lock
 from app.services.production.runs import start_production_run
 
 
@@ -60,6 +61,28 @@ async def produce(
     quantity: int,
 ) -> tuple[ProductionRun, FarmaCentralSupplyResponse]:
     """Produce any packaging SKU and persist the exact consumed units."""
+    with production_lock(session):
+        if (
+            session.scalar(
+                select(ProductionRun.id)
+                .where(ProductionRun.completed_at.is_(None))
+                .limit(1)
+            )
+            is not None
+        ):
+            raise ProductionBusyError(
+                "Recover pending production before starting another run"
+            )
+        return await _produce(session, client=client, sku=sku, quantity=quantity)
+
+
+async def _produce(
+    session: Session,
+    *,
+    client: FarmaCentralClient,
+    sku: str,
+    quantity: int,
+) -> tuple[ProductionRun, FarmaCentralSupplyResponse]:
     recipe = await _get_recipe(client, sku)
     _validate_quantity(recipe, quantity)
     input_units_by_lot = await _resolve_input_units(

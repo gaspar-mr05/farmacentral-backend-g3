@@ -1,6 +1,6 @@
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models import ExternalOrderStatus, Order, OrderItem, OrderSource, OrderStatus
 from app.schemas.purchase_orders import PurchaseOrder
@@ -19,6 +19,7 @@ def upsert_external_order(
         raise InvalidExternalOrderError(
             "The local sales model requires whole-peso prices"
         )
+    session.flush()
     unit_price = int(detail.unit_price)
     values = {
         "external_customer_id": detail.customer_id,
@@ -53,13 +54,35 @@ def upsert_external_order(
     order = session.scalars(
         select(Order)
         .where(Order.external_order_id == detail.id.lower())
+        .options(selectinload(Order.items))
+        .execution_options(populate_existing=True)
         .with_for_update()
     ).one()
     if order_id is None:
-        for field, value in values.items():
-            setattr(order, field, value)
         item = order.items[0]
+        if any(item.assigned_units for item in order.items) and (
+            item.sku != detail.sku
+            or item.quantity != detail.quantity
+            or item.unit_price != unit_price
+        ):
+            raise InvalidExternalOrderError(
+                "Cannot rewrite items with reserved or dispatched units"
+            )
+        for field, value in values.items():
+            if field == "external_status" and (
+                (
+                    value == ExternalOrderStatus.CREATED
+                    and order.external_status != ExternalOrderStatus.CREATED
+                )
+                or (
+                    order.external_status == ExternalOrderStatus.FULFILLED
+                    and value == ExternalOrderStatus.ACCEPTED
+                )
+            ):
+                continue
+            setattr(order, field, value)
         item.sku = detail.sku
         item.quantity = detail.quantity
         item.unit_price = unit_price
+    session.flush()
     return order

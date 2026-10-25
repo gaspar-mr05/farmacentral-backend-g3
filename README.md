@@ -1051,7 +1051,7 @@ tiempos dependen del equipo y de la carga de la base.
 
 ## Entrega 2: workers autónomos (paso 19)
 
-Los procesos de sFTP, Pub/Sub, mensajería, cumplimiento de OCs y recalls se
+Los procesos de sFTP, Pub/Sub, mensajería, cumplimiento de OCs, recalls y reposición se
 ejecutan separados de FastAPI. Cada uno reutiliza el loop y el estado durable en
 PostgreSQL de su integración; si una API externa falla, espera su intervalo antes
 de volver a intentar y no bloquea los demás canales.
@@ -1080,7 +1080,7 @@ sudo systemctl enable --now farmacentral-workers.target
 sudo systemctl restart farmacentral-backend.service
 ```
 
-El target inicia cinco servicios independientes. El backend los agrupa para que
+El target inicia seis servicios independientes. El backend los agrupa para que
 un despliegue los reinicie sin ejecutar comandos privilegiados adicionales:
 
 ```bash
@@ -1092,6 +1092,54 @@ sudo journalctl -u 'farmacentral-worker@*' -n 100 --no-pager
 Antes de habilitarlos deben estar configuradas las credenciales sFTP, Pub/Sub y
 LLM descritas en los pasos anteriores. Los intervalos de recalls se pueden
 ajustar con `RECALL_POLL_INTERVAL_SECONDS` y `RECALL_BATCH_SIZE`.
+
+### Reposición autónoma de kits
+
+`scripts.replenish_inventory` cuenta stock actual disponible, sin asignaciones,
+con batches oficiales, linaje completo y vida útil suficiente. La producción
+histórica, el stock vencido, reservado, consumido y bloqueado por recalls no
+cubren el mínimo. Reutiliza insumos y acondicionados aptos; solicita los faltantes
+mediante abastecimiento oficial, fabrica según la receta y mueve cada kit
+terminado al buffer. Recupera las producciones pendientes antes de iniciar otras.
+No llama al LLM.
+
+La configuración opcional de `.env` y `.env.local` es:
+
+```dotenv
+REPLENISHMENT_POLL_INTERVAL_SECONDS=60
+REPLENISHMENT_MINIMUM_STOCK=2
+REPLENISHMENT_TARGET_STOCK=6
+REPLENISHMENT_MINIMUM_LIFETIME_SECONDS=14400
+```
+
+Son valores por kit: reponer bajo 2 unidades útiles hasta 6, con al menos cuatro
+horas de vida restante. Ajustarlos al consumo, los plazos de las OCs y la capacidad
+del buffer. El tamaño de lote puede redondear la cantidad producida hacia arriba.
+El stock físico disponible también limita la reposición: si la vida útil real es
+menor al umbral configurado, se registra una advertencia y se espera consumo o
+vencimiento en lugar de comprar indefinidamente. Las unidades en cuarentena
+permanecen excluidas y no se reutilizan.
+
+Una conexión dedicada mantiene un bloqueo PostgreSQL durante todo el ciclo de
+producción, incluso entre commits. El mismo bloqueo protege la producción manual
+y el vaciado de acondicionamiento. Un segundo proceso espera al próximo ciclo;
+un comando manual informa que el área está ocupada.
+
+Para instalar el sexto worker en un servidor que ya tenía los cinco anteriores,
+copiar nuevamente el target y recargar systemd:
+
+```bash
+sudo cp deploy/farmacentral-workers.target /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart farmacentral-backend.service
+sudo systemctl start farmacentral-worker@replenish_inventory.service
+systemctl status farmacentral-worker@replenish_inventory.service --no-pager
+sudo journalctl -u farmacentral-worker@replenish_inventory.service -n 100 --no-pager
+```
+
+La ejecución manual `.venv/bin/python -m scripts.replenish_inventory --once`
+**compra y fabrica realmente**; no forma parte de las pruebas automatizadas.
+En local, ejecutar ese worker como otro proceso si se requiere reposición.
 
 Pruebas específicas:
 
@@ -1108,7 +1156,15 @@ Central. Ese estado excluye venta, asignación, movimientos normales y consumo.
 Tras confirmar el movimiento se guarda `quarantined` y su evento de custodia.
 La sincronización conserva ambos estados y no restaura ubicaciones de una
 lectura anterior; las unidades nuevas de lotes ya bloqueados también quedan
-como `recall_pending` hasta que se ejecute nuevamente la respuesta al recall.
+como `recall_pending`. Esto incluye descendientes enlazados después de completar
+el retiro, aunque ya haya vencido. Antes del vencimiento, el worker detecta lotes,
+stock o entregas nuevos y actualiza la investigación, la cuarentena y el reporte.
+Sólo vuelve a notificar una OC ya notificada si cambió su conjunto de productos.
+Un retiro sin cambios no genera reportes ni notificaciones repetidos. Después del
+plazo se conserva el bloqueo local sin enviar reportes tardíos.
+
+La API pública muestra `failed` si el evento falló antes de poder persistir la
+investigación; no presenta ese caso como una recepción todavía pendiente.
 
 Un despacho con intención persistida se reconcilia con el conteo oficial y el
 inventario del área de despacho: se registra la entrega si ya ocurrió o se
@@ -1185,6 +1241,18 @@ retiro. La respuesta del recall continúa fallando explícitamente en ese caso.
 
 ### Validar un flujo real de la entrega 2 sin consumir LLM
 
+Para las pruebas automatizadas, levantar PostgreSQL local y ejecutar:
+
+```bash
+.venv/bin/python -m scripts.test_e2
+```
+
+El comando usa `TEST_DATABASE_URL`, o `DATABASE_URL` de la aplicación si no está
+definida. Exige PostgreSQL local, ejecuta la suite con esquemas temporales y
+bloquea conexiones externas de los sockets de Python. Los clientes externos,
+incluido el LLM, se prueban con respuestas simuladas. Requiere las dependencias
+de desarrollo (`pip install -e '.[dev]'`). No inicia los workers reales.
+
 Ejecutar desde la raíz del backend y con la configuración de **desarrollo**.
 `scripts.validate_e2_flow` utiliza `.env` y `.env.local` con la misma precedencia
 que la aplicación. No necesita abrir el frontend. La ejecución inicial consulta
@@ -1198,6 +1266,72 @@ La salida muestra las migraciones, las cantidades históricas producidas por SKU
 (`inventory.completed_quantities`) y cuántas unidades históricas siguen sin lote
 oficial. Los IDs de OC y recall faltantes quedan como `pending`.
 Si falta una migración, aplicarla con `.venv/bin/alembic upgrade head`.
+
+Para encontrar los IDs recientes sin copiar ejemplos ni consultar APIs:
+
+```bash
+.venv/bin/python -m scripts.validate_e2_flow --list-ids
+```
+
+Muestra hasta 20 OCs por canal y los últimos 20 avisos de mensajería y recalls,
+con sus estados. No imprime el texto de los mensajes ni credenciales. Una OC
+`rejected` permite comprobar la decisión, pero para demostrar cumplimiento se
+necesita una `dispatched`. Un aviso del botón "Probar conexión" del portal no
+reemplaza un recall simulado sobre un lote real.
+
+Para comprobar un mensaje **ya recibido**, sin volver a llamar al gateway:
+
+```bash
+read -r -p "ID del mensaje recibido: " MESSAGE_ID
+.venv/bin/python -m scripts.validate_e2_flow --message-id "$MESSAGE_ID"
+```
+
+Verifica la respuesta dentro de 30 minutos, la decisión y su auditoría. Si fue un
+pedido, comprueba su interpretación persistida, la OC vinculada y la decisión en
+el servicio oficial. No interpreta ni responde mensajes nuevos, no inicia el
+worker de mensajería y no permite deducir que la interpretación del texto sea
+correcta: esa comparación sigue siendo manual. Si el mensaje está pendiente,
+lo informa; el script no hace avanzar el procesamiento.
+
+Para revisar los cinco workers del paso 19, ejecutar **en el servidor**:
+
+```bash
+.venv/bin/python -m scripts.validate_e2_flow --check-workers
+```
+
+Consulta `systemctl show` sin sudo y exige servicios cargados, activos, en estado
+`running` y con reinicio automático. No inicia ni reinicia servicios. El sexto
+worker de reposición se comprueba sólo al agregar `--include-replenishment`.
+Si systemd no está disponible en el equipo, la comprobación queda pendiente.
+
+El checklist conjunto se ejecuta con IDs reales obtenidos de `--list-ids`:
+
+```bash
+read -r -p "ID de OC de sFTP: " OC_SFTP
+read -r -p "ID de OC de Pub/Sub: " OC_PUBSUB
+read -r -p "ID del mensaje recibido: " MESSAGE_ID
+read -r -p "ID del recall real: " RECALL_ID
+.venv/bin/python -m scripts.validate_e2_flow \
+  --step19 \
+  --order-id "$OC_SFTP" --order-id "$OC_PUBSUB" \
+  --message-id "$MESSAGE_ID" --recall-id "$RECALL_ID" \
+  --wait-seconds 180 \
+  --output "/tmp/validacion-e2-$(date +%Y%m%d-%H%M%S).json"
+```
+
+`--step19` agrega una comprobación de cobertura: migraciones, salud, una OC
+cumplida por sFTP y otra por Pub/Sub, un mensaje auditado, un recall válido,
+listado/detalle públicos coherentes con la DB y los cinco workers. No exige que
+las OCs pertenezcan al mismo recall ni que el recall tenga entregas o derivados.
+Un rechazo oficial coherente pasa como decisión válida con `fulfilled: false`;
+queda pendiente la evidencia de cumplimiento de ese canal. Una OC de mensajería
+también puede consultarse con `--order-id` para verificar su despacho.
+
+Este checklist no certifica toda la entrega: no valida una firma OIDC real,
+el tiempo de ACK de un webhook real, la solución esperada del portal, el reinicio
+conservando estado ni 36 horas de disponibilidad. Esas limitaciones se registran
+en `not_verified`. Las pruebas automatizadas cubren los contratos y casos de
+error con servicios simulados; la validación real cubre los IDs indicados.
 
 Para preparar productos, elegir un kit del catálogo y una **meta acumulada**
 mayor que su producción histórica. Por ejemplo, si ya se produjeron 30 unidades,
@@ -1213,7 +1347,7 @@ de lote. Repetir la misma meta evita volver a solicitar kits ya completados:
 acondicionamiento y buffer. Reutiliza stock con batches oficiales y trazabilidad
 completa, solicita los insumos faltantes mediante abastecimiento normal y deja
 los productos terminados en buffer. No usa el sandbox de creación de unidades.
-No ejecutarlo mientras otro operador o proceso esté fabricando en la misma área.
+Si otro proceso está fabricando, el bloqueo compartido impide iniciar esta ejecución.
 La cantidad preparada debe alcanzar para las OCs y dejar unidades en stock para
 comprobar también la cuarentena. Una respuesta fallida de abastecimiento puede
 haber creado insumos: revisar inventario antes de repetir la preparación.
@@ -1238,16 +1372,24 @@ El script consulta cada 10 segundos, deja trabajar a los workers existentes y no
 consume ni confirma mensajes de las colas. Comprueba cumplimiento oficial de
 las OCs, plazo, trazabilidad y custodia; para el recall compara el reporte con
 la investigación, las notificaciones y el stock observado en la cuarentena
-oficial. Exige que las OCs de ambos canales estén incluidas en el mismo retiro
-y que este cubra stock, entregas y al menos dos generaciones de derivados.
+oficial. Cada OC y recall se valida por separado: se puede ejecutar sólo
+`--recall-id` o sólo `--order-id`. Un recall sin stock, sin entregas o sin derivados
+puede ser válido; esas listas no se exigen artificialmente. Cuando los IDs
+corresponden al mismo flujo, también se registra su vinculación y los canales
+cubiertos. Un error reintentable permanece pendiente mientras el retiro tenga plazo.
+También consulta `GET /api/recalls` y `GET /api/recalls/{recall_id}` para contrastar
+el listado y los IDs/SKU del detalle con los datos persistidos. Un fallo de una
+consulta se registra por separado; los errores transitorios pueden reintentarse
+durante `--wait-seconds` sin ocultar las demás comprobaciones.
 Las lecturas de cuarentena están limitadas a 200 unidades por SKU; si no puede
 confirmar todas las unidades, deja la comprobación pendiente.
 
-La evidencia JSON distingue `passed`, `pending` y `failed`. El código de salida
+La evidencia JSON distingue `passed`, `pending`, `failed` y `skipped` para ámbitos
+no solicitados o vinculaciones que no corresponden. El código de salida
 es `0` para las comprobaciones solicitadas aprobadas, `1` ante fallas y `2` si
 queda algo pendiente. Un `0` no certifica toda la entrega: aún se debe comparar
-con la solución esperada del portal y validar operación continua. La mensajería
-real queda fuera de este script: **no llama al LLM ni inicia su worker**.
+con la solución esperada del portal y validar operación continua. La consulta
+de auditoría de mensajería **no llama al LLM ni inicia su worker**.
 Los archivos de evidencia existentes no se sobrescriben; usar otra ruta en cada
 ejecución. No es necesario subirlos a Git.
 
@@ -1255,5 +1397,26 @@ Pruebas aisladas del validador y del servicio de producción:
 
 ```bash
 .venv/bin/python -m pytest -q tests/scripts/test_validate_e2_flow.py \
+  tests/scripts/test_e2_checks.py tests/scripts/test_test_e2.py \
   tests/services/production/test_kits.py
 ```
+
+## Entrega 2: idempotencia y reintentos (paso 20)
+
+Se mantienen las claves únicas y los workers existentes. El procesamiento de un
+mensaje o recall conserva un lock PostgreSQL entre commits; las decisiones de OC
+se refrescan bajo lock y no se sobrescriben ítems con unidades asignadas. Una
+respuesta interrumpida reconcilia cuarentenas pendientes antes de repetir movimientos.
+
+Las notificaciones de recall guardan su intención antes de enviarse. Si se pierde
+la confirmación y no se conoce el resultado, se bloquea el reenvío para evitar
+duplicados. `scripts.resolve_recall_notification` registra evidencia para que el
+worker continúe antes del deadline. No se agregan migraciones ni variables.
+
+```bash
+.venv/bin/python -m scripts.test_e2 --step20
+```
+
+La [guía del paso 20](docs/ENTREGA2_PASO20.md) documenta claves, escenarios de caída,
+límites de las APIs y comandos de recuperación. Las pruebas usan PostgreSQL local
+y servicios simulados; no llaman al LLM.

@@ -1,4 +1,5 @@
 import logging
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -7,13 +8,25 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.clients.farma_central import FarmaCentralClient, FarmaCentralError
+from app.clients.farma_central import (
+    FarmaCentralClient,
+    FarmaCentralError,
+    FarmaCentralHTTPError,
+)
 from app.core.config import Settings, get_settings
 from app.db.inbound_events import record_recall
-from app.models import InboundEvent, InboundEventSource, InboundEventStatus
+from app.db.operation_locks import operation_lock
+from app.models import (
+    InboundEvent,
+    InboundEventSource,
+    InboundEventStatus,
+    Recall,
+    RecallStatus,
+)
+from app.queries.recalls import findings_changed
 from app.schemas.recalls import RecallWebhookPayload
 
-from .response import RecallResponseService
+from .response import RecallNotificationUncertainError, RecallResponseService
 
 logger = logging.getLogger(__name__)
 PROCESSING_RECOVERY_DELAY = timedelta(minutes=1)
@@ -43,8 +56,38 @@ class RecallWorkerService:
     async def poll(self) -> RecallWorkerResult:
         result = RecallWorkerResult()
         await self._receive_active_recalls(result)
+        self._reopen_changed_recalls()
         await self._process_pending(result)
         return result
+
+    def _reopen_changed_recalls(self) -> None:
+        # Inventory synchronization commits the block before this separate
+        # transaction updates events, avoiding unit/event lock inversion.
+        events = list(
+            self._session.scalars(
+                select(InboundEvent)
+                .join(Recall, Recall.inbound_event_id == InboundEvent.id)
+                .where(
+                    InboundEvent.status == InboundEventStatus.PROCESSED,
+                    Recall.status == RecallStatus.COMPLETED,
+                    Recall.deadline > datetime.now(UTC),
+                )
+                .with_for_update(of=InboundEvent, skip_locked=True)
+            )
+        )
+        for event in events:
+            recall = self._session.scalar(
+                select(Recall).where(Recall.inbound_event_id == event.id)
+            )
+            if findings_changed(self._session, recall):
+                event.status = InboundEventStatus.PENDING
+                event.next_retry_at = None
+                event.last_error = None
+                logger.info(
+                    "Recall findings changed; updating report: recall_id=%s",
+                    recall.recall_id,
+                )
+        self._session.commit()
 
     async def _receive_active_recalls(self, result: RecallWorkerResult) -> None:
         try:
@@ -81,24 +124,31 @@ class RecallWorkerService:
 
     async def _process_pending(self, result: RecallWorkerResult) -> None:
         now = datetime.now(UTC)
-        event_ids = self._session.scalars(
-            select(InboundEvent.id)
+        events = self._session.execute(
+            select(InboundEvent.id, InboundEvent.external_event_id)
             .where(self._ready(now))
             .order_by(InboundEvent.received_at)
             .limit(self._settings.recall_batch_size)
         ).all()
 
-        for event_id in event_ids:
-            event = self._session.scalar(
-                select(InboundEvent)
-                .where(InboundEvent.id == event_id, self._ready(datetime.now(UTC)))
-                .with_for_update(skip_locked=True)
-                .execution_options(populate_existing=True)
-            )
-            if event is None:
-                self._session.commit()
-                continue
-            await self._process_event(event, result)
+        for candidate in events:
+            with operation_lock(
+                self._session, f"recall:{candidate.external_event_id}"
+            ) as acquired:
+                if not acquired:
+                    continue
+                event = self._session.scalar(
+                    select(InboundEvent)
+                    .where(
+                        InboundEvent.id == candidate.id, self._ready(datetime.now(UTC))
+                    )
+                    .with_for_update(skip_locked=True)
+                    .execution_options(populate_existing=True)
+                )
+                if event is None:
+                    self._session.commit()
+                    continue
+                await self._process_event(event, result)
 
     async def _process_event(
         self, event: InboundEvent, result: RecallWorkerResult
@@ -137,15 +187,36 @@ class RecallWorkerService:
         except SQLAlchemyError:
             self._session.rollback()
             raise
+        except RecallNotificationUncertainError as exc:
+            self._session.rollback()
+            event = self._session.get(InboundEvent, event.id)
+            self._fail(event, str(exc))
+            self._session.commit()
+            result.failed += 1
+            logger.error(
+                "Recall requires notification reconciliation: recall_id=%s",
+                recall.recall_id,
+            )
+            return
         except Exception as exc:
             self._session.rollback()
             event = self._session.get(InboundEvent, event.id)
-            self._fail(
-                event,
-                str(exc),
-                retry_at=datetime.now(UTC)
-                + timedelta(seconds=self._settings.recall_poll_interval_seconds),
-            )
+            delay = self._settings.recall_poll_interval_seconds
+            retry_at = datetime.now(UTC) + timedelta(seconds=delay)
+            if isinstance(exc, FarmaCentralHTTPError):
+                if 400 <= exc.status_code < 500 and exc.status_code not in {
+                    401,
+                    403,
+                    429,
+                }:
+                    retry_at = None
+                elif exc.retry_after_seconds is not None and math.isfinite(
+                    exc.retry_after_seconds
+                ):
+                    retry_at = datetime.now(UTC) + timedelta(
+                        seconds=max(delay, exc.retry_after_seconds)
+                    )
+            self._fail(event, str(exc), retry_at=retry_at)
             self._session.commit()
             result.failed += 1
             logger.warning(

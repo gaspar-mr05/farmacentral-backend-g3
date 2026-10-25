@@ -1,14 +1,161 @@
+from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import InboundEvent, InboundEventStatus, Recall, RecallStatus
+from app.models import (
+    InboundEvent,
+    InboundEventStatus,
+    LotOrigin,
+    OrderUnit,
+    ProductionRun,
+    Recall,
+    RecallStatus,
+    Unit,
+)
+from app.schemas.inventory import InventoryData
+from app.schemas.locations import LocationData
+from app.schemas.lots import LotData
+from app.schemas.units import UnitData
+from app.services.inventory.sync import sync_inventory
 from app.services.recalls import RecallWorkerService
 from tests.services.test_recalls import recall_database as recall_database
 from tests.support.farma_central import make_settings
 from tests.support.recalls import RecallInventory
+
+
+@pytest.mark.anyio
+async def test_late_delivery_updates_same_customer_notification(recall_database):
+    with Session(recall_database, expire_on_commit=False) as session:
+        inventory = RecallInventory(session)
+        origin = inventory.lot("origin", "RAW")
+        first = inventory.unit("delivered", origin)
+        order = inventory.order((first, True))
+        client = AsyncMock()
+        client.get_active_recalls.return_value = [
+            {
+                "recallId": "rcl-deliveries",
+                "batch": origin.external_lot_id,
+                "sku": origin.product.sku,
+                "reason": "Calidad",
+                "issuedAt": inventory.now,
+                "deadline": inventory.expiry,
+            }
+        ]
+        client.get_spaces.return_value = [
+            {
+                "_id": inventory.locations["quarantine"].code,
+                "quarantine": True,
+            }
+        ]
+        session.commit()
+        worker = RecallWorkerService(client, session, settings=make_settings())
+        assert (await worker.poll()).completed == 1
+        client.notify_recall.assert_awaited_once()
+
+        second = inventory.unit("late-delivery", origin, status="dispatched")
+        order.items[0].quantity = 2
+        order.items[0].assigned_units.append(
+            OrderUnit(unit=second, dispatched_at=inventory.now)
+        )
+        session.commit()
+        assert (await worker.poll()).completed == 1
+        assert client.notify_recall.await_count == 2
+        assert set(client.notify_recall.call_args.args[1].product_ids) == {
+            first.external_unit_id,
+            second.external_unit_id,
+        }
+        assert (await worker.poll()).completed == 0
+        assert client.notify_recall.await_count == 2
+        assert client.report_recall.await_count == 2
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("expired", [False, True])
+async def test_late_production_is_blocked_and_report_updated_only_before_deadline(
+    recall_database, expired
+):
+    with Session(recall_database) as session:
+        inventory = RecallInventory(session)
+        origin = inventory.lot("origin", "RAW")
+        raw = inventory.unit("raw", origin, status="consumed")
+        output = inventory.lot("output")
+        inventory.link(None, origin, consumed_unit=raw)
+        run = session.scalars(select(ProductionRun)).one()
+        run.expected_sku = output.product.sku
+        session.commit()
+        client = AsyncMock()
+        client.get_active_recalls.return_value = [
+            {
+                "recallId": "rcl-late",
+                "batch": origin.external_lot_id,
+                "sku": origin.product.sku,
+                "reason": "Calidad",
+                "issuedAt": inventory.now,
+                "deadline": inventory.expiry,
+            }
+        ]
+        client.get_spaces.return_value = [
+            {
+                "_id": inventory.locations["quarantine"].code,
+                "quarantine": True,
+            }
+        ]
+        worker = RecallWorkerService(client, session, settings=make_settings())
+        assert (await worker.poll()).completed == 1
+        recall = session.scalars(select(Recall)).one()
+        if expired:
+            recall.issued_at = inventory.now - timedelta(minutes=2)
+            recall.deadline = inventory.now - timedelta(seconds=1)
+            recall.reported_at = inventory.now - timedelta(seconds=2)
+            session.commit()
+
+        location = inventory.locations["buffer"]
+        sync_inventory(
+            session,
+            InventoryData(
+                products=(),
+                locations=(LocationData(location.code, "Buffer", False),),
+                lots=(
+                    LotData(
+                        output.external_lot_id,
+                        output.product.sku,
+                        inventory.expiry,
+                        LotOrigin.OWN_PRODUCTION,
+                    ),
+                ),
+                units=(
+                    UnitData(
+                        "late-output",
+                        output.external_lot_id,
+                        location.code,
+                        "available",
+                        inventory.expiry,
+                    ),
+                ),
+            ),
+        )
+        session.commit()
+        unit = session.scalar(
+            select(Unit).where(Unit.external_unit_id == "late-output")
+        )
+        assert run.output_lot_id == output.id
+        assert unit.status == "recall_pending"
+
+        second = await worker.poll()
+        assert second.completed == (0 if expired else 1)
+        assert unit.status == ("recall_pending" if expired else "quarantined")
+        assert client.report_recall.await_count == (1 if expired else 2)
+        if not expired:
+            report = client.report_recall.call_args.args[1]
+            assert {item.product_id for item in report.in_stock} == {"late-output"}
+            assert {item.batch for item in report.derived_batches} == {
+                output.external_lot_id
+            }
+            assert (await worker.poll()).completed == 0
+            assert client.report_recall.await_count == 2
 
 
 @pytest.mark.anyio
