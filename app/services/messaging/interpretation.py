@@ -160,14 +160,15 @@ def _discard_reason(
 ) -> str | None:
     text = _normalize(message.text)
     intent = re.search(
-        r"\b(necesito|necesitamos|requiero|requerimos|quiero|queremos|quisiera|"
+        r"\b(necesito|necesitamos|requiero|requerimos|nos\s+faltan|quiero|queremos|quisiera|"
         r"quisieramos|solicito|solicitamos|pido|pedimos|comprar|encargar|enviar|"
         r"enviarnos|enviame|envienme|mandar|mandame|mandenme)\b",
         text,
     )
     other_request = re.search(
         r"\b(ayuda|cancelar|cancela|cancelacion|despacharon)\b|"
-        r"\bestado (?:de|del)\b|\bno (?:quiero|queremos|necesito|necesitamos)\b",
+        r"\bestado (?:de|del)\b|"
+        r"\bno\s+(?:quiero|queremos|necesito|necesitamos|nos\s+faltan)\b",
         text,
     )
     if not proposal.is_order or not intent or other_request:
@@ -272,13 +273,17 @@ def _deadline_matches(text: str, received_at: datetime, deadline: datetime) -> b
         hour = hour % 12 + (12 if meridian == "pm" else 0)
     elif hour > 23 or (1 <= hour <= 12 and not minute_text):
         return False
-    received_day = received_at.astimezone(CHILE).date()
-    day = (
-        received_day
-        if not days
-        else received_day
-        + timedelta(days={"hoy": 0, "manana": 1, "ayer": -1}[days.pop()])
-    )
+    received_local = received_at.astimezone(CHILE)
+    day = received_local.date()
+    if days:
+        day += timedelta(days={"hoy": 0, "manana": 1, "ayer": -1}[days.pop()])
+    elif (hour, minute, 0) <= (
+        received_local.hour,
+        received_local.minute,
+        received_local.second,
+    ):
+        # An undated clock refers to its next occurrence; explicit days never roll.
+        day += timedelta(days=1)
     local = deadline.astimezone(CHILE)
     if local.replace(fold=0).utcoffset() != local.replace(fold=1).utcoffset():
         return False

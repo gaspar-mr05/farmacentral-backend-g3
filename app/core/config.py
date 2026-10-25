@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     )
     messaging_base_url: AnyHttpUrl | None = None
     messaging_timeout_seconds: float = Field(default=10, gt=0)
-    messaging_poll_interval_seconds: float = Field(default=12, gt=0)
+    messaging_poll_interval_seconds: float = Field(default=75, gt=0)
     messaging_batch_size: int = Field(default=1, ge=1)
     recall_oidc_audience: AnyHttpUrl | None = None
     recall_oidc_service_account: str = Field(

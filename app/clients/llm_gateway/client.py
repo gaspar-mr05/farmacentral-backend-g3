@@ -28,6 +28,8 @@ Sólo SKU del catálogo: identifica por nombre, componentes o principios activos
 components contiene coincidencias parciales, no recetas completas.
 No inventes cantidad/fecha. No pedido: is_order=false. Dudas o datos faltantes:
 is_ambiguous=true, desconocidos null. Fechas desde received_at en America/Santiago.
+"El kit" sin otra cantidad significa 1. HH:MM es hora de 24 horas, no AM/PM.
+Sin día explícito usa la próxima ocurrencia de esa hora; respeta hoy/mañana/fecha.
 No decidas stock ni aceptación. reason breve o vacío.
 """
 

@@ -115,7 +115,9 @@ def make_service(db_session, messaging=None, interpreter=None, orders=None):
         interpreter,
         orders,
         db_session,
-        settings=make_settings(messaging_batch_size=10),
+        settings=make_settings(
+            messaging_batch_size=10, messaging_poll_interval_seconds=12
+        ),
     )
     return service, messaging, interpreter, orders
 

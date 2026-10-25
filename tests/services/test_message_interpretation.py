@@ -42,7 +42,12 @@ def catalog_client():
     client = AsyncMock(spec=FarmaCentralClient)
     client.get_available_products.return_value = [
         catalog_product(sku, sku, sellable=True)
-        for sku in ("KIT-RESP-ADULTO", "KIT-DIABETES", "KIT-ANALGESIA")
+        for sku in (
+            "KIT-RESP-ADULTO",
+            "KIT-DIABETES",
+            "KIT-ANALGESIA",
+            "KIT-PEDIA-FEBRIL",
+        )
     ]
     return client
 
@@ -53,6 +58,7 @@ def service(db_session, catalog_client):
         ("KIT-RESP-ADULTO", ProductCategory.KIT),
         ("KIT-DIABETES", ProductCategory.KIT),
         ("KIT-ANALGESIA", ProductCategory.KIT),
+        ("KIT-PEDIA-FEBRIL", ProductCategory.KIT),
         ("AMOXICILINA", ProductCategory.INSUMO),
         ("AMOX-ACOND", ProductCategory.ACONDICIONADO),
     ):
@@ -205,6 +211,139 @@ async def test_portal_order_with_required_singular_kit_and_same_day_clock(
     assert incoming.interpreted_sku == "KIT-ANALGESIA"
     assert incoming.interpreted_quantity == 1
     assert incoming.interpreted_delivery_date == deadline
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("negated", [False, True])
+async def test_stock_shortage_request_and_its_negation(db_session, service, negated):
+    interpreter, client = service
+    received = datetime(2026, 10, 25, 22, 49, 29, tzinfo=UTC)
+    deadline = datetime(2026, 10, 26, 2, 45, tzinfo=UTC)
+    text = (
+        "Nos faltan 2 kits de analgesia hospitalaria en bodega. "
+        "¿Pueden llegar las 23:45 hrs?"
+    )
+    incoming = event(db_session, f"No {text}" if negated else text, received)
+    gateway_returns(
+        client,
+        proposal(sku="KIT-ANALGESIA", quantity=2, delivery_date=deadline),
+    )
+
+    await interpreter.interpret(incoming, now=received + timedelta(seconds=1))
+
+    if negated:
+        assert incoming.decision is MessagingDecision.DISCARDED
+        assert "pedido nuevo" in incoming.reason
+        assert incoming.interpreted_sku is None
+    else:
+        assert incoming.decision is MessagingDecision.ORDER, incoming.reason
+        assert incoming.interpreted_sku == "KIT-ANALGESIA"
+        assert incoming.interpreted_quantity == 2
+        assert incoming.interpreted_delivery_date == deadline
+    client.propose_order.assert_awaited_once()
+    assert incoming.responded_at is None
+    assert incoming.external_order_id is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("text", "sku", "quantity", "received", "deadline"),
+    [
+        (
+            "Buenas, ¿me pueden despachar dos kits respiratorios para adulto? "
+            "Los necesitamos las 01:45 hrs.",
+            "KIT-RESP-ADULTO",
+            2,
+            datetime(2026, 10, 25, 22, 52, 31, tzinfo=UTC),
+            datetime(2026, 10, 26, 4, 45, tzinfo=UTC),
+        ),
+        (
+            "Hola, ¿nos pueden mandar el kit pediátrico febril? "
+            "Necesitamos que llegue las 01:30 hrs.",
+            "KIT-PEDIA-FEBRIL",
+            1,
+            datetime(2026, 10, 25, 22, 53, 21, tzinfo=UTC),
+            datetime(2026, 10, 26, 4, 30, tzinfo=UTC),
+        ),
+    ],
+)
+async def test_undated_clock_crosses_midnight_using_chilean_received_at(
+    db_session, service, text, sku, quantity, received, deadline
+):
+    interpreter, client = service
+    incoming = event(db_session, text, received)
+    gateway_returns(
+        client,
+        proposal(
+            sku=sku,
+            quantity=quantity,
+            delivery_date=deadline,
+        ),
+    )
+
+    await interpreter.interpret(incoming, now=received + timedelta(seconds=1))
+
+    assert incoming.decision is MessagingDecision.ORDER, incoming.reason
+    assert incoming.interpreted_sku == sku
+    assert incoming.interpreted_quantity == quantity
+    assert incoming.interpreted_delivery_date == deadline
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("day", ["hoy", "ayer"])
+async def test_explicit_day_never_rolls_forward_to_accept_a_future_proposal(
+    db_session, service, day
+):
+    interpreter, client = service
+    received = datetime(2026, 10, 25, 22, 52, tzinfo=UTC)
+    incoming = event(db_session, f"Necesito dos kits para {day} a las 01:45.", received)
+    gateway_returns(
+        client, proposal(delivery_date=datetime(2026, 10, 26, 4, 45, tzinfo=UTC))
+    )
+
+    await interpreter.interpret(incoming, now=received + timedelta(seconds=1))
+
+    assert incoming.decision is MessagingDecision.DISCARDED
+    assert "fecha propuesta" in incoming.reason
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("quantity", "deadline", "reason"),
+    [
+        (None, datetime(2026, 10, 25, 16, 30, tzinfo=UTC), "cantidad"),
+        (1, datetime(2026, 10, 25, 16, 30, tzinfo=UTC), "venció"),
+        (1, datetime(2026, 10, 26, 16, 30, tzinfo=UTC), "fecha propuesta"),
+    ],
+)
+async def test_wrong_pediatric_proposal_is_not_repaired_or_registered(
+    db_session, service, quantity, deadline, reason
+):
+    interpreter, client = service
+    received = datetime(2026, 10, 25, 22, 53, 21, tzinfo=UTC)
+    incoming = event(
+        db_session,
+        "Hola, ¿nos pueden mandar el kit pediátrico febril? "
+        "Necesitamos que llegue las 01:30 hrs.",
+        received,
+    )
+    gateway_returns(
+        client,
+        proposal(
+            sku="KIT-PEDIA-FEBRIL",
+            quantity=quantity,
+            delivery_date=deadline,
+            confidence=1.0,
+        ),
+    )
+
+    await interpreter.interpret(incoming, now=received + timedelta(seconds=1))
+
+    assert incoming.decision is MessagingDecision.DISCARDED
+    assert reason in incoming.reason
+    assert incoming.interpreted_quantity is None
+    assert incoming.interpreted_delivery_date is None
+    assert incoming.external_order_id is None
 
 
 @pytest.mark.anyio

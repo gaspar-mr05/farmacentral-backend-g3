@@ -832,13 +832,17 @@ positiva e identificable. Admite cifras, números en español de uno a veinte,
 referencia como `dos del de la diabetes`. También reconoce un kit singular
 determinado, por ejemplo `requerimos el kit de analgesia`, como una unidad. No
 transforma cantidades aproximadas o alternativas en cantidades exactas.
+Reconoce `nos faltan` como intención de pedido; su negación `no nos faltan`
+se descarta incluso si el modelo propone un pedido.
 Consultas de estado, ayuda, cancelaciones y negaciones explícitas se descartan.
 
 El plazo debe ser posterior tanto a `receivedAt` del payload original como al
 momento de validación. Se contrasta con fechas ISO, `en N horas/minutos`, o
 `hoy`/`mañana` con hora explícita, usando `America/Santiago` y su cambio de hora.
-Una hora inequívoca en formato de 24 horas sin día, como `antes de las 18:15`,
-se refiere al día local de recepción. Por ejemplo, `hoy antes de las 7 de la
+Una hora inequívoca en formato de 24 horas sin día se refiere a su próxima
+ocurrencia desde `receivedAt` en Chile: `01:45` recibido a las `19:52` corresponde
+a la madrugada siguiente. Un día explícito (`hoy`, `mañana`, `ayer` o una fecha)
+se respeta y no se desplaza para rescatar un plazo vencido. Por ejemplo, `hoy antes de las 7 de la
 tarde` y `mañana a las 09:00` tienen plazos verificables. Expresiones vagas como
 `mañana a primera hora`, horas sin AM/PM ni formato de 24 horas, y fechas fuera
 de esta gramática limitada se descartan; no se adivina una hora para completar
@@ -907,13 +911,16 @@ descarte se considera resuelto; en un pedido se registra el fallo porque la API
 no ofrece una consulta para recuperar el `orderId` de una respuesta anterior.
 
 La URL de mensajería se deriva del ambiente de Farma Central y se puede
-sobrescribir. El intervalo predeterminado procesa un mensaje cada 12 segundos
-para respetar el límite compartido de cinco llamadas LLM por minuto:
+sobrescribir. El intervalo predeterminado deja 75 segundos entre ciclos y toma
+un mensaje por ciclo para reducir presión sobre el cupo compartido de tokens.
+No garantiza el cupo si el equipo usa otras claves/procesos o envía solicitudes
+demasiado grandes. Los valores ya definidos en el servidor prevalecen sobre
+los predeterminados: actualizar su `.env` y reiniciar el worker.
 
 ```dotenv
 # MESSAGING_BASE_URL=https://dev.proyecto.2026-2.tallerdeintegracion.cl/messaging/
 MESSAGING_TIMEOUT_SECONDS=10
-MESSAGING_POLL_INTERVAL_SECONDS=12
+MESSAGING_POLL_INTERVAL_SECONDS=75
 MESSAGING_BATCH_SIZE=1
 ```
 
