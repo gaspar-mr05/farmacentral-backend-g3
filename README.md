@@ -773,9 +773,10 @@ del worker deberá respetar el cupo compartido; este cliente no implementa un
 limitador global entre procesos o claves del grupo. Mantener la clave fuera del
 repositorio y, ante una filtración, solicitar su revocación al equipo docente.
 
-`MessageInterpretationService.propose(message)` consulta los SKU y nombres actuales de
-productos `KIT` en la base local sincronizada, incluidos los que no tienen stock.
-Envía sólo esos datos, el texto y `receivedAt` convertido a `America/Santiago`.
+`MessageInterpretationService.propose(message)` consulta los SKU clínicos locales
+y el catálogo oficial, incluidos los kits que no tienen stock. Envía SKU y nombre
+de todos los kits vigentes, componentes relacionados con el texto y `receivedAt`
+convertido a `America/Santiago`.
 No envía teléfono, nombre del remitente, precios, inventario ni credenciales de
 Farma Central. Un catálogo vacío produce `LLMGatewayError` sin llamar al
 gateway. Conviene ejecutar la sincronización de inventario antes de usarlo.
@@ -870,11 +871,18 @@ auditoría persistente sin creación de órdenes.
 
 El intérprete consulta el catálogo oficial de Farma Central antes de proponer
 un pedido. Envía al LLM los kits clínicos locales que siguen siendo vendibles,
-con su SKU, nombre y nombres únicos de componentes e insumos de su receta,
-incluidos niveles intermedios. Esto permite identificar un kit por componentes
+con su SKU, nombre y nombres únicos de componentes e insumos relacionados con
+palabras del mensaje, incluidos niveles intermedios. Conserva todos los kits
+como alternativas; no envía las recetas completas ni componentes ajenos al texto.
+Esto permite identificar un kit por componentes
 o principios activos sin depender de que el cliente escriba su nombre comercial.
 El contexto omite cantidades de fabricación y no agrega llamadas al LLM;
-su tamaño de entrada sí aumenta. Ante fallos temporales del catálogo o un
+omite componentes sin palabras compartidas con el mensaje (ignorando tildes
+y plurales simples), campos vacíos y títulos del esquema para reducir tokens.
+Estas coincidencias son contexto parcial y no identifican por sí solas un kit;
+el modelo conserva todas las alternativas y debe marcar ambigüedad. No es un
+limitador global: el cupo de tokens y solicitudes sigue siendo compartido.
+Ante fallos temporales del catálogo o un
 componente referenciado ausente, el worker reintenta sin llamar al modelo ni
 descartar el mensaje por ese fallo. Las validaciones de SKU, cantidad, plazo y ambigüedad
 se mantienen. Los mensajes ya respondidos conservan su decisión original.

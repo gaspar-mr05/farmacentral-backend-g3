@@ -65,7 +65,9 @@ class MessageInterpretationService:
             )
         )
         catalog = kit_catalog(
-            await self._catalog_client.get_available_products(), clinical_skus
+            await self._catalog_client.get_available_products(),
+            clinical_skus,
+            message_text=message.text,
         )
         return await self._client.propose_order(
             text=message.text,

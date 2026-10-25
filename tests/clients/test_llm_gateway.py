@@ -116,6 +116,8 @@ async def test_openai_compatible_contract_context_and_auditable_result(reason, c
         schema = response_format["json_schema"]["schema"]
         assert schema["additionalProperties"] is False
         assert set(schema["required"]) == set(proposal())
+        assert "title" not in schema and "description" not in schema
+        assert all("title" not in field for field in schema["properties"].values())
         return httpx.Response(200, json=raw)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
@@ -131,6 +133,29 @@ async def test_openai_compatible_contract_context_and_auditable_result(reason, c
     assert result.raw_output == raw
     assert "private-test-key" not in caplog.text
     assert TEXT not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_empty_component_lists_do_not_increase_the_request_context():
+    def handler(request):
+        body = json.loads(request.content)
+        context = json.loads(body["messages"][1]["content"])
+        assert context["catalog"] == [
+            {"sku": "KIT-RESP-ADULTO", "name": "Kit respiratorio adulto"}
+        ]
+        return httpx.Response(200, json=completion())
+
+    async with (
+        httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client,
+        LLMGatewayClient(settings=settings(), http_client=http_client) as client,
+    ):
+        await client.propose_order(
+            text=TEXT,
+            received_at=RECEIVED_AT,
+            catalog=[
+                LLMCatalogItem(sku="KIT-RESP-ADULTO", name="Kit respiratorio adulto")
+            ],
+        )
 
 
 @pytest.mark.anyio

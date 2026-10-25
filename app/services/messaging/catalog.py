@@ -1,4 +1,7 @@
-"""Compact clinical kit context from the official recipes."""
+"""Clinical kits with only recipe names relevant to the incoming message."""
+
+import re
+import unicodedata
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -7,7 +10,22 @@ from app.schemas.farma_central import FarmaCentralProduct
 from app.schemas.llm_gateway import LLMCatalogItem
 
 
-def kit_catalog(payload: JSONResponse, clinical_skus: set[str]) -> list[LLMCatalogItem]:
+def _keywords(text: str) -> set[str]:
+    normalized = "".join(
+        char
+        for char in unicodedata.normalize("NFD", text.casefold())
+        if not unicodedata.combining(char)
+    )
+    return {
+        word.rstrip("s")
+        for word in re.findall(r"[a-z0-9]+", normalized)
+        if len(word) > 3
+    }
+
+
+def kit_catalog(
+    payload: JSONResponse, clinical_skus: set[str], *, message_text: str
+) -> list[LLMCatalogItem]:
     try:
         products = TypeAdapter(list[FarmaCentralProduct]).validate_python(payload)
     except ValidationError as exc:
@@ -16,6 +34,7 @@ def kit_catalog(payload: JSONResponse, clinical_skus: set[str]) -> list[LLMCatal
     if not products or len(by_sku) != len(products):
         raise FarmaCentralInvalidResponseError("Empty or duplicated messaging catalog")
 
+    keywords = _keywords(message_text)
     catalog = []
     for sku in sorted(clinical_skus & by_sku.keys()):
         kit = by_sku[sku]
@@ -34,7 +53,8 @@ def kit_catalog(payload: JSONResponse, clinical_skus: set[str]) -> list[LLMCatal
                 raise FarmaCentralInvalidResponseError(
                     "Messaging recipe references a missing component"
                 )
-            names.add(component.name)
+            if _keywords(component.name) & keywords:
+                names.add(component.name)
             pending.extend(item.sku for item in component.components)
         catalog.append(
             LLMCatalogItem(sku=kit.sku, name=kit.name, components=tuple(sorted(names)))
