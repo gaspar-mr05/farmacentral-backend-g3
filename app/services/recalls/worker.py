@@ -179,6 +179,11 @@ class RecallWorkerService:
         event.next_retry_at = None
         event.last_error = None
         self._session.commit()
+        logger.info(
+            "Recall processing started: recall_id=%s attempt=%s",
+            recall.recall_id,
+            event.attempt_count,
+        )
 
         try:
             await RecallResponseService(self._client, self._session).respond(
@@ -233,6 +238,7 @@ class RecallWorkerService:
         event.last_error = None
         self._session.commit()
         result.completed += 1
+        logger.info("Recall processing completed: recall_id=%s", recall.recall_id)
 
     @staticmethod
     def _ready(now: datetime):
@@ -258,3 +264,8 @@ class RecallWorkerService:
         event.status = InboundEventStatus.FAILED
         event.last_error = error[:1000]
         event.next_retry_at = retry_at
+        logger.warning(
+            "Recall event failed: recall_id=%s retry_at=%s",
+            event.external_event_id,
+            retry_at,
+        )

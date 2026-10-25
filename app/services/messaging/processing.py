@@ -169,6 +169,11 @@ class MessagingProcessingService:
         event.last_attempt_at = now
         event.next_retry_at = None
         event.last_error = None
+        logger.info(
+            "Messaging processing started: message_id=%s attempt=%s",
+            event.external_event_id,
+            event.attempt_count,
+        )
 
         if event.responded_at is None and self._response_window_expired(event, now):
             self._fail(event, "Message response window expired before processing")

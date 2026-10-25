@@ -1,4 +1,6 @@
-from collections.abc import Callable, Iterable, Sequence
+import logging
+from collections.abc import Iterable
+from time import perf_counter
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -7,8 +9,7 @@ from app.models import Lot, ProductionInput
 from app.queries.traceability import (
     get_lot_with_units,
     list_deliveries,
-    list_downstream_inputs,
-    list_upstream_inputs,
+    list_lineage_inputs,
 )
 from app.schemas.traceability import (
     ProductionLinkResponse,
@@ -18,6 +19,8 @@ from app.schemas.traceability import (
     TraceabilityUnitLocationResponse,
     TraceabilityUnitResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class LotNotFoundError(Exception):
@@ -29,6 +32,7 @@ class TraceabilityService:
         self._session = session
 
     def get_traceability(self, identifier: UUID | str) -> TraceabilityResponse:
+        started = perf_counter()
         identifier = str(identifier)
         lot = get_lot_with_units(self._session, identifier)
         if lot is None:
@@ -36,19 +40,18 @@ class TraceabilityService:
 
         lot_id = lot.id
 
-        ancestors, upstream_links = self._walk_lineage(
-            lot_id,
-            list_upstream_inputs,
-            lambda item: item.input_lot,
-        )
-        descendants, downstream_links = self._walk_lineage(
-            lot_id,
-            list_downstream_inputs,
-            lambda item: item.production_run.output_lot,
-        )
+        upstream_links = list_lineage_inputs(self._session, lot_id, upstream=True)
+        downstream_links = list_lineage_inputs(self._session, lot_id, upstream=False)
+        ancestors = {item.input_lot.id: item.input_lot for item in upstream_links}
+        descendants = {
+            item.production_run.output_lot.id: item.production_run.output_lot
+            for item in downstream_links
+        }
+        ancestors.pop(lot_id, None)
+        descendants.pop(lot_id, None)
         links = {item.id: item for item in upstream_links + downstream_links}
 
-        return TraceabilityResponse(
+        response = TraceabilityResponse(
             lot=self._to_lot(lot),
             deliveries=[
                 TraceabilityDeliveryResponse(
@@ -82,32 +85,17 @@ class TraceabilityService:
                 for item in sorted(links.values(), key=lambda item: str(item.id))
             ],
         )
-
-    def _walk_lineage(
-        self,
-        root_lot_id: UUID,
-        load_links: Callable[[Session, set[UUID]], Sequence[ProductionInput]],
-        related_lot: Callable[[ProductionInput], Lot | None],
-    ) -> tuple[dict[UUID, Lot], list[ProductionInput]]:
-        visited = {root_lot_id}
-        frontier = {root_lot_id}
-        lots: dict[UUID, Lot] = {}
-        links: dict[UUID, ProductionInput] = {}
-
-        while frontier:
-            next_frontier: set[UUID] = set()
-            for item in load_links(self._session, frontier):
-                links[item.id] = item
-                lot = related_lot(item)
-                if lot is None or lot.id in visited:
-                    continue
-                lots[lot.id] = lot
-                next_frontier.add(lot.id)
-
-            visited.update(next_frontier)
-            frontier = next_frontier
-
-        return lots, list(links.values())
+        elapsed_ms = (perf_counter() - started) * 1000
+        logger.log(
+            logging.WARNING if elapsed_ms >= 10000 else logging.INFO,
+            "Traceability queried: lot_id=%s elapsed_ms=%.2f "
+            "ancestors=%s descendants=%s",
+            identifier,
+            elapsed_ms,
+            len(ancestors),
+            len(descendants),
+        )
+        return response
 
     @staticmethod
     def _to_lot(lot: Lot) -> TraceabilityLotResponse:

@@ -1,3 +1,4 @@
+import logging
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -21,6 +22,8 @@ from app.models import (
 
 from .service import OrderNotFoundError
 from .state import apply_official_state
+
+logger = logging.getLogger(__name__)
 
 
 class InvalidExternalOrderStateError(Exception):
@@ -85,6 +88,12 @@ class OrderProcessingService:
         order.decision_at = now
         order.decision_reason = reason
         self._session.flush()
+        logger.info(
+            "Order decision recorded: order_id=%s status=%s source=%s",
+            order.external_order_id,
+            order.status.value,
+            order.source.value,
+        )
         return order
 
     def _decide(self, order: Order, now: datetime) -> tuple[bool, str]:

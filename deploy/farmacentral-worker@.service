@@ -4,6 +4,7 @@ After=network-online.target postgresql.service
 Wants=network-online.target
 Requires=postgresql.service
 PartOf=farmacentral-workers.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -16,6 +17,7 @@ ExecStart=/home/integracion/farmacentral-backend/.venv/bin/python -m scripts.%i
 Restart=on-failure
 RestartSec=30
 TimeoutStopSec=30
+SyslogIdentifier=farmacentral-worker-%i
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

@@ -58,3 +58,15 @@ def test_step20_runner_selects_idempotency_cases_without_external_connections(
     monkeypatch.setattr(pytest, "main", runner)
     assert module.main(["--step20"]) == 0
     assert runner.call_args.args[0] == ["-q", *module.STEP20_TESTS]
+
+
+def test_step21_runner_selects_operation_cases_without_external_connections(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "TEST_DATABASE_URL", "postgresql+psycopg://unused:unused@localhost/test"
+    )
+    runner = Mock(return_value=0)
+    monkeypatch.setattr(pytest, "main", runner)
+    assert module.main(["--step21"]) == 0
+    assert runner.call_args.args[0] == ["-q", *module.STEP21_TESTS]

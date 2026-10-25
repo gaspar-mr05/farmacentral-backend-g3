@@ -77,10 +77,12 @@ class ExternalOrderFulfillmentService:
         ).all()
 
         for order_id in order_ids:
+            external_order_id = None
             try:
                 order = self._session.get(Order, order_id)
                 if order is None or order.external_order_id is None:
                     continue
+                external_order_id = order.external_order_id
                 if order.status == OrderStatus.RECEIVED:
                     await self._refresh_official_state(order)
                     order = await OrderProcessingService(
@@ -123,6 +125,11 @@ class ExternalOrderFulfillmentService:
                 await self._refresh_official_state(order)
                 if order.external_status == ExternalOrderStatus.FULFILLED:
                     result.completed += 1
+                    logger.info(
+                        "External order completed: order_id=%s local_order_id=%s",
+                        external_order_id,
+                        order_id,
+                    )
                 else:
                     result.pending += 1
             except InsufficientFulfillmentStockError:
@@ -139,9 +146,11 @@ class ExternalOrderFulfillmentService:
                 self._session.rollback()
                 result.failed += 1
                 logger.warning(
-                    "External order fulfillment failed: order_id=%s error=%s",
+                    "External order fulfillment failed: order_id=%s "
+                    "local_order_id=%s error_type=%s",
+                    external_order_id,
                     order_id,
-                    exc,
+                    type(exc).__name__,
                 )
         return result
 

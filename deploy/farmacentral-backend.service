@@ -3,6 +3,7 @@ Description=Farmacentral FastAPI backend
 After=network.target postgresql.service
 Requires=postgresql.service
 Wants=farmacentral-inventory-sync.timer farmacentral-workers.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -10,9 +11,13 @@ User=integracion
 Group=integracion
 WorkingDirectory=/home/integracion/farmacentral-backend
 EnvironmentFile=/home/integracion/farmacentral-backend/.env
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/home/integracion/farmacentral-backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=30
+SyslogIdentifier=farmacentral-api
+UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

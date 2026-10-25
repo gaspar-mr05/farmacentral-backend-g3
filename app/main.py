@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -12,6 +13,10 @@ from app.core.oidc import GoogleOIDCVerifier
 
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     async with MarketPriceClient() as market_price_client:
         application.state.market_price_client = market_price_client
         verifier = GoogleOIDCVerifier(

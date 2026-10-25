@@ -30,6 +30,16 @@ STEP20_TESTS = [
     "tests/models/test_recalls.py",
     "tests/scripts/test_resolve_recall_notification.py",
 ]
+STEP21_TESTS = [
+    "tests/api/test_health.py",
+    "tests/db/test_health.py",
+    "tests/api/test_traceability.py",
+    "tests/services/traceability",
+    "tests/services/test_continuous_operation.py",
+    "tests/scripts/test_check_operation.py",
+    "tests/services/test_e2_idempotency.py",
+    "tests/services/test_recall_investigation_performance.py",
+]
 
 
 @contextmanager
@@ -54,10 +64,16 @@ def local_connections_only():
 
 def main(argv=()) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument(
         "--step20",
         action="store_true",
         help="Pruebas de duplicados, concurrencia y recuperación",
+    )
+    scope.add_argument(
+        "--step21",
+        action="store_true",
+        help="Salud, aislamiento de API, rendimiento y reinicios de procesos locales",
     )
     args = parser.parse_args(argv)
     database_url = os.environ.get("TEST_DATABASE_URL") or get_settings().database_url
@@ -75,7 +91,10 @@ def main(argv=()) -> int:
         patch.dict(os.environ, {"TEST_DATABASE_URL": database_url}),
         local_connections_only(),
     ):
-        return int(pytest.main(["-q", *(STEP20_TESTS if args.step20 else ["tests"])]))
+        paths = (
+            STEP20_TESTS if args.step20 else STEP21_TESTS if args.step21 else ["tests"]
+        )
+        return int(pytest.main(["-q", *paths]))
 
 
 if __name__ == "__main__":

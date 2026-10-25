@@ -29,6 +29,7 @@ La documentación interactiva generada por FastAPI está disponible en:
 | Método | Ruta | Propósito |
 | --- | --- | --- |
 | `GET` | `/api/health` | Comprobar que el backend está activo. |
+| `GET` | `/api/health/ready` | Comprobar API y disponibilidad de PostgreSQL. |
 | `GET` | `/api/catalog` | Consultar kits, precio vigente y stock vendible. |
 | `GET` | `/api/products` | Listar el catálogo local completo. |
 | `PATCH` | `/api/products/{product_id}` | Mover una unidad entre espacios. |
@@ -65,6 +66,23 @@ Ejemplo:
 
 ```bash
 curl http://127.0.0.1:8000/api/health
+```
+
+### `GET /api/health/ready`
+
+Abre una conexión independiente de solo lectura y ejecuta `SELECT 1` en
+PostgreSQL. Limita la conexión a tres segundos y la consulta a dos segundos;
+no espera el pool usado por las peticiones de negocio. No consulta sFTP,
+Pub/Sub, precios, Farma Central ni LLM.
+
+Devuelve `200` con `{"status":"ok","database":"ok"}` cuando responde PostgreSQL,
+o `503` con `{"status":"unavailable","database":"unavailable"}` si falla. No
+expone credenciales ni el error interno y envía `Cache-Control: no-store`.
+`/api/health` sigue respondiendo incluso si PostgreSQL está caído. Esta prueba
+no verifica migraciones, capacidad de escritura ni la salud de los workers.
+
+```bash
+curl --fail --max-time 6 http://127.0.0.1:8000/api/health/ready
 ```
 
 ## Catálogo de venta

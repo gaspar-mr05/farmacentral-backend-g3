@@ -1,6 +1,5 @@
 [Unit]
 Description=Farmacentral background workers
-PartOf=farmacentral-backend.service
 Wants=farmacentral-worker@poll_sftp_orders.service
 Wants=farmacentral-worker@poll_pubsub_orders.service
 Wants=farmacentral-worker@process_messaging.service

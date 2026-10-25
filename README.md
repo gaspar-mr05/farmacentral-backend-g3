@@ -142,8 +142,11 @@ git pull --ff-only origin main
 ./deploy/release.sh
 ```
 
-El script instala dependencias, ejecuta migraciones, reinicia el backend y
-comprueba su estado.
+El script comprueba los permisos de reinicio, instala dependencias, ejecuta
+migraciones, reinicia API y workers por separado y comprueba API y PostgreSQL.
+La cuenta de despliegue necesita permiso `sudo -n` para reiniciar tanto
+`farmacentral-backend.service` como `farmacentral-workers.target`; ver la
+[guía del paso 21](docs/ENTREGA2_PASO21.md) antes del primer despliegue.
 
 Comandos útiles:
 
@@ -1080,8 +1083,9 @@ sudo systemctl enable --now farmacentral-workers.target
 sudo systemctl restart farmacentral-backend.service
 ```
 
-El target inicia seis servicios independientes. El backend los agrupa para que
-un despliegue los reinicie sin ejecutar comandos privilegiados adicionales:
+El target inicia seis servicios independientes. Desde el paso 21, reiniciar
+solamente la API mantiene los workers activos; el despliegue reinicia ambos
+explícitamente:
 
 ```bash
 systemctl status farmacentral-workers.target --no-pager
@@ -1420,3 +1424,20 @@ worker continúe antes del deadline. No se agregan migraciones ni variables.
 La [guía del paso 20](docs/ENTREGA2_PASO20.md) documenta claves, escenarios de caída,
 límites de las APIs y comandos de recuperación. Las pruebas usan PostgreSQL local
 y servicios simulados; no llaman al LLM.
+
+## Entrega 2: operación continua (paso 21)
+
+`GET /api/health/ready` comprueba PostgreSQL con tiempos limitados y sin
+servicios externos. API y workers se reinician de forma independiente;
+`deploy/release.sh` reinicia ambos y verifica readiness. La trazabilidad usa
+consultas recursivas y registra su duración junto al lote consultado.
+
+```bash
+.venv/bin/python -m scripts.test_e2 --step21
+.venv/bin/python -m scripts.check_operation
+```
+
+La [guía operativa](docs/ENTREGA2_PASO21.md) explica la instalación de unidades,
+los permisos de despliegue, los chequeos de disco y logs y las pruebas locales
+de reinicio sin consumo de LLM. Sigue pendiente comprobar operación real y
+continua en el servidor.

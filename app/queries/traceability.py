@@ -36,24 +36,27 @@ def get_lot_with_units(session: Session, identifier: str) -> Lot | None:
     return session.scalar(statement)
 
 
-def list_upstream_inputs(
-    session: Session,
-    output_lot_ids: set[UUID],
+def list_lineage_inputs(
+    session: Session, root_lot_id: UUID, *, upstream: bool
 ) -> Sequence[ProductionInput]:
-    return _list_production_inputs(
-        session,
-        ProductionRun.output_lot_id.in_(output_lot_ids),
+    """Walk in PostgreSQL instead of issuing queries for each generation."""
+    lineage = (
+        select(Lot.id.label("lot_id"))
+        .where(Lot.id == root_lot_id)
+        .cte("traceability_lineage", recursive=True)
     )
-
-
-def list_downstream_inputs(
-    session: Session,
-    input_lot_ids: set[UUID],
-) -> Sequence[ProductionInput]:
+    source = ProductionRun.output_lot_id if upstream else ProductionInput.input_lot_id
+    target = ProductionInput.input_lot_id if upstream else ProductionRun.output_lot_id
+    # UNION also terminates if historical data contains a cycle.
+    lineage = lineage.union(
+        select(target)
+        .select_from(ProductionInput)
+        .join(ProductionRun, ProductionRun.id == ProductionInput.production_run_id)
+        .join(lineage, lineage.c.lot_id == source)
+        .where(target.is_not(None))
+    )
     return _list_production_inputs(
-        session,
-        ProductionInput.input_lot_id.in_(input_lot_ids),
-        require_output_lot=True,
+        session, source.in_(select(lineage.c.lot_id)), require_output_lot=not upstream
     )
 
 
