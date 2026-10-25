@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy import func, select
 
+from app.clients.farma_central import FarmaCentralClient
 from app.clients.llm_gateway import LLMGatewayClient, LLMGatewayResult
 from app.models import (
     InboundEvent,
@@ -15,6 +16,7 @@ from app.models.product import ProductCategory
 from app.schemas.llm_gateway import LLMCatalogItem, LLMOrderProposal
 from app.schemas.messaging import MessagingWebhookPayload
 from app.services.messaging import MessageInterpretationService
+from tests.support.farma_central import catalog_product
 
 
 @pytest.mark.anyio
@@ -57,8 +59,18 @@ async def test_uses_current_clinical_catalog_without_creating_orders_or_decision
     expected = LLMGatewayResult(proposal=proposal, raw_output={"choices": []})
     client = AsyncMock(spec=LLMGatewayClient)
     client.propose_order.return_value = expected
+    catalog_client = AsyncMock(spec=FarmaCentralClient)
+    catalog_client.get_available_products.return_value = [
+        catalog_product("KIT-DIABETES", "Kit de diabetes", sellable=True),
+        catalog_product("KIT-RESP-ADULTO", "Kit respiratorio adulto", sellable=True),
+        catalog_product("INSUMO-1", "Insumo"),
+        catalog_product("ACOND-1", "Acondicionado"),
+        catalog_product("KIT-UNSYNCHRONIZED", "Kit no registrado", sellable=True),
+    ]
 
-    result = await MessageInterpretationService(client, db_session).propose(incoming)
+    result = await MessageInterpretationService(
+        client, db_session, catalog_client=catalog_client
+    ).propose(incoming)
 
     client.propose_order.assert_awaited_once_with(
         text=incoming.text,

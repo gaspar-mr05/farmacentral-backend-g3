@@ -1,8 +1,11 @@
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import select
 
+from app.clients.farma_central import FarmaCentralClient, FarmaCentralTimeoutError
+from app.clients.llm_gateway import LLMGatewayClient
 from app.clients.messaging import (
     MessagingAlreadyRespondedError,
     MessagingHTTPError,
@@ -16,9 +19,14 @@ from app.models import (
     MessagingDecision,
     Order,
     OrderSource,
+    Product,
+    ProductCategory,
 )
-from app.services.messaging import MessagingProcessingService
-from tests.support.farma_central import make_settings
+from app.services.messaging import (
+    MessageInterpretationService,
+    MessagingProcessingService,
+)
+from tests.support.farma_central import catalog_product, make_settings
 from tests.support.orders import EXTERNAL_ORDER_ID, make_purchase_order
 
 NOW = datetime.now(UTC)
@@ -158,6 +166,52 @@ async def test_discard_is_answered_without_creating_an_order(db_session):
     assert incoming.status is InboundEventStatus.PROCESSED
     assert incoming.responded_at is not None
     assert db_session.scalars(select(Order)).all() == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failure", ["timeout", "invalid", "missing-component"])
+async def test_catalog_failure_is_retryable_without_llm_call_or_message_response(
+    db_session, failure
+):
+    db_session.add(
+        Product(
+            sku="KIT-TEST",
+            name="Kit",
+            category=ProductCategory.KIT,
+            batch_size=1,
+        )
+    )
+    incoming = add_event(db_session)
+    catalog = AsyncMock(spec=FarmaCentralClient)
+    if failure == "timeout":
+        catalog.get_available_products.side_effect = FarmaCentralTimeoutError("timeout")
+    else:
+        catalog.get_available_products.return_value = (
+            {}
+            if failure == "invalid"
+            else [
+                catalog_product(
+                    "KIT-TEST", "Kit", sellable=True, components=("MISSING",)
+                ),
+            ]
+        )
+    gateway = AsyncMock(spec=LLMGatewayClient)
+    interpreter = MessageInterpretationService(
+        gateway, db_session, catalog_client=catalog
+    )
+    service, messaging, _, _ = make_service(db_session, interpreter=interpreter)
+
+    result = await service.process_pending()
+    db_session.refresh(incoming)
+
+    assert result.failed == 1 and result.processed == 0
+    assert incoming.status is InboundEventStatus.FAILED
+    assert incoming.next_retry_at is not None
+    assert incoming.decision is None
+    assert incoming.responded_at is None
+    assert incoming.external_order_id is None
+    gateway.propose_order.assert_not_awaited()
+    assert messaging.orders == [] and messaging.discards == []
 
 
 @pytest.mark.anyio

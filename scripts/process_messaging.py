@@ -7,6 +7,7 @@ from contextlib import suppress
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.clients.farma_central import FarmaCentralClient
 from app.clients.llm_gateway import LLMGatewayClient
 from app.clients.messaging import MessagingClient
 from app.clients.purchase_orders import PurchaseOrdersClient
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 async def run(*, once: bool = False) -> None:
     settings = get_settings()
     async with (
+        FarmaCentralClient(settings=settings) as catalog_client,
         MessagingClient(settings=settings) as messaging,
         LLMGatewayClient(settings=settings) as llm,
         PurchaseOrdersClient(settings=settings) as orders,
@@ -31,7 +33,9 @@ async def run(*, once: bool = False) -> None:
             delay = settings.messaging_poll_interval_seconds
             try:
                 with SessionLocal() as session:
-                    interpreter = MessageInterpretationService(llm, session)
+                    interpreter = MessageInterpretationService(
+                        llm, session, catalog_client=catalog_client
+                    )
                     result = await MessagingProcessingService(
                         messaging,
                         interpreter,

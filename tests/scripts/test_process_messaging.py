@@ -36,6 +36,7 @@ async def test_once_processes_messages_and_closes_clients(monkeypatch):
 
     settings = SimpleNamespace(messaging_poll_interval_seconds=12)
     monkeypatch.setattr(module, "get_settings", lambda: settings)
+    monkeypatch.setattr(module, "FarmaCentralClient", Context)
     monkeypatch.setattr(module, "MessagingClient", Context)
     monkeypatch.setattr(module, "LLMGatewayClient", Context)
     monkeypatch.setattr(module, "PurchaseOrdersClient", Context)
@@ -46,7 +47,7 @@ async def test_once_processes_messages_and_closes_clients(monkeypatch):
     await module.run(once=True)
 
     assert state.processed == 1
-    assert len(state.closed) == 3
+    assert len(state.closed) == 4
 
 
 @pytest.mark.anyio
@@ -76,6 +77,7 @@ async def test_once_exits_with_error_when_an_event_fails(monkeypatch):
 
     settings = SimpleNamespace(messaging_poll_interval_seconds=12)
     monkeypatch.setattr(module, "get_settings", lambda: settings)
+    monkeypatch.setattr(module, "FarmaCentralClient", Context)
     monkeypatch.setattr(module, "MessagingClient", Context)
     monkeypatch.setattr(module, "LLMGatewayClient", Context)
     monkeypatch.setattr(module, "PurchaseOrdersClient", Context)

@@ -7,6 +7,11 @@ from pydantic import ValidationError
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
+from app.clients.farma_central import (
+    FarmaCentralAuthenticationError,
+    FarmaCentralError,
+    FarmaCentralHTTPError,
+)
 from app.clients.messaging import (
     MessagingAlreadyRespondedError,
     MessagingAuthenticationError,
@@ -230,7 +235,7 @@ class MessagingProcessingService:
                 result.failed += 1
             self._session.commit()
             return
-        except (MessagingError, PurchaseOrdersError) as exc:
+        except (MessagingError, PurchaseOrdersError, FarmaCentralError) as exc:
             self._session.rollback()
             event = self._session.get(InboundEvent, event.id)
             retry_after = self._retry_delay(exc)
@@ -287,13 +292,21 @@ class MessagingProcessingService:
             return False
         return message.received_at + MESSAGE_RESPONSE_WINDOW <= now
 
-    def _retry_delay(self, error: MessagingError | PurchaseOrdersError) -> float | None:
+    def _retry_delay(
+        self, error: MessagingError | PurchaseOrdersError | FarmaCentralError
+    ) -> float | None:
         delay = self._settings.messaging_poll_interval_seconds
-        if isinstance(error, (MessagingHTTPError, PurchaseOrdersHTTPError)):
+        if isinstance(
+            error, (MessagingHTTPError, PurchaseOrdersHTTPError, FarmaCentralHTTPError)
+        ):
             if (
                 not isinstance(
                     error,
-                    (MessagingAuthenticationError, PurchaseOrdersAuthenticationError),
+                    (
+                        MessagingAuthenticationError,
+                        PurchaseOrdersAuthenticationError,
+                        FarmaCentralAuthenticationError,
+                    ),
                 )
                 and 400 <= error.status_code < 500
                 and error.status_code != 429

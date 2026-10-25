@@ -18,7 +18,13 @@ from app.schemas.llm_gateway import LLMCatalogItem
 from tests.support.farma_central import make_settings
 
 RECEIVED_AT = datetime(2026, 10, 27, 16, 5, tzinfo=UTC)
-CATALOG = [LLMCatalogItem(sku="KIT-RESP-ADULTO", name="Kit respiratorio adulto")]
+CATALOG = [
+    LLMCatalogItem(
+        sku="KIT-RESP-ADULTO",
+        name="Kit respiratorio adulto",
+        components=("Amoxicilina 500 mg", "Salbutamol"),
+    )
+]
 TEXT = "Necesito dos kits respiratorios para adulto, hoy antes de las 7 pm."
 
 
@@ -96,7 +102,13 @@ async def test_openai_compatible_contract_context_and_auditable_result(reason, c
         assert json.loads(user["content"]) == {
             "text": TEXT,
             "received_at": "2026-10-27T13:05:00-03:00",
-            "catalog": [{"sku": "KIT-RESP-ADULTO", "name": "Kit respiratorio adulto"}],
+            "catalog": [
+                {
+                    "sku": "KIT-RESP-ADULTO",
+                    "name": "Kit respiratorio adulto",
+                    "components": ["Amoxicilina 500 mg", "Salbutamol"],
+                }
+            ],
         }
         response_format = body["response_format"]
         assert response_format["type"] == "json_schema"

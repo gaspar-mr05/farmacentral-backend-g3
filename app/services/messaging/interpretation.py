@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.clients.farma_central import FarmaCentralClient
 from app.clients.llm_gateway import (
     LLMGatewayBudgetExceededError,
     LLMGatewayClient,
@@ -22,8 +23,10 @@ from app.models import (
     Product,
     ProductCategory,
 )
-from app.schemas.llm_gateway import LLMCatalogItem, LLMOrderProposal
+from app.schemas.llm_gateway import LLMOrderProposal
 from app.schemas.messaging import MessagingWebhookPayload
+
+from .catalog import kit_catalog
 
 CHILE = ZoneInfo("America/Santiago")
 MIN_CONFIDENCE = 0.8
@@ -44,20 +47,30 @@ NUMBER = r"(?:\d+|" + "|".join(sorted(NUMBERS, key=len, reverse=True)) + r")"
 class MessageInterpretationService:
     """Audit what the customer requested; accepting an OC is a separate step."""
 
-    def __init__(self, client: LLMGatewayClient, session: Session) -> None:
+    def __init__(
+        self,
+        client: LLMGatewayClient,
+        session: Session,
+        *,
+        catalog_client: FarmaCentralClient,
+    ) -> None:
         self._client = client
         self._session = session
+        self._catalog_client = catalog_client
 
     async def propose(self, message: MessagingWebhookPayload) -> LLMGatewayResult:
-        products = self._session.execute(
-            select(Product.sku, Product.name)
-            .where(Product.category == ProductCategory.KIT)
-            .order_by(Product.sku)
-        ).all()
+        clinical_skus = set(
+            self._session.scalars(
+                select(Product.sku).where(Product.category == ProductCategory.KIT)
+            )
+        )
+        catalog = kit_catalog(
+            await self._catalog_client.get_available_products(), clinical_skus
+        )
         return await self._client.propose_order(
             text=message.text,
             received_at=message.received_at,
-            catalog=[LLMCatalogItem(sku=row.sku, name=row.name) for row in products],
+            catalog=catalog,
         )
 
     async def interpret(

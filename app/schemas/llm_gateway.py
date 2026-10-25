@@ -16,6 +16,7 @@ class LLMCatalogItem(BaseModel):
 
     sku: NonBlankString
     name: NonBlankString
+    components: tuple[NonBlankString, ...] = ()
 
 
 class LLMOrderProposal(BaseModel):

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy import func, select
 
+from app.clients.farma_central import FarmaCentralClient
 from app.clients.llm_gateway import (
     LLMGatewayBudgetExceededError,
     LLMGatewayClient,
@@ -25,6 +26,7 @@ from app.models import (
 )
 from app.schemas.llm_gateway import LLMOrderProposal
 from app.services.messaging import MessageInterpretationService
+from tests.support.farma_central import catalog_product
 
 RECEIVED = datetime(2026, 10, 27, 16, 5, tzinfo=UTC)
 NOW = RECEIVED + timedelta(minutes=1)
@@ -36,7 +38,17 @@ TEXT = (
 
 
 @pytest.fixture
-def service(db_session):
+def catalog_client():
+    client = AsyncMock(spec=FarmaCentralClient)
+    client.get_available_products.return_value = [
+        catalog_product(sku, sku, sellable=True)
+        for sku in ("KIT-RESP-ADULTO", "KIT-DIABETES", "KIT-ANALGESIA")
+    ]
+    return client
+
+
+@pytest.fixture
+def service(db_session, catalog_client):
     for sku, category in (
         ("KIT-RESP-ADULTO", ProductCategory.KIT),
         ("KIT-DIABETES", ProductCategory.KIT),
@@ -47,7 +59,9 @@ def service(db_session):
         db_session.add(Product(sku=sku, name=sku, category=category, batch_size=1))
     db_session.flush()
     client = AsyncMock(spec=LLMGatewayClient)
-    return MessageInterpretationService(client, db_session), client
+    return MessageInterpretationService(
+        client, db_session, catalog_client=catalog_client
+    ), client
 
 
 def proposal(**overrides):
@@ -209,6 +223,61 @@ async def test_singular_kit_does_not_validate_a_proposed_plural_quantity(
 
     assert incoming.decision is MessagingDecision.DISCARDED
     assert "cantidad" in incoming.reason.casefold()
+
+
+@pytest.mark.anyio
+async def test_real_component_description_is_sent_with_official_recipe_and_audited(
+    db_session, service, catalog_client
+):
+    interpreter, client = service
+    catalog_client.get_available_products.return_value = [
+        catalog_product(
+            "KIT-ANALGESIA",
+            "Kit de Analgesia Hospitalaria",
+            sellable=True,
+            components=("AMP-KETOPRO-100", "FRA-SUERO-FISIO", "SOB-JERINGA-10"),
+        ),
+        catalog_product(
+            "AMP-KETOPRO-100",
+            "Ketoprofeno inyectable 100 mg",
+            components=("API-KETOPRO-100",),
+        ),
+        catalog_product("API-KETOPRO-100", "Ketoprofeno 100 mg"),
+        catalog_product("FRA-SUERO-FISIO", "Suero fisiológico"),
+        catalog_product("SOB-JERINGA-10", "Jeringas de 10 ml"),
+    ]
+    received = datetime(2026, 10, 25, 20, 19, 35, tzinfo=UTC)
+    deadline = datetime(2026, 10, 25, 23, 45, tzinfo=UTC)
+    incoming = event(
+        db_session,
+        "Buen día, requerimos el kit con ketoprofeno inyectable, suero fisiológico "
+        "y jeringas para manejo del dolor. Plazo: las 20:45 hrs.",
+        received,
+    )
+    gateway_returns(
+        client,
+        proposal(
+            sku="KIT-ANALGESIA",
+            quantity=1,
+            delivery_date=deadline,
+        ),
+    )
+
+    await interpreter.interpret(incoming, now=received + timedelta(seconds=1))
+
+    assert incoming.decision is MessagingDecision.ORDER, incoming.reason
+    assert incoming.interpreted_sku == "KIT-ANALGESIA"
+    assert incoming.interpreted_quantity == 1
+    assert incoming.interpreted_delivery_date == deadline
+    client.propose_order.assert_awaited_once()
+    context = client.propose_order.call_args.kwargs["catalog"]
+    assert len(context) == 1
+    assert "Ketoprofeno inyectable 100 mg" in context[0].components
+    assert "Ketoprofeno 100 mg" in context[0].components
+    assert "Suero fisiológico" in context[0].components
+    assert "Jeringas de 10 ml" in context[0].components
+    assert incoming.external_order_id is None
+    assert incoming.responded_at is None
 
 
 @pytest.mark.anyio

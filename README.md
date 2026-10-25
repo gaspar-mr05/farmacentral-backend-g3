@@ -868,6 +868,17 @@ auditoría persistente sin creación de órdenes.
 
 ## Entrega 2: respuesta de mensajería y creación de OC (paso 13)
 
+El intérprete consulta el catálogo oficial de Farma Central antes de proponer
+un pedido. Envía al LLM los kits clínicos locales que siguen siendo vendibles,
+con su SKU, nombre y nombres únicos de componentes e insumos de su receta,
+incluidos niveles intermedios. Esto permite identificar un kit por componentes
+o principios activos sin depender de que el cliente escriba su nombre comercial.
+El contexto omite cantidades de fabricación y no agrega llamadas al LLM;
+su tamaño de entrada sí aumenta. Ante fallos temporales del catálogo o un
+componente referenciado ausente, el worker reintenta sin llamar al modelo ni
+descartar el mensaje por ese fallo. Las validaciones de SKU, cantidad, plazo y ambigüedad
+se mantienen. Los mensajes ya respondidos conservan su decisión original.
+
 `MessagingProcessingService` toma eventos de mensajería pendientes, ejecuta la
 interpretación del paso 12 y responde una sola vez a
 `POST /messaging/messages/{messageId}/response`. Para un descarte envía el motivo;
