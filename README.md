@@ -142,8 +142,9 @@ git pull --ff-only origin main
 ./deploy/release.sh
 ```
 
-El script comprueba los permisos de reinicio, instala dependencias, ejecuta
-migraciones, reinicia API y workers por separado y comprueba API y PostgreSQL.
+El script instala dependencias, ejecuta migraciones, reinicia API y workers por
+separado y comprueba API y PostgreSQL. Si falla un reinicio, identifica la unidad
+y el comando que necesita autorización.
 La cuenta de despliegue necesita permiso `sudo -n` para reiniciar tanto
 `farmacentral-backend.service` como `farmacentral-workers.target`; ver la
 [guía del paso 21](docs/ENTREGA2_PASO21.md) antes del primer despliegue.

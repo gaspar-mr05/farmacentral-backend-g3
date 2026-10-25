@@ -61,8 +61,25 @@ integracion ALL=(root) NOPASSWD: /usr/bin/systemctl restart farmacentral-backend
 integracion ALL=(root) NOPASSWD: /usr/bin/systemctl restart farmacentral-workers.target
 ```
 
-El script verifica ambos permisos antes de instalar dependencias o migrar. Un
-pull no instala las unidades ni modifica sudoers. Reiniciar el target incluye
+Configurar estas reglas antes de desplegar. `sudo -l` puede indicar que un
+comando está autorizado aunque todavía requiera contraseña; no comprueba por
+sí solo que `sudo -n` pueda ejecutarlo. Si un reinicio falla, el script identifica
+la unidad y termina sin anunciar éxito. La instalación y Alembic pueden haber
+terminado antes del fallo, y la API puede haberse reiniciado antes de fallar el
+target: revisar ambos estados.
+
+Ante `sudo: a password is required` en GitHub Actions, editar las reglas en una
+sesión interactiva del servidor:
+
+```bash
+sudo visudo -f /etc/sudoers.d/farmacentral-deploy
+```
+
+Agregar las dos reglas exactas anteriores sin borrar las reglas existentes,
+guardar y validar con `sudo visudo -c`. Después volver a ejecutar el job de
+despliegue. No guardar contraseñas ni habilitar `NOPASSWD: ALL`.
+
+Un pull no instala las unidades ni modifica sudoers. Reiniciar el target incluye
 `process_messaging`, cuyo trabajo real puede consumir LLM: no usarlo como test
 local. No se necesita ninguna nueva variable de entorno ni migración.
 

@@ -6,15 +6,22 @@ readonly APP_DIR="/home/integracion/farmacentral-backend"
 
 cd "$APP_DIR"
 
-# Fail before migrations if the deployment account lacks either restart grant.
-sudo -n -l /usr/bin/systemctl restart farmacentral-backend.service >/dev/null
-sudo -n -l /usr/bin/systemctl restart farmacentral-workers.target >/dev/null
+restart_service() {
+    local unit="$1"
+    if ! sudo -n /usr/bin/systemctl restart "$unit"; then
+        printf 'Deployment failed: could not restart %s.\n' "$unit" >&2
+        printf 'Check the service error above and the NOPASSWD rule for:\n' >&2
+        printf '  /usr/bin/systemctl restart %s\n' "$unit" >&2
+        printf 'See docs/ENTREGA2_PASO21.md; sudo -l alone does not prove passwordless access.\n' >&2
+        return 1
+    fi
+}
 
 .venv/bin/python -m pip install --disable-pip-version-check .
 .venv/bin/alembic upgrade head
 
-sudo -n /usr/bin/systemctl restart farmacentral-backend.service
-sudo -n /usr/bin/systemctl restart farmacentral-workers.target
+restart_service farmacentral-backend.service
+restart_service farmacentral-workers.target
 
 for attempt in {1..10}; do
     if curl --fail --silent --show-error --connect-timeout 2 --max-time 6 \
