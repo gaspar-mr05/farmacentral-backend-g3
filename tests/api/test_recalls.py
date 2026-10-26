@@ -86,6 +86,26 @@ def test_persists_recall_before_ack_without_processing(
     assert saved.attempt_count == 0
 
 
+def test_connection_probe_is_acknowledged_without_persisting(
+    authenticated_client, issuer, db_session
+):
+    client, _ = authenticated_client
+    payload = {
+        "recallId": "test_0384eaa7739a",
+        "batch": None,
+        "sku": None,
+        "reason": None,
+        "issuedAt": "2026-10-28T14:12:00Z",
+        "deadline": "2026-10-28T14:42:00Z",
+    }
+
+    response = post(client, issuer, payload)
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert db_session.scalar(select(func.count()).select_from(InboundEvent)) == 0
+
+
 def test_query_exposes_failure_before_investigation_exists(
     authenticated_client, issuer, db_session
 ):

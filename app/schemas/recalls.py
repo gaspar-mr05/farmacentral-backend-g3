@@ -4,6 +4,26 @@ from typing import Annotated
 from pydantic import AwareDatetime, BaseModel, Field, StringConstraints, model_validator
 
 NonBlankString = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
+ConnectionTestId = Annotated[
+    str, StringConstraints(min_length=6, pattern=r"^test_\S+$")
+]
+
+
+class RecallConnectionTestPayload(BaseModel):
+    """Fixed connectivity probe; it intentionally identifies no real lot."""
+
+    recall_id: ConnectionTestId = Field(alias="recallId")
+    batch: None = None
+    sku: None = None
+    reason: None = None
+    issued_at: AwareDatetime = Field(alias="issuedAt")
+    deadline: AwareDatetime
+
+    @model_validator(mode="after")
+    def validate_deadline(self) -> "RecallConnectionTestPayload":
+        if self.deadline <= self.issued_at:
+            raise ValueError("deadline must be after issuedAt")
+        return self
 
 
 class RecallWebhookPayload(BaseModel):

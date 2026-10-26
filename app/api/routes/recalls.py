@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import require_recall_oidc
 from app.db.session import get_session
 from app.schemas.recalls import (
+    RecallConnectionTestPayload,
     RecallDetailResponse,
     RecallSummaryResponse,
     RecallWebhookPayload,
@@ -44,9 +45,11 @@ def get_recall(
     dependencies=[Depends(require_recall_oidc)],
 )
 def receive_recall(
-    recall: RecallWebhookPayload,
+    recall: RecallWebhookPayload | RecallConnectionTestPayload,
     session: Annotated[Session, Depends(get_session)],
 ) -> Response:
+    if isinstance(recall, RecallConnectionTestPayload):
+        return Response(status_code=204)
     try:
         RecallWebhookService(session).receive(recall)
     except SQLAlchemyError as exc:
