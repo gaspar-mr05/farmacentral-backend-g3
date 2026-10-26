@@ -12,7 +12,7 @@ restart_service() {
         printf 'Deployment failed: could not restart %s.\n' "$unit" >&2
         printf 'Check the service error above and the NOPASSWD rule for:\n' >&2
         printf '  /usr/bin/systemctl restart %s\n' "$unit" >&2
-        printf 'See docs/ENTREGA2_PASO21.md; sudo -l alone does not prove passwordless access.\n' >&2
+        printf 'Check the exact NOPASSWD sudoers rule; sudo -l alone is insufficient.\n' >&2
         return 1
     fi
 }
