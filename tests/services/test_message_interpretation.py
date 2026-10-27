@@ -215,14 +215,20 @@ async def test_portal_order_with_required_singular_kit_and_same_day_clock(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("negated", [False, True])
-async def test_stock_shortage_request_and_its_negation(db_session, service, negated):
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Nos faltan 2 kits de analgesia hospitalaria en bodega.",
+        "Nos hacen falta un par de kits de analgesia hospitalaria en bodega.",
+    ],
+)
+async def test_stock_shortage_request_and_its_negation(
+    db_session, service, negated, request_text
+):
     interpreter, client = service
     received = datetime(2026, 10, 25, 22, 49, 29, tzinfo=UTC)
     deadline = datetime(2026, 10, 26, 2, 45, tzinfo=UTC)
-    text = (
-        "Nos faltan 2 kits de analgesia hospitalaria en bodega. "
-        "¿Pueden llegar las 23:45 hrs?"
-    )
+    text = f"{request_text} ¿Pueden llegar las 23:45 hrs?"
     incoming = event(db_session, f"No {text}" if negated else text, received)
     gateway_returns(
         client,

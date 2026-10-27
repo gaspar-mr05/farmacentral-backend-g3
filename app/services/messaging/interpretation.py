@@ -160,7 +160,7 @@ def _discard_reason(
 ) -> str | None:
     text = _normalize(message.text)
     intent = re.search(
-        r"\b(necesito|necesitamos|requiero|requerimos|nos\s+faltan|quiero|queremos|quisiera|"
+        r"\b(necesito|necesitamos|requiero|requerimos|nos\s+(?:faltan|hace(?:n)?\s+falta)|quiero|queremos|quisiera|"
         r"quisieramos|solicito|solicitamos|pido|pedimos|comprar|encargar|enviar|"
         r"enviarnos|enviame|envienme|mandar|mandame|mandenme)\b",
         text,
@@ -168,7 +168,7 @@ def _discard_reason(
     other_request = re.search(
         r"\b(ayuda|cancelar|cancela|cancelacion|despacharon)\b|"
         r"\bestado (?:de|del)\b|"
-        r"\bno\s+(?:quiero|queremos|necesito|necesitamos|nos\s+faltan)\b",
+        r"\bno\s+(?:quiero|queremos|necesito|necesitamos|nos\s+(?:faltan|hace(?:n)?\s+falta))\b",
         text,
     )
     if not proposal.is_order or not intent or other_request:
