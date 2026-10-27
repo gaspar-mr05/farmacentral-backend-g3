@@ -159,19 +159,17 @@ def _discard_reason(
     now: datetime,
 ) -> str | None:
     text = _normalize(message.text)
-    intent = re.search(
-        r"\b(necesito|necesitamos|requiero|requerimos|nos\s+(?:faltan|hace(?:n)?\s+falta)|quiero|queremos|quisiera|"
-        r"quisieramos|solicito|solicitamos|pido|pedimos|comprar|encargar|enviar|"
-        r"enviarnos|enviame|envienme|mandar|mandame|mandenme)\b",
-        text,
-    )
     other_request = re.search(
         r"\b(ayuda|cancelar|cancela|cancelacion|despacharon)\b|"
         r"\bestado (?:de|del)\b|"
-        r"\bno\s+(?:quiero|queremos|necesito|necesitamos|nos\s+(?:faltan|hace(?:n)?\s+falta))\b",
+        r"\bno\s+(?:quiero|queremos|necesito|necesitamos|requiero|requerimos|"
+        r"solicito|solicitamos|(?:nos|me)\s+(?:faltan?|hacen?\s+falta)|"
+        r"(?:(?:nos|me)\s+)?(?:envies|envien|mandes|manden|"
+        r"despaches|despachen|traigas|traigan))\b",
         text,
     )
-    if not proposal.is_order or not intent or other_request:
+    # Intent is classified by the model; a verb allowlist rejects valid paraphrases.
+    if not proposal.is_order or other_request:
         return "El mensaje no identifica un pedido nuevo."
     if proposal.is_ambiguous or proposal.confidence < MIN_CONFIDENCE:
         return "La interpretación es ambigua o no tiene suficiente confianza."

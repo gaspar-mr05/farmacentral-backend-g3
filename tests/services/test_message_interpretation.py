@@ -47,6 +47,7 @@ def catalog_client():
             "KIT-DIABETES",
             "KIT-ANALGESIA",
             "KIT-PEDIA-FEBRIL",
+            "KIT-CURACION",
         )
     ]
     return client
@@ -59,6 +60,7 @@ def service(db_session, catalog_client):
         ("KIT-DIABETES", ProductCategory.KIT),
         ("KIT-ANALGESIA", ProductCategory.KIT),
         ("KIT-PEDIA-FEBRIL", ProductCategory.KIT),
+        ("KIT-CURACION", ProductCategory.KIT),
         ("AMOXICILINA", ProductCategory.INSUMO),
         ("AMOX-ACOND", ProductCategory.ACONDICIONADO),
     ):
@@ -249,6 +251,102 @@ async def test_stock_shortage_request_and_its_negation(
     client.propose_order.assert_awaited_once()
     assert incoming.responded_at is None
     assert incoming.external_order_id is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Hola, nos hacen falta un par de kits para curaciones en la posta. "
+        "¿Los pueden traer las 14:00 hrs?",
+        "Me hace falta un par de kits para curaciones hoy a las 14:00.",
+        "¿Podrían despachar dos kits para curaciones hoy a las 14:00?",
+        "Por favor, dos kits de curación para hoy a las 14:00.",
+        "¿Me envían un par de kits para curaciones hoy a las 14:00?",
+        "Querría dos kits para curaciones hoy a las 14:00.",
+        "Les encargo dos kits para curaciones hoy a las 14:00.",
+        "Traigan dos kits para curaciones hoy a las 14:00.",
+        "¿Pueden ayudarme a conseguir dos kits para curaciones hoy a las 14:00?",
+        "Nos urgen dos kits para curaciones hoy a las 14:00.",
+    ],
+)
+async def test_order_intent_does_not_require_a_fixed_request_verb(
+    db_session, service, text
+):
+    interpreter, client = service
+    received = datetime(2026, 10, 27, 13, 16, 3, tzinfo=UTC)
+    deadline = datetime(2026, 10, 27, 17, tzinfo=UTC)
+    incoming = event(db_session, text, received)
+    raw = gateway_returns(
+        client,
+        proposal(
+            sku="KIT-CURACION", quantity=2, delivery_date=deadline, confidence=0.9
+        ),
+    )
+
+    await interpreter.interpret(incoming, now=received + timedelta(minutes=1))
+
+    assert incoming.decision is MessagingDecision.ORDER, incoming.reason
+    assert incoming.interpreted_sku == "KIT-CURACION"
+    assert incoming.interpreted_quantity == 2
+    assert incoming.interpreted_delivery_date == deadline
+    assert incoming.reason is None
+    assert incoming.llm_output == raw
+    assert incoming.external_order_id is None
+    assert incoming.responded_at is None
+    client.propose_order.assert_awaited_once()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "Nos hacen falta",
+        "Me hace falta",
+        "Requerimos",
+        "Solicitamos",
+        "Nos envíen",
+        "Me mandes",
+        "Despachen",
+        "Nos traigan",
+    ],
+)
+async def test_negated_request_is_discarded_even_if_model_proposes_an_order(
+    db_session, service, phrase
+):
+    interpreter, client = service
+    incoming = event(db_session, f"No {phrase} dos kits para hoy a las 19:00.")
+    gateway_returns(client, proposal())
+
+    await interpreter.interpret(incoming, now=NOW)
+
+    assert incoming.decision is MessagingDecision.DISCARDED
+    assert "pedido nuevo" in incoming.reason
+    assert incoming.interpreted_sku is None
+    client.propose_order.assert_awaited_once()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Hola, ¿tienen lista de precios actualizada de los kits disponibles?",
+        "¿Cuánto cuestan dos kits para entregar hoy a las 19:00?",
+        "¿Hay stock de dos kits para hoy a las 19:00? Solo consulto.",
+    ],
+)
+async def test_non_order_classification_is_preserved(db_session, service, text):
+    interpreter, client = service
+    incoming = event(db_session, text)
+    gateway_returns(client, proposal(is_order=False))
+
+    await interpreter.interpret(incoming, now=NOW)
+
+    assert incoming.decision is MessagingDecision.DISCARDED
+    assert "pedido nuevo" in incoming.reason
+    assert incoming.interpreted_sku is None
+    assert incoming.external_order_id is None
+    client.propose_order.assert_awaited_once()
 
 
 @pytest.mark.anyio
