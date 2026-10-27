@@ -56,7 +56,9 @@ class PubSubOrderIngestionService:
             session,
             supplier_id=str(self._settings.farma_central_group),
         )
-        self._processing = OrderProcessingService(orders, session)
+        self._processing = OrderProcessingService(
+            orders, session, settings=self._settings
+        )
 
     async def poll(self) -> PubSubPollResult:
         result = PubSubPollResult()

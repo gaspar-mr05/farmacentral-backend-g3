@@ -1,8 +1,8 @@
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import exists, or_, select
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.orm import Session
 
 from app.clients.farma_central import FarmaCentralClient, FarmaCentralError
@@ -46,6 +46,24 @@ class ExternalOrderFulfillmentService:
 
     async def process_pending(self) -> ExternalOrderFulfillmentResult:
         result = ExternalOrderFulfillmentResult()
+        now = datetime.now(UTC)
+        decision_ready = and_(
+            Order.status == OrderStatus.RECEIVED,
+            or_(
+                Order.decision_reason.is_(None),
+                Order.updated_at
+                <= now
+                - timedelta(seconds=self._settings.external_order_stock_retry_seconds),
+                Order.created_at
+                <= now
+                - timedelta(seconds=self._settings.external_order_stock_wait_seconds),
+                Order.delivery_deadline
+                <= now
+                + timedelta(
+                    seconds=self._settings.external_order_dispatch_margin_seconds
+                ),
+            ),
+        )
         unresolved_dispatch = exists(
             select(OrderUnit.id)
             .join(OrderItem, OrderUnit.order_item_id == OrderItem.id)
@@ -65,7 +83,7 @@ class ExternalOrderFulfillmentService:
             .where(
                 Order.external_order_id.is_not(None),
                 or_(
-                    Order.status == OrderStatus.RECEIVED,
+                    decision_ready,
                     Order.status == OrderStatus.ACCEPTED,
                     (Order.status == OrderStatus.DISPATCHED)
                     & (Order.external_status == ExternalOrderStatus.ACCEPTED),
@@ -86,7 +104,7 @@ class ExternalOrderFulfillmentService:
                 if order.status == OrderStatus.RECEIVED:
                     await self._refresh_official_state(order)
                     order = await OrderProcessingService(
-                        self._purchase_orders, self._session
+                        self._purchase_orders, self._session, settings=self._settings
                     ).process_order(order_id)
                     self._session.commit()
                     if order.status != OrderStatus.ACCEPTED:

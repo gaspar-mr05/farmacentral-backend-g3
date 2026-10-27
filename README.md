@@ -41,6 +41,46 @@ Detener PostgreSQL:
 docker compose down
 ```
 
+### Esperar stock antes de rechazar una OC
+
+Para activar la espera en el `.env` del ambiente correspondiente:
+
+```dotenv
+EXTERNAL_ORDER_STOCK_WAIT_SECONDS=3600
+EXTERNAL_ORDER_STOCK_RETRY_SECONDS=30
+EXTERNAL_ORDER_DISPATCH_MARGIN_SECONDS=300
+```
+
+Sin `EXTERNAL_ORDER_STOCK_WAIT_SECONDS`, o con valor `0`, se conserva el rechazo
+inmediato. Con espera activa, una OC sin capacidad queda `RECEIVED` localmente y
+`creada` en la plataforma. El worker de cumplimiento la reevalúa cada 30 segundos,
+aproximadamente, y acepta cuando hay capacidad; si sigue faltando, rechaza al
+cumplirse una hora desde `created_at` o al faltar cinco minutos para la entrega,
+lo que ocurra primero. Un reinicio no renueva esa ventana.
+
+La recepción y la respuesta de mensajería siguen sus plazos originales; su OC
+puede quedar pendiente después de responder el mensaje. La espera no inicia
+producciones ni añade llamadas al LLM. No requiere migraciones y no reabre OCs
+rechazadas. Actualizar la configuración requiere reiniciar los workers que
+reciben y deciden órdenes.
+
+### Reposición de kits
+
+`replenish_inventory` conserva la producción secuencial y el lock de
+acondicionamiento. Antes de cada kit vuelve a priorizar el menor stock utilizable.
+Hace hasta tres intentos de sincronización ante conexión, timeout o un cambio
+en el conteo de inventario. Estos reintentos se limitan a lecturas, sin añadir
+repetición directa de POST de abastecimiento o producción. Si la selección local detecta
+insumos faltantes antes de pedir producción, resincroniza y prepara una vez más.
+Un fallo local de receta permite continuar con otros kits sólo si no hay corridas
+pendientes; las corridas inconclusas conservan el mecanismo de recuperación.
+
+Los logs incluyen SKU, insumos faltantes, reintentos y duración por kit y ciclo.
+Los fallos de validación persistentes siguen deteniendo el ciclo. Para anticipar
+reposición, se puede configurar un mínimo de `4` y objetivo `8`, contrastando
+consumo, espacio y vencimiento. `.env.example` muestra esos valores; los defaults
+siguen en `2` y `6`, y los `.env` existentes no se modifican.
+
 ## Ejecutar en el servidor
 
 El repositorio debe estar en `/home/integracion/farmacentral-backend`.

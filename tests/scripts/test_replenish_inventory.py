@@ -2,7 +2,12 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
+from app.clients.farma_central import (
+    FarmaCentralHTTPError,
+    FarmaCentralInvalidResponseError,
+)
 from app.services.production.locking import ProductionBusyError
+from app.services.production.orchestration import ProductionInputsUnavailableError
 from scripts import replenish_inventory as module
 from tests.support.farma_central import make_settings
 
@@ -59,3 +64,38 @@ async def test_once_reports_failure_but_treats_busy_packaging_as_deferred(
         with pytest.raises(SystemExit) as exc:
             await module.run(once=True)
         assert exc.value.code == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("error", "detail"),
+    [
+        (ProductionInputsUnavailableError({"API-INSULINA": 2}), "API-INSULINA: 2"),
+        (
+            FarmaCentralInvalidResponseError("Invalid inventory for RAW"),
+            "Invalid inventory",
+        ),
+        (FarmaCentralHTTPError(500, "private external body"), None),
+    ],
+)
+async def test_worker_logs_local_diagnostics_and_cycle_metrics(
+    monkeypatch, caplog, error, detail
+):
+    caplog.set_level("INFO")
+    client = AsyncMock()
+    service = Mock()
+    service.maintain_kit_stock = AsyncMock(side_effect=error)
+    monkeypatch.setattr(module, "get_settings", make_settings)
+    monkeypatch.setattr(module, "FarmaCentralClient", lambda **kwargs: client)
+    monkeypatch.setattr(module, "SessionLocal", MagicMock())
+    monkeypatch.setattr(module, "KitProductionService", Mock(return_value=service))
+
+    with pytest.raises(SystemExit) as caught:
+        await module.run(once=True)
+
+    assert caught.value.code == 1
+    assert type(error).__name__ in caplog.text
+    assert "Inventory replenishment cycle: failed=True elapsed_seconds=" in caplog.text
+    assert "private external body" not in caplog.text
+    if detail:
+        assert detail in caplog.text

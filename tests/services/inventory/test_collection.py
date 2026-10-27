@@ -1,6 +1,10 @@
 import pytest
 
-from app.services.inventory.collection import InventoryCollector
+from app.clients.farma_central import FarmaCentralInvalidResponseError
+from app.services.inventory.collection import (
+    InventoryCollector,
+    InventorySnapshotChangedError,
+)
 
 
 class LargeInventoryClient:
@@ -42,3 +46,25 @@ async def test_collection_marks_groups_larger_than_api_limit_as_incomplete() -> 
 
     assert len(units) == 200
     assert incomplete_groups == {("BUFFER", "RAW-1")}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("change", ["count", "sku", "space"])
+async def test_collection_distinguishes_changed_counts_from_invalid_origin(change):
+    class ChangedInventory(LargeInventoryClient):
+        async def get_space_products(self, *args, **kwargs):
+            units = await super().get_space_products(*args, **kwargs)
+            if change == "count":
+                return units[:-1]
+            units[0]["sku" if change == "sku" else "store"] = "UNEXPECTED"
+            return units
+
+    with pytest.raises(FarmaCentralInvalidResponseError) as caught:
+        await InventoryCollector(ChangedInventory()).collect()
+
+    assert isinstance(caught.value, InventorySnapshotChangedError) == (
+        change == "count"
+    )
+    assert "RAW-1" in str(caught.value) and "BUFFER" in str(caught.value)
+    if change == "count":
+        assert "expected 200 units, observed 199" in str(caught.value)

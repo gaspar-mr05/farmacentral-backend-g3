@@ -1,12 +1,13 @@
 import logging
 import uuid
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.clients.purchase_orders import PurchaseOrdersClient
+from app.core.config import Settings, get_settings
 from app.models import (
     ExternalOrderStatus,
     Location,
@@ -33,9 +34,16 @@ class InvalidExternalOrderStateError(Exception):
 class OrderProcessingService:
     """Accept or reject external orders using a small, conservative policy."""
 
-    def __init__(self, orders: PurchaseOrdersClient, session: Session) -> None:
+    def __init__(
+        self,
+        orders: PurchaseOrdersClient,
+        session: Session,
+        *,
+        settings: Settings | None = None,
+    ) -> None:
         self._orders = orders
         self._session = session
+        self._settings = settings or get_settings()
 
     async def process_order(
         self, order_id: uuid.UUID, *, now: datetime | None = None
@@ -77,6 +85,16 @@ class OrderProcessingService:
             )
 
         accepted, reason = self._decide(order, now)
+        if accepted is None:
+            order.decision_reason = reason
+            order.updated_at = now
+            self._session.flush()
+            logger.info(
+                "Order decision deferred: order_id=%s reason=%s",
+                order.external_order_id,
+                reason,
+            )
+            return order
         external_status = (
             ExternalOrderStatus.ACCEPTED if accepted else ExternalOrderStatus.REJECTED
         )
@@ -96,7 +114,7 @@ class OrderProcessingService:
         )
         return order
 
-    def _decide(self, order: Order, now: datetime) -> tuple[bool, str]:
+    def _decide(self, order: Order, now: datetime) -> tuple[bool | None, str]:
         if order.delivery_deadline is None:
             return False, "Rejected: the order has no delivery deadline"
         if order.delivery_deadline <= now:
@@ -124,6 +142,18 @@ class OrderProcessingService:
             if capacity < requested:
                 can_fulfill = False
 
+        wait_until = min(
+            order.created_at
+            + timedelta(seconds=self._settings.external_order_stock_wait_seconds),
+            order.delivery_deadline
+            - timedelta(seconds=self._settings.external_order_dispatch_margin_seconds),
+        )
+        if (
+            not can_fulfill
+            and self._settings.external_order_stock_wait_seconds > 0
+            and now < wait_until
+        ):
+            return None, f"Waiting until {wait_until.isoformat()}: {'; '.join(details)}"
         prefix = "Accepted" if can_fulfill else "Rejected"
         return can_fulfill, f"{prefix}: {'; '.join(details)}"
 

@@ -7,6 +7,19 @@ from app.core.config import Settings
 from tests.support.farma_central import make_settings
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "external_order_stock_wait_seconds",
+        "external_order_stock_retry_seconds",
+        "external_order_dispatch_margin_seconds",
+    ],
+)
+def test_stock_wait_settings_reject_negative_values(field):
+    with pytest.raises(ValidationError):
+        make_settings(**{field: -1})
+
+
 def test_env_local_overrides_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

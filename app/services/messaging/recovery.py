@@ -102,7 +102,7 @@ class MessagingRecoveryService:
                 )
 
             order = await OrderProcessingService(
-                self._orders, self._session
+                self._orders, self._session, settings=self._settings
             ).process_order(order.id)
             event.external_order_id = order.external_order_id
             event.order = order

@@ -4,12 +4,17 @@ import argparse
 import asyncio
 import logging
 from contextlib import suppress
+from time import perf_counter
 
-from app.clients.farma_central import FarmaCentralClient
+from app.clients.farma_central import (
+    FarmaCentralClient,
+    FarmaCentralInvalidResponseError,
+)
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.services.production.kits import KitProductionError, KitProductionService
 from app.services.production.locking import ProductionBusyError
+from app.services.production.orchestration import ProductionError
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +24,7 @@ async def run(*, once: bool = False) -> None:
     async with FarmaCentralClient(settings=settings) as client:
         while True:
             failed = False
+            started = perf_counter()
             try:
                 with SessionLocal() as session:
                     runs = await KitProductionService(
@@ -38,13 +44,24 @@ async def run(*, once: bool = False) -> None:
                 )
             except ProductionBusyError:
                 logger.info("Inventory replenishment deferred: packaging is busy")
-            except KitProductionError as exc:
-                logger.error("Inventory replenishment failed: %s", exc)
+            except (
+                KitProductionError,
+                ProductionError,
+                FarmaCentralInvalidResponseError,
+            ) as exc:
+                logger.error(
+                    "Inventory replenishment failed (%s): %s", type(exc).__name__, exc
+                )
                 failed = True
             except Exception as exc:
                 # Keep polling after a failed cycle. Do not log external bodies.
                 logger.error("Inventory replenishment failed (%s)", type(exc).__name__)
                 failed = True
+            logger.info(
+                "Inventory replenishment cycle: failed=%s elapsed_seconds=%.2f",
+                failed,
+                perf_counter() - started,
+            )
             if once:
                 if failed:
                     raise SystemExit(1)

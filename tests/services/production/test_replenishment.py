@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Lot, Unit
+from app.models import Lot, ProductionRun, Unit
 from app.schemas.farma_central import FarmaCentralProduct
 from app.services.production.kits import (
     KitProductionError,
@@ -13,7 +13,10 @@ from app.services.production.kits import (
     ProductionCapacityError,
 )
 from app.services.production.locking import ProductionBusyError, production_lock
-from app.services.production.orchestration import produce
+from app.services.production.orchestration import (
+    ProductionInputsUnavailableError,
+    produce,
+)
 from tests.support.recalls import RecallInventory
 from tests.support.traceability import create_traceability_scenario
 
@@ -32,7 +35,16 @@ async def test_direct_production_respects_packaging_lock(test_engine):
 
 
 @pytest.mark.anyio
-async def test_recipe_failure_does_not_starve_other_kits(db_session, monkeypatch):
+@pytest.mark.parametrize(
+    "error",
+    [
+        ProductionCapacityError("No capacity"),
+        ProductionInputsUnavailableError({"RAW": 2}),
+    ],
+)
+async def test_recipe_failure_does_not_starve_other_kits(
+    db_session, monkeypatch, error
+):
     service = KitProductionService(
         AsyncMock(), db_session, raw_material_source="supply"
     )
@@ -52,7 +64,7 @@ async def test_recipe_failure_does_not_starve_other_kits(db_session, monkeypatch
     monkeypatch.setattr(service, "_initialize", AsyncMock())
     monkeypatch.setattr(service, "_clear_packaging", AsyncMock())
     monkeypatch.setattr(service, "_usable_stock", lambda *args: 0)
-    production = AsyncMock(side_effect=[ProductionCapacityError("No capacity"), []])
+    production = AsyncMock(side_effect=[error, []])
     monkeypatch.setattr(service, "_produce_quantity", production)
     with pytest.raises(KitProductionError, match="KIT-A"):
         await service.maintain_kit_stock(
@@ -62,6 +74,91 @@ async def test_recipe_failure_does_not_starve_other_kits(db_session, monkeypatch
         "KIT-A",
         "KIT-B",
     ]
+
+
+@pytest.mark.anyio
+async def test_replenishment_stops_if_failure_leaves_pending_production(
+    db_session, monkeypatch
+):
+    service = KitProductionService(
+        AsyncMock(), db_session, raw_material_source="supply"
+    )
+    kits = [
+        FarmaCentralProduct.model_validate(
+            {
+                "sku": sku,
+                "name": sku,
+                "sellable": True,
+                "production": {"batch": 1, "at": "packaging"},
+                "components": [{"sku": "RAW", "req": 1}],
+            }
+        )
+        for sku in ("KIT-A", "KIT-B")
+    ]
+    service._catalog = {kit.sku: kit for kit in kits}
+    db_session.add(
+        ProductionRun(
+            expected_sku="KIT-A", expected_quantity=1, requested_at=datetime.now(UTC)
+        )
+    )
+    db_session.commit()
+    monkeypatch.setattr(service, "_initialize", AsyncMock())
+    monkeypatch.setattr(service, "_clear_packaging", AsyncMock())
+    monkeypatch.setattr(service, "_usable_stock", lambda *args: 0)
+    production = AsyncMock(side_effect=ProductionCapacityError("Interrupted"))
+    monkeypatch.setattr(service, "_produce_quantity", production)
+
+    with pytest.raises(ProductionCapacityError, match="Interrupted"):
+        await service.maintain_kit_stock(
+            minimum=1, target=2, minimum_lifetime_seconds=0
+        )
+    production.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_replenishment_reprioritizes_stock_after_each_kit(
+    db_session, monkeypatch, caplog
+):
+    caplog.set_level("INFO")
+    service = KitProductionService(
+        AsyncMock(), db_session, raw_material_source="supply"
+    )
+    kits = [
+        FarmaCentralProduct.model_validate(
+            {
+                "sku": sku,
+                "name": sku,
+                "sellable": True,
+                "production": {"batch": 1, "at": "packaging"},
+                "components": [{"sku": "RAW", "req": 1}],
+            }
+        )
+        for sku in ("KIT-A", "KIT-B", "KIT-C")
+    ]
+    service._catalog = {kit.sku: kit for kit in kits}
+    stock = {"KIT-A": 0, "KIT-B": 1, "KIT-C": 3}
+    monkeypatch.setattr(service, "_initialize", AsyncMock())
+    monkeypatch.setattr(service, "_clear_packaging", AsyncMock())
+    monkeypatch.setattr(service, "_usable_stock", lambda sku, *args: stock[sku])
+
+    async def produce(kit, quantity, **kwargs):
+        stock[kit.sku] += quantity
+        if kit.sku == "KIT-A":
+            stock["KIT-C"] = 0
+        return []
+
+    production = AsyncMock(side_effect=produce)
+    monkeypatch.setattr(service, "_produce_quantity", production)
+
+    await service.maintain_kit_stock(minimum=4, target=8, minimum_lifetime_seconds=0)
+
+    assert [call.args[0].sku for call in production.call_args_list] == [
+        "KIT-A",
+        "KIT-C",
+        "KIT-B",
+    ]
+    assert all(quantity == 8 for quantity in stock.values())
+    assert "Kit replenished: sku=KIT-C runs=0 usable=8 elapsed_seconds=" in caplog.text
 
 
 def test_packaging_lock_survives_commits_and_releases_after_failure(test_engine):

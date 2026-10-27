@@ -214,3 +214,111 @@ async def test_worker_accepts_and_fulfills_a_persisted_undecided_order(db_sessio
     assert result.completed == 1
     assert order.status is OrderStatus.DISPATCHED
     assert farma.dispatches == [(units[0].external_unit_id, order.external_order_id)]
+
+
+@pytest.mark.anyio
+async def test_worker_resumes_waiting_order_without_repeated_immediate_api_calls(
+    db_session, monkeypatch
+):
+    now = datetime.now(UTC)
+    settings = make_settings(external_order_stock_wait_seconds=3600)
+    order = make_external_order(
+        created_at=now,
+        total=1500,
+        items=[OrderItem(sku="KIT-WAIT", quantity=1, unit_price=1500)],
+    )
+    destination = f"OUT-{uuid4().hex}"
+    db_session.add_all([order, Location(code=destination, name="Despacho")])
+    db_session.commit()
+    farma = DispatchClient([], destination)
+
+    class Clock:
+        @classmethod
+        def now(cls, tz):
+            return cls.current
+
+    Clock.current = now
+    monkeypatch.setattr("app.services.orders.processing.datetime", Clock)
+    monkeypatch.setattr("app.services.orders.external_fulfillment.datetime", Clock)
+
+    class OfficialOrders(DispatchOrders):
+        state = "creada"
+        decisions = []
+
+        async def get_order(self, order_id):
+            detail = await super().get_order(order_id)
+            return detail.model_copy(
+                update={
+                    "state": ExternalOrderStatus.FULFILLED
+                    if self.client.dispatches
+                    else ExternalOrderStatus(self.state),
+                }
+            )
+
+        async def update_order_state(self, order_id, state):
+            self.state = state
+            self.decisions.append(state)
+
+    official = OfficialOrders(farma)
+    first = await ExternalOrderFulfillmentService(
+        farma, official, db_session, settings=settings
+    ).process_pending()
+    assert first.pending == 1 and first.failed == 0
+    assert order.status is OrderStatus.RECEIVED
+    assert order.decision_at is None
+    assert official.decisions == []
+    assert len(official.fetched) == 1
+
+    Clock.current += timedelta(seconds=5)
+    await ExternalOrderFulfillmentService(
+        farma, official, db_session, settings=settings
+    ).process_pending()
+    assert len(official.fetched) == 1
+
+    units = _add_stock(db_session, sku="KIT-WAIT", days_until_expiration=[10])
+    farma.units = {unit.external_unit_id: unit for unit in units}
+    farma.skus = {unit.external_unit_id: "KIT-WAIT" for unit in units}
+    db_session.commit()
+    Clock.current += timedelta(seconds=25)
+    result = await ExternalOrderFulfillmentService(
+        farma, official, db_session, settings=settings
+    ).process_pending()
+
+    assert result.completed == 1 and result.failed == 0
+    assert order.status is OrderStatus.DISPATCHED
+    assert order.external_status is ExternalOrderStatus.FULFILLED
+    assert official.decisions == ["aceptada"]
+    assert farma.dispatches == [(units[0].external_unit_id, order.external_order_id)]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("bound", ["age", "deadline"])
+async def test_worker_checks_stock_wait_bounds_even_before_next_retry(
+    db_session, bound
+):
+    now = datetime.now(UTC)
+    order = make_external_order(
+        created_at=now - timedelta(seconds=3601) if bound == "age" else now,
+        updated_at=now,
+        decision_reason="Waiting until previous evaluation",
+        delivery_deadline=now + timedelta(seconds=299 if bound == "deadline" else 7200),
+    )
+    db_session.add(order)
+    db_session.commit()
+    official = AsyncMock()
+    official.get_order.return_value = make_purchase_order(
+        vencimiento=order.delivery_deadline
+    )
+
+    result = await ExternalOrderFulfillmentService(
+        DispatchClient([]),
+        official,
+        db_session,
+        settings=make_settings(external_order_stock_wait_seconds=3600),
+    ).process_pending()
+
+    assert result.failed == 0
+    assert order.status is OrderStatus.REJECTED
+    official.update_order_state.assert_awaited_once_with(
+        order.external_order_id, "rechazada"
+    )

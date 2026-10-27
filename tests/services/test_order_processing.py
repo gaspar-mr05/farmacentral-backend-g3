@@ -1,13 +1,22 @@
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from threading import Barrier
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.models import (
     ExternalOrderStatus,
+    InboundEventStatus,
     Location,
     Lot,
     LotOrigin,
+    MessagingDecision,
+    Order,
     OrderItem,
     OrderStatus,
     Product,
@@ -15,8 +24,22 @@ from app.models import (
     ProductionRun,
     Unit,
 )
-from app.services.orders import OrderProcessingService
-from tests.support.orders import make_external_order
+from app.services.messaging import MessagingProcessingService
+from app.services.orders import (
+    OrderProcessingService,
+    PubSubOrderIngestionService,
+    SFTPOrderIngestionService,
+)
+from tests.services.test_messaging_processing import (
+    FakeInterpreter,
+    FakeMessaging,
+    add_event,
+)
+from tests.services.test_pubsub_orders import FakePubSub, message
+from tests.services.test_recalls import recall_database as recall_database
+from tests.services.test_sftp_orders import FakeSFTP, order_file
+from tests.support.farma_central import make_settings
+from tests.support.orders import make_external_order, make_purchase_order
 
 
 class FakeOrders:
@@ -203,3 +226,197 @@ async def test_reprocessing_an_order_does_not_send_a_second_decision(db_session)
     assert second.status is first.status is OrderStatus.REJECTED
     assert second.decision_at == now
     assert orders.decisions == [(order.external_order_id, "rechazada")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("elapsed", "deadline_after", "wait_seconds", "pending"),
+    [
+        (0, 7200, 3600, True),
+        (3599, 7200, 3600, True),
+        (3600, 7200, 3600, False),
+        (599, 900, 3600, True),
+        (600, 900, 3600, False),
+        (0, 300, 3600, False),
+        (0, -1, 3600, False),
+        (0, 7200, 0, False),
+    ],
+)
+async def test_stock_wait_is_bounded_by_age_and_dispatch_margin(
+    db_session, elapsed, deadline_after, wait_seconds, pending
+):
+    created = datetime.now(UTC)
+    order = add_order(
+        db_session,
+        "KIT-WAIT",
+        1,
+        created + timedelta(seconds=deadline_after),
+        "1" * 24,
+    )
+    order.created_at = created
+    db_session.flush()
+    official = FakeOrders()
+    service = OrderProcessingService(
+        official,
+        db_session,
+        settings=make_settings(external_order_stock_wait_seconds=wait_seconds),
+    )
+
+    await service.process_order(order.id, now=created + timedelta(seconds=elapsed))
+
+    assert order.status is (OrderStatus.RECEIVED if pending else OrderStatus.REJECTED)
+    assert order.external_status is (
+        ExternalOrderStatus.CREATED if pending else ExternalOrderStatus.REJECTED
+    )
+    if pending:
+        assert order.decision_at is None
+        assert "Waiting until" in order.decision_reason
+        assert "capacity 0" in order.decision_reason
+        assert official.decisions == []
+    else:
+        assert official.decisions == [(order.external_order_id, "rechazada")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("capacity_source", ["stock", "production"])
+async def test_waiting_order_is_accepted_once_capacity_appears(
+    db_session, capacity_source
+):
+    now = datetime.now(UTC)
+    product = add_product(db_session, "KIT-WAIT")
+    order = add_order(db_session, product.sku, 1, now + timedelta(hours=2), "1" * 24)
+    settings = make_settings(external_order_stock_wait_seconds=3600)
+    official = FakeOrders()
+    service = OrderProcessingService(official, db_session, settings=settings)
+    await service.process_order(order.id, now=now)
+    assert order.status is OrderStatus.RECEIVED
+    db_session.commit()
+
+    if capacity_source == "stock":
+        add_stock(db_session, product, 1, now + timedelta(days=1))
+    else:
+        db_session.add(
+            ProductionRun(
+                expected_sku=product.sku,
+                expected_quantity=1,
+                requested_at=now,
+                available_at=now + timedelta(minutes=5),
+            )
+        )
+        db_session.flush()
+    restarted = OrderProcessingService(official, db_session, settings=settings)
+    await restarted.process_order(order.id, now=now + timedelta(minutes=2))
+    await restarted.process_order(order.id, now=now + timedelta(minutes=3))
+
+    assert order.status is OrderStatus.ACCEPTED
+    assert order.decision_at == now + timedelta(minutes=2)
+    assert official.decisions == [(order.external_order_id, "aceptada")]
+
+
+@pytest.mark.anyio
+async def test_restart_does_not_extend_stock_wait(recall_database):
+    now = datetime.now(UTC)
+    settings = make_settings(external_order_stock_wait_seconds=3600)
+    official = FakeOrders()
+    with Session(recall_database) as session:
+        order = add_order(session, "KIT-WAIT", 1, now + timedelta(hours=2), "1" * 24)
+        order.created_at = now
+        order_id = order.id
+        await OrderProcessingService(
+            official, session, settings=settings
+        ).process_order(order_id, now=now + timedelta(minutes=59))
+        assert order.status is OrderStatus.RECEIVED
+        session.commit()
+
+    with Session(recall_database) as session:
+        result = await OrderProcessingService(
+            official, session, settings=settings
+        ).process_order(order_id, now=now + timedelta(hours=1))
+        assert result.status is OrderStatus.REJECTED
+        assert result.created_at == now
+        assert official.decisions == [(result.external_order_id, "rechazada")]
+
+
+def test_waiting_orders_cannot_commit_the_same_stock_concurrently(recall_database):
+    settings = make_settings(external_order_stock_wait_seconds=3600)
+    official = FakeOrders()
+    now = datetime.now(UTC)
+    with Session(recall_database) as session:
+        product = add_product(session, "KIT-SHARED")
+        order_ids = []
+        for digit in ("1", "2"):
+            order = add_order(
+                session, product.sku, 1, now + timedelta(hours=2), digit * 24
+            )
+            asyncio.run(
+                OrderProcessingService(
+                    official, session, settings=settings
+                ).process_order(order.id)
+            )
+            assert order.status is OrderStatus.RECEIVED
+            order_ids.append(order.id)
+        add_stock(session, product, 1, now + timedelta(days=1))
+        session.commit()
+
+    ready = Barrier(2)
+
+    def decide(order_id):
+        with Session(recall_database) as session:
+            ready.wait(timeout=5)
+            result = asyncio.run(
+                OrderProcessingService(
+                    official, session, settings=settings
+                ).process_order(order_id)
+            )
+            status = result.status
+            session.commit()
+            return status
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(decide, order_id) for order_id in order_ids]
+        statuses = [future.result(timeout=10) for future in futures]
+
+    assert sorted(statuses) == sorted([OrderStatus.ACCEPTED, OrderStatus.RECEIVED])
+    assert len(official.decisions) == 1
+    assert official.decisions[0][1] == "aceptada"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("channel", ["sftp", "pubsub", "messaging"])
+async def test_each_channel_imports_order_without_rejecting_during_stock_wait(
+    db_session, channel
+):
+    settings = make_settings(external_order_stock_wait_seconds=3600)
+    official = AsyncMock()
+    official.get_order.return_value = make_purchase_order(
+        sku="KIT-RESP-ADULTO", vencimiento=datetime.now(UTC) + timedelta(hours=2)
+    )
+    if channel == "messaging":
+        incoming = add_event(db_session, decision=MessagingDecision.ORDER)
+        messaging = FakeMessaging()
+        interpreter = FakeInterpreter()
+        result = await MessagingProcessingService(
+            messaging, interpreter, official, db_session, settings=settings
+        ).process_pending()
+        assert len(messaging.orders) == 1
+        assert interpreter.calls == 0
+        assert incoming.responded_at is not None
+        assert incoming.status is InboundEventStatus.PROCESSED
+    else:
+        service = (
+            SFTPOrderIngestionService(
+                FakeSFTP(order_file()), official, db_session, settings=settings
+            )
+            if channel == "sftp"
+            else PubSubOrderIngestionService(
+                FakePubSub(message()), official, db_session, settings=settings
+            )
+        )
+        result = await service.poll()
+    assert result.processed == 1 and result.failed == 0
+    order = db_session.scalars(select(Order)).one()
+    assert order.status is OrderStatus.RECEIVED
+    assert order.external_status is ExternalOrderStatus.CREATED
+    assert order.decision_at is None
+    assert "Waiting until" in order.decision_reason
+    official.update_order_state.assert_not_awaited()

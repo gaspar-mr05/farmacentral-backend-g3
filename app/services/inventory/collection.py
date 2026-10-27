@@ -22,6 +22,10 @@ CollectedInventory = tuple[
 ]
 
 
+class InventorySnapshotChangedError(FarmaCentralInvalidResponseError):
+    """The stock count changed between the inventory and unit-list GETs."""
+
+
 class InventoryCollector:
     """Reads and validates the inventory exposed by Farma Central."""
 
@@ -69,7 +73,11 @@ class InventoryCollector:
         units = []
         incomplete_groups = set()
         for (space, item), payload in zip(requests, product_payloads, strict=True):
-            space_units = _parse_list(payload, FarmaCentralUnit, "space products")
+            space_units = _parse_list(
+                payload,
+                FarmaCentralUnit,
+                f"space products for {item.sku} in {space.external_id}",
+            )
             _validate_units(space, item, space_units)
             units.extend(space_units)
             if item.quantity > len(space_units):
@@ -120,7 +128,12 @@ def _validate_units(
     correct_origin = all(
         unit.sku == item.sku and unit.store_id == space.external_id for unit in units
     )
-    if not correct_count or not correct_origin:
+    if not correct_origin:
         raise FarmaCentralInvalidResponseError(
             f"Inventory mismatch for SKU {item.sku} in space {space.external_id}"
+        )
+    if not correct_count:
+        raise InventorySnapshotChangedError(
+            f"Inventory changed for SKU {item.sku} in space {space.external_id}: "
+            f"expected {min(item.quantity, 200)} units, observed {len(units)}"
         )

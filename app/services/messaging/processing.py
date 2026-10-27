@@ -75,7 +75,9 @@ class MessagingProcessingService:
             session,
             supplier_id=str(self._settings.farma_central_group),
         )
-        self._order_processing = OrderProcessingService(orders, session)
+        self._order_processing = OrderProcessingService(
+            orders, session, settings=self._settings
+        )
 
     async def process_pending(self) -> MessagingProcessingResult:
         result = MessagingProcessingResult()

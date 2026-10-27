@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from math import ceil
+from time import perf_counter
 from typing import Literal
 
 from pydantic import ValidationError
@@ -10,16 +11,23 @@ from sqlalchemy.orm import Session
 
 from app.clients.farma_central import (
     FarmaCentralClient,
+    FarmaCentralConnectionError,
     FarmaCentralInvalidResponseError,
+    FarmaCentralTimeoutError,
 )
 from app.db.production_runs import find_pending_runs_for_sku
 from app.models import Location, Lot, Product, ProductionRun, Unit
 from app.schemas.farma_central import FarmaCentralProduct
+from app.services.inventory.collection import InventorySnapshotChangedError
 from app.services.inventory.movements import ProductMovementService
 from app.services.inventory.sync import InventorySyncService
 from app.services.production.lineage import has_official_lineage
 from app.services.production.locking import production_lock
-from app.services.production.orchestration import produce
+from app.services.production.orchestration import (
+    ProductionError,
+    ProductionInputsUnavailableError,
+    produce,
+)
 from app.services.supply.requests import SupplyRequestService
 
 RawMaterialSource = Literal["supply", "sandbox"]
@@ -145,15 +153,17 @@ class KitProductionService:
                 raise ProductionCatalogError(
                     "The catalog does not contain sellable kits"
                 )
-            kits.sort(
-                key=lambda p: (
-                    self._usable_stock(p.sku, minimum_lifetime_seconds),
-                    p.sku,
-                )
-            )
             result = {}
             failed_skus = []
-            for kit in kits:
+            while kits:
+                kit = min(
+                    kits,
+                    key=lambda p: (
+                        self._usable_stock(p.sku, minimum_lifetime_seconds),
+                        p.sku,
+                    ),
+                )
+                kits.remove(kit)
                 stock = self._usable_stock(kit.sku, minimum_lifetime_seconds)
                 if stock >= minimum:
                     continue
@@ -173,12 +183,21 @@ class KitProductionService:
                         kit.sku,
                     )
                     continue
+                started = perf_counter()
                 try:
                     result[kit.sku] = await self._produce_quantity(
                         kit, quantity, dependency_path=()
                     )
                     await self._clear_packaging()
-                except KitProductionError as exc:
+                    logger.info(
+                        "Kit replenished: sku=%s runs=%s usable=%s "
+                        "elapsed_seconds=%.2f",
+                        kit.sku,
+                        len(result[kit.sku]),
+                        self._usable_stock(kit.sku, minimum_lifetime_seconds),
+                        perf_counter() - started,
+                    )
+                except (KitProductionError, ProductionError) as exc:
                     self._session.rollback()
                     # Never disturb an unresolved production in shared packaging.
                     if self._session.scalar(
@@ -189,7 +208,10 @@ class KitProductionService:
                         raise
                     failed_skus.append(kit.sku)
                     logger.warning(
-                        "Replenishment skipped %s (%s)", kit.sku, type(exc).__name__
+                        "Replenishment skipped %s (%s): %s",
+                        kit.sku,
+                        type(exc).__name__,
+                        exc,
                     )
             if failed_skus:
                 raise KitProductionError(
@@ -267,27 +289,42 @@ class KitProductionService:
         next_path = (*dependency_path, product.sku)
         for chunk in chunks:
             logger.info("Preparing production of %s x %s", chunk, product.sku)
-            for component in product.components:
-                await self._ensure_available(
-                    component.sku,
-                    component.required_per_unit * chunk,
-                    dependency_path=next_path,
-                )
+            for attempt in range(2):
+                for component in product.components:
+                    await self._ensure_available(
+                        component.sku,
+                        component.required_per_unit * chunk,
+                        dependency_path=next_path,
+                    )
 
-            await self._synchronize()
-            await self._clear_packaging()
-            for component in product.components:
-                await self._stage_component(
-                    component.sku,
-                    component.required_per_unit * chunk,
-                )
+                await self._synchronize()
+                await self._clear_packaging()
+                for component in product.components:
+                    await self._stage_component(
+                        component.sku,
+                        component.required_per_unit * chunk,
+                    )
 
-            run, supply = await produce(
-                self._session,
-                client=self._client,
-                sku=product.sku,
-                quantity=chunk,
-            )
+                try:
+                    run, supply = await produce(
+                        self._session,
+                        client=self._client,
+                        sku=product.sku,
+                        quantity=chunk,
+                    )
+                    break
+                except ProductionInputsUnavailableError as exc:
+                    # Input selection fails before the production POST.
+                    self._session.rollback()
+                    logger.warning(
+                        "Production inputs unavailable: sku=%s attempt=%s/2 missing=%s",
+                        product.sku,
+                        attempt + 1,
+                        exc.missing_by_sku,
+                    )
+                    if attempt == 1:
+                        raise
+                    await self._synchronize()
             runs.append(run)
             logger.info(
                 "Production run %s accepted; available at %s",
@@ -455,7 +492,26 @@ class KitProductionService:
         return location
 
     async def _synchronize(self) -> None:
-        await InventorySyncService(self._client, self._session).synchronize()
+        for attempt in range(3):
+            try:
+                await InventorySyncService(self._client, self._session).synchronize()
+                return
+            except (
+                InventorySnapshotChangedError,
+                FarmaCentralConnectionError,
+                FarmaCentralTimeoutError,
+            ) as exc:
+                self._session.rollback()
+                logger.warning(
+                    "Production inventory sync failed: attempt=%s/3 error=%s",
+                    attempt + 1,
+                    str(exc)
+                    if isinstance(exc, InventorySnapshotChangedError)
+                    else type(exc).__name__,
+                )
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(attempt + 1)
 
     async def _reject_ambiguous_pending_runs(self, sku: str) -> None:
         await self._synchronize()
