@@ -1,0 +1,120 @@
+{
+  "captured_at": "2026-11-09T23:10:57.798063+00:00",
+  "scope": "public_documentation_only",
+  "llm_calls": 0,
+  "sources": {
+    "billing.wsdl": {
+      "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/soap/billing?wsdl",
+      "http_status": 200,
+      "namespace": "http://billing.tallerdeintegracion.cl",
+      "operations": [
+        "emitInvoice",
+        "getBankStatement",
+        "getInvoices",
+        "payInvoice"
+      ],
+      "invoice_fields": [
+        "id",
+        "client",
+        "supplier",
+        "channel",
+        "description",
+        "status",
+        "price",
+        "interest",
+        "totalPrice",
+        "createdAt",
+        "updatedAt"
+      ],
+      "money_types": {
+        "price": "s:float",
+        "interest": "s:float",
+        "totalPrice": "s:float"
+      },
+      "status": "passed",
+      "file": "20261109T231057798063Z-billing.wsdl",
+      "sha256": "d07d09d5860614b6eedbd1163b64d8006849f0f5b6a0dfc36028a6321d0b8b30",
+      "bytes": 8679
+    },
+    "billing.html": {
+      "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/billing/docs",
+      "http_status": 200,
+      "status": "passed",
+      "file": "20261109T231057798063Z-billing.html",
+      "sha256": "9401b438506be4667a4a274f1d9da7659b260d55f0e9dff45d4bd407c35e12aa",
+      "bytes": 14219
+    },
+    "trades.html": {
+      "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/trades/docs",
+      "http_status": 400,
+      "status": "pending",
+      "announced_available_on": "2026-11-11"
+    },
+    "messaging.html": {
+      "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/messaging/docs",
+      "http_status": 200,
+      "status": "passed",
+      "file": "20261109T231057798063Z-messaging.html",
+      "sha256": "85521c2480ad42a8f63bb4ad14bf5cad1227bc128ed75bd04f3ef1dd71d454b5",
+      "bytes": 8812
+    },
+    "farma-central.openapi.json": {
+      "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/farma-central/openapi.json",
+      "http_status": 200,
+      "version": "1.0.0",
+      "paths": [
+        "/farma-central/auth",
+        "/farma-central/dispatch",
+        "/farma-central/fabrication/challenge",
+        "/farma-central/market/prices",
+        "/farma-central/market/{sku}/history",
+        "/farma-central/products",
+        "/farma-central/products/available",
+        "/farma-central/products/{productId}",
+        "/farma-central/products/{productId}/group",
+        "/farma-central/recalls",
+        "/farma-central/recalls/{id}/notifications",
+        "/farma-central/recalls/{id}/report",
+        "/farma-central/sandbox/notifications/orders",
+        "/farma-central/sandbox/products",
+        "/farma-central/spaces",
+        "/farma-central/spaces/{storeId}/inventory",
+        "/farma-central/spaces/{storeId}/products"
+      ],
+      "status": "passed",
+      "file": "20261109T231057798063Z-farma-central.openapi.json",
+      "sha256": "a5538e6060e4fdee183efb21e21956c6aa58e66f7d9650446e6cf05fe78a78d5",
+      "bytes": 32227
+    },
+    "purchase-orders.openapi.json": {
+      "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/ordenes-compra/openapi.json",
+      "http_status": 200,
+      "version": "2.0.0",
+      "paths": [
+        "/ordenes-compra/autenticar",
+        "/ordenes-compra/ordenes",
+        "/ordenes-compra/ordenes/{idOrden}",
+        "/ordenes-compra/ordenes/{idOrden}/estado",
+        "/ordenes-compra/pubsub/key",
+        "/ordenes-compra/stats"
+      ],
+      "status": "passed",
+      "file": "20261109T231057798063Z-purchase-orders.openapi.json",
+      "sha256": "b0a7ea08f212a626c06448c4049d8c7cfd699a40435c7701b2e534b07f69a6a7",
+      "bytes": 12989
+    },
+    "messaging.openapi.json": {
+      "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/messaging/openapi.json",
+      "http_status": 200,
+      "version": "1.0.0",
+      "paths": [
+        "/messaging/auth",
+        "/messaging/messages/{messageId}/response"
+      ],
+      "status": "passed",
+      "file": "20261109T231057798063Z-messaging.openapi.json",
+      "sha256": "46f80d72474f8642731b65be0e595fe0cdc511e67bdcc936d994de32935657bc",
+      "bytes": 7844
+    }
+  }
+}

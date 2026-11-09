@@ -41,6 +41,21 @@ Detener PostgreSQL:
 docker compose down
 ```
 
+### Preparación de la Entrega 3
+
+La auditoría de base E2, contratos externos y separación de períodos está en
+[docs/ENTREGA3_PASO1.md](docs/ENTREGA3_PASO1.md), junto con sus resultados y
+pendientes. Para observar conexión, migraciones y salud local sin modificar datos:
+
+```bash
+python -m scripts.verify_e3_baseline --api-url http://127.0.0.1:8000
+```
+
+`--inventory` añade una lectura del inventario oficial del ambiente configurado;
+`--check-services` consulta systemd. Ninguna opción llama al LLM, fabrica o paga.
+La captura de documentación pública se ejecuta por separado mediante
+`scripts.capture_e3_contracts`; no realiza operaciones SOAP ni comerciales.
+
 ### Esperar stock antes de rechazar una OC
 
 Para activar la espera en el `.env` del ambiente correspondiente:

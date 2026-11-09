@@ -1,0 +1,434 @@
+{
+  "recorded_at": "2026-11-09T23:18:56.965721+00:00",
+  "scope": "e3_step1_audit_not_e3_readiness",
+  "reference_commit": "9ea0423a72a0cedb248fc09bcd269901e0d20218",
+  "runtime_behavior_changed": false,
+  "llm_calls": 0,
+  "external_business_mutations": 0,
+  "automated_validation": {
+    "runner": "pytest -q tests --maxfail=5, with scripts.test_e2.local_connections_only",
+    "database": "separate temporary PostgreSQL 16, removed after completion",
+    "external_connections": "blocked_except_loopback",
+    "counts": {
+      "passed": 829,
+      "failed": 0,
+      "skipped": 0
+    },
+    "exit_code": 0,
+    "duration_seconds": 32.68,
+    "migration_rehearsal": {
+      "status": "passed",
+      "detail": "Conexión y revisión de migraciones; sin aplicar cambios",
+      "current": [
+        "8c62e71f4b09"
+      ],
+      "expected": [
+        "8c62e71f4b09"
+      ],
+      "read_only": true,
+      "counts": {
+        "products": 0,
+        "lots": 0,
+        "units": 0,
+        "production_runs": 0,
+        "recalls": 0
+      },
+      "orders": [],
+      "inbound_events": []
+    },
+    "new_checks_and_reproductions": [
+      {
+        "id": "tests/scripts/test_capture_e3_contracts.py::test_wsdl_summary_reports_actual_fields_and_precision_without_inventing_link",
+        "outcome": "passed",
+        "duration_seconds": 0.0002
+      },
+      {
+        "id": "tests/scripts/test_capture_e3_contracts.py::test_wsdl_rejects_external_entities",
+        "outcome": "passed",
+        "duration_seconds": 0.0001
+      },
+      {
+        "id": "tests/scripts/test_capture_e3_contracts.py::test_openapi_summary_rejects_non_contract_json[[]]",
+        "outcome": "passed",
+        "duration_seconds": 0.0001
+      },
+      {
+        "id": "tests/scripts/test_capture_e3_contracts.py::test_openapi_summary_rejects_non_contract_json[null]",
+        "outcome": "passed",
+        "duration_seconds": 0.0
+      },
+      {
+        "id": "tests/scripts/test_capture_e3_contracts.py::test_openapi_summary_rejects_non_contract_json[{\"paths\":[]}]",
+        "outcome": "passed",
+        "duration_seconds": 0.0
+      },
+      {
+        "id": "tests/scripts/test_capture_e3_contracts.py::test_capture_uses_only_public_gets_and_hashes_successful_snapshots",
+        "outcome": "passed",
+        "duration_seconds": 0.0012
+      },
+      {
+        "id": "tests/scripts/test_capture_e3_contracts.py::test_capture_records_failures_without_persisting_error_bodies[redirect]",
+        "outcome": "passed",
+        "duration_seconds": 0.0005
+      },
+      {
+        "id": "tests/scripts/test_capture_e3_contracts.py::test_capture_records_failures_without_persisting_error_bodies[timeout]",
+        "outcome": "passed",
+        "duration_seconds": 0.0005
+      },
+      {
+        "id": "tests/scripts/test_capture_e3_contracts.py::test_capture_records_failures_without_persisting_error_bodies[invalid-contract]",
+        "outcome": "passed",
+        "duration_seconds": 0.0004
+      },
+      {
+        "id": "tests/scripts/test_verify_e3_baseline.py::test_configuration_report_never_exposes_credentials_or_url_queries",
+        "outcome": "passed",
+        "duration_seconds": 0.0011
+      },
+      {
+        "id": "tests/scripts/test_verify_e3_baseline.py::test_database_failure_hides_dsn_and_driver_error",
+        "outcome": "passed",
+        "duration_seconds": 0.0012
+      },
+      {
+        "id": "tests/scripts/test_verify_e3_baseline.py::test_baseline_snapshot_is_read_only_and_does_not_apply_migrations",
+        "outcome": "passed",
+        "duration_seconds": 0.0045
+      },
+      {
+        "id": "tests/scripts/test_verify_e3_baseline.py::test_current_migration_snapshot_reports_counts_in_read_only_mode",
+        "outcome": "passed",
+        "duration_seconds": 0.0113
+      },
+      {
+        "id": "tests/scripts/test_verify_e3_baseline.py::test_official_inventory_probe_reads_counts_without_mutating_units",
+        "outcome": "passed",
+        "duration_seconds": 0.0009
+      },
+      {
+        "id": "tests/scripts/test_verify_e3_baseline.py::test_inventory_error_logs_only_type_and_http_status",
+        "outcome": "passed",
+        "duration_seconds": 0.0018
+      },
+      {
+        "id": "tests/scripts/test_verify_e3_baseline.py::test_default_report_skips_external_probes_and_preserves_limits",
+        "outcome": "passed",
+        "duration_seconds": 0.0038
+      },
+      {
+        "id": "tests/services/production/test_e3_baseline_gaps.py::test_unrelated_inventory_movements_exhaust_replenishment_snapshot_retries",
+        "outcome": "passed",
+        "duration_seconds": 0.0034
+      },
+      {
+        "id": "tests/services/production/test_e3_baseline_gaps.py::test_oc_429_keeps_order_but_current_worker_retries_before_retry_after",
+        "outcome": "passed",
+        "duration_seconds": 0.0259
+      }
+    ],
+    "warnings": [
+      "Existing Starlette/httpx deprecation; Alembic prepend_sys_path legacy separator warning"
+    ]
+  },
+  "operational_local_observation": {
+    "checked_at": "2026-11-09T23:11:23.943679+00:00",
+    "scope": "e3_step1_observation_only",
+    "commit": "9ea0423a72a0cedb248fc09bcd269901e0d20218",
+    "configuration": {
+      "app_env": "local",
+      "group": 3,
+      "database": {
+        "host": "localhost",
+        "port": 5432,
+        "name": "farmacentral"
+      },
+      "endpoints": {
+        "farma_central": {
+          "scheme": "https",
+          "host": "dev.proyecto.2026-2.tallerdeintegracion.cl",
+          "path": "/farma-central/"
+        },
+        "purchase_orders": {
+          "scheme": "https",
+          "host": "dev.proyecto.2026-2.tallerdeintegracion.cl",
+          "path": "/ordenes-compra/"
+        },
+        "messaging": {
+          "scheme": "https",
+          "host": "dev.proyecto.2026-2.tallerdeintegracion.cl",
+          "path": "/messaging/"
+        },
+        "checkout": {
+          "scheme": "https",
+          "host": "dev.proyecto.2026-2.tallerdeintegracion.cl",
+          "path": "/"
+        },
+        "public_api": {
+          "scheme": "http",
+          "host": "127.0.0.1",
+          "path": "/"
+        }
+      },
+      "settings_env_files": [
+        ".env",
+        ".env.local"
+      ],
+      "note": "El entorno del proceso tiene precedencia; no inspecciona otros PID"
+    },
+    "llm_calls": 0,
+    "business_mutations": 0,
+    "checks": {
+      "database": {
+        "status": "failed",
+        "detail": "Base de datos no verificable",
+        "error_type": "OperationalError"
+      },
+      "official_inventory": {
+        "status": "passed",
+        "detail": "Conteos oficiales observados; no certifica identidad, linaje o conservación",
+        "catalog_products": 71,
+        "spaces": [
+          {
+            "space_id": "6aab378e634bd785003d7bc6",
+            "quantities": {
+              "API-PARACET-500": 9,
+              "EXC-SUERO-FISIO": 3,
+              "INS-ALGODON-HID": 19,
+              "INS-GASA-EST": 3,
+              "INS-JERINGA-10": 10,
+              "INS-LANCETA": 4
+            }
+          },
+          {
+            "space_id": "6aab378e634bd785003d7bc7",
+            "quantities": {}
+          },
+          {
+            "space_id": "6aab378e634bd785003d7bc8",
+            "quantities": {}
+          },
+          {
+            "space_id": "6aab378e634bd785003d7bc9",
+            "quantities": {
+              "API-PARACET-500": 11,
+              "EXC-ALCOHOL-70": 12,
+              "EXC-CREMA-BASE": 2,
+              "EXC-JARABE-BASE": 10,
+              "EXC-LACTOSA-DC": 34,
+              "EXC-SUERO-FISIO": 15,
+              "FRA-VIDRIO-120": 15,
+              "INS-ALGODON-HID": 13,
+              "INS-GASA-EST": 5,
+              "INS-JERINGA-10": 8,
+              "INS-LANCETA": 16,
+              "LAM-BLISTER-PVC": 29,
+              "SOB-PAPEL-EST": 38,
+              "TUB-ALUM-30": 15,
+              "VIA-VIDRIO-10": 2
+            }
+          },
+          {
+            "space_id": "6aab378e634bd785003d7bca",
+            "quantities": {}
+          },
+          {
+            "space_id": "6aab378e634bd785003d7bcb",
+            "quantities": {}
+          },
+          {
+            "space_id": "6aab378e634bd785003d7bcc",
+            "quantities": {}
+          }
+        ],
+        "observed_at": "2026-11-09T23:11:23.933684+00:00"
+      },
+      "api_readiness": {
+        "status": "failed",
+        "detail": "HTTP no respondió",
+        "error_type": "ConnectError"
+      }
+    },
+    "not_verified": [
+      "Correctitud de E2: requiere suite aislada y evidencia de flujos reales",
+      "Conservación, FEFO, expiraciones, pulmón y custodia de unidades reales",
+      "Configuración efectiva de otros procesos o de un servidor remoto",
+      "Contratos E3 pendientes y comportamiento de emisión/cobro/pago SOAP",
+      "Disponibilidad continua y recuperación después del reset oficial",
+      "Servicios: falta --check-services"
+    ]
+  },
+  "local_service_observation": {
+    "api_and_timer": {
+      "status": "failed",
+      "detail": "Supervisión de API y timer",
+      "units": {
+        "farmacentral-backend.service": {
+          "Restart": "no",
+          "LoadState": "not-found",
+          "ActiveState": "inactive",
+          "SubState": "dead"
+        },
+        "farmacentral-inventory-sync.timer": {
+          "LoadState": "not-found",
+          "ActiveState": "inactive",
+          "SubState": "dead"
+        }
+      }
+    },
+    "workers": {
+      "status": "failed",
+      "detail": "Hay workers ausentes, detenidos o sin reinicio automático",
+      "units": {
+        "farmacentral-worker@poll_sftp_orders.service": {
+          "Restart": "no",
+          "LoadState": "not-found",
+          "ActiveState": "inactive",
+          "SubState": "dead"
+        },
+        "farmacentral-worker@poll_pubsub_orders.service": {
+          "Restart": "no",
+          "LoadState": "not-found",
+          "ActiveState": "inactive",
+          "SubState": "dead"
+        },
+        "farmacentral-worker@process_messaging.service": {
+          "Restart": "no",
+          "LoadState": "not-found",
+          "ActiveState": "inactive",
+          "SubState": "dead"
+        },
+        "farmacentral-worker@fulfill_external_orders.service": {
+          "Restart": "no",
+          "LoadState": "not-found",
+          "ActiveState": "inactive",
+          "SubState": "dead"
+        },
+        "farmacentral-worker@process_recalls.service": {
+          "Restart": "no",
+          "LoadState": "not-found",
+          "ActiveState": "inactive",
+          "SubState": "dead"
+        },
+        "farmacentral-worker@replenish_inventory.service": {
+          "Restart": "no",
+          "LoadState": "not-found",
+          "ActiveState": "inactive",
+          "SubState": "dead"
+        }
+      },
+      "invalid": [
+        "farmacentral-worker@poll_sftp_orders.service",
+        "farmacentral-worker@poll_pubsub_orders.service",
+        "farmacentral-worker@process_messaging.service",
+        "farmacentral-worker@fulfill_external_orders.service",
+        "farmacentral-worker@process_recalls.service",
+        "farmacentral-worker@replenish_inventory.service"
+      ]
+    }
+  },
+  "public_contract_snapshot": {
+    "manifest": "docs/e3/contracts/2026-11-09/manifest.json",
+    "captured_at": "2026-11-09T23:10:57.798063+00:00",
+    "results": {
+      "billing.wsdl": {
+        "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/soap/billing?wsdl",
+        "http_status": 200,
+        "status": "passed",
+        "sha256": "d07d09d5860614b6eedbd1163b64d8006849f0f5b6a0dfc36028a6321d0b8b30"
+      },
+      "billing.html": {
+        "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/billing/docs",
+        "http_status": 200,
+        "status": "passed",
+        "sha256": "9401b438506be4667a4a274f1d9da7659b260d55f0e9dff45d4bd407c35e12aa"
+      },
+      "trades.html": {
+        "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/trades/docs",
+        "http_status": 400,
+        "status": "pending",
+        "announced_available_on": "2026-11-11"
+      },
+      "messaging.html": {
+        "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/messaging/docs",
+        "http_status": 200,
+        "status": "passed",
+        "sha256": "85521c2480ad42a8f63bb4ad14bf5cad1227bc128ed75bd04f3ef1dd71d454b5"
+      },
+      "farma-central.openapi.json": {
+        "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/farma-central/openapi.json",
+        "http_status": 200,
+        "status": "passed",
+        "sha256": "a5538e6060e4fdee183efb21e21956c6aa58e66f7d9650446e6cf05fe78a78d5"
+      },
+      "purchase-orders.openapi.json": {
+        "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/ordenes-compra/openapi.json",
+        "http_status": 200,
+        "status": "passed",
+        "sha256": "b0a7ea08f212a626c06448c4049d8c7cfd699a40435c7701b2e534b07f69a6a7"
+      },
+      "messaging.openapi.json": {
+        "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/messaging/openapi.json",
+        "http_status": 200,
+        "status": "passed",
+        "sha256": "46f80d72474f8642731b65be0e595fe0cdc511e67bdcc936d994de32935657bc"
+      }
+    }
+  },
+  "gaps": [
+    {
+      "id": "E2-SYNC",
+      "status": "reproduced_not_fixed",
+      "owner": "Backend A + B",
+      "test": "tests/services/production/test_e3_baseline_gaps.py::test_unrelated_inventory_movements_exhaust_replenishment_snapshot_retries",
+      "next_step": 13
+    },
+    {
+      "id": "E2-OC-429",
+      "status": "reproduced_not_fixed",
+      "owner": "Backend A + B",
+      "test": "tests/services/production/test_e3_baseline_gaps.py::test_oc_429_keeps_order_but_current_worker_retries_before_retry_after",
+      "next_step": 13
+    },
+    {
+      "id": "C1",
+      "status": "contract_confirmation_pending",
+      "owner": "Backend A + B",
+      "detail": "BillingDetails has no explicit order reference after a lost emitInvoice response",
+      "next_steps": [
+        3,
+        5
+      ]
+    },
+    {
+      "id": "C2",
+      "status": "contract_confirmation_pending",
+      "owner": "Backend A",
+      "detail": "Assignment automatic payment of client channels conflicts with billing guide client 999 restriction"
+    },
+    {
+      "id": "C3",
+      "status": "availability_pending",
+      "owner": "Backend A + B",
+      "announced_date": "2026-11-11",
+      "detail": "Market documentation HTTP 400"
+    },
+    {
+      "id": "C4",
+      "status": "availability_pending",
+      "owner": "Backend A + B",
+      "announced_date": "2026-11-12",
+      "detail": "Messaging specification still has order/discarded only and no outbound text endpoint"
+    }
+  ],
+  "not_verified": [
+    "Operational local DB and API: unavailable during observation",
+    "Server SSH, real systemd process environments and production state",
+    "New live E2 flow, unit lineage and physical storage checks against course APIs",
+    "SOAP invoice emission, payments and resolution of contradictory automatic settlement rules",
+    "Market and new messaging operations before announced availability",
+    "Official E3 reset or a migration of the operational database"
+  ],
+  "local_services_checked_at": "2026-11-09T23:12:44.327670+00:00"
+}

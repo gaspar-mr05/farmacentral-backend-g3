@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Facturación - Documentación de integración</title>
+  <style>
+    :root {
+      --ink: #15211d;
+      --ink-muted: #4b5a54;
+      --paper: #f5f7f4;
+      --line: #d5ddd6;
+      --code-bg: #101a17;
+      --code-ink: #d7e3dc;
+      --accent: #0f766e;
+      --warn-tint: #fbf0da;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 16px/1.6 system-ui, -apple-system, 'Segoe UI', sans-serif;
+    }
+
+    main { max-width: 860px; margin: 0 auto; padding: 32px 16px 80px; }
+    h1 { font-size: 2rem; margin: 0 0 8px; }
+    h2 { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); }
+    h3 { margin-top: 32px; }
+    a { color: var(--accent); }
+    .lead { color: var(--ink-muted); font-size: 1.05rem; }
+    code { font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 0.9em; }
+    :not(pre) > code { background: #e9eee9; padding: 1px 5px; border-radius: 4px; }
+
+    pre {
+      background: var(--code-bg);
+      color: var(--code-ink);
+      padding: 14px 16px;
+      border-radius: 8px;
+      overflow-x: auto;
+      line-height: 1.5;
+    }
+
+    table { border-collapse: collapse; width: 100%; margin: 16px 0; display: block; overflow-x: auto; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #e9eee9; }
+    .note { background: var(--warn-tint); border-left: 4px solid #b7791f; padding: 10px 14px; border-radius: 4px; }
+    nav ul { padding-left: 20px; }
+  </style>
+</head>
+
+<body>
+  <main>
+    <h1>Facturación</h1>
+    <p class="lead">
+      Las facturas se emiten y se pagan por un servicio SOAP. Esta guía explica cómo autenticarse, las
+      cuatro operaciones, cuándo se puede emitir, cómo se calculan los intereses y qué facturas recibe
+      cada grupo.
+    </p>
+
+    <nav>
+      <ul>
+        <li><a href="#acceso">Acceso y autenticación</a></li>
+        <li><a href="#operaciones">Operaciones</a></li>
+        <li><a href="#ejemplos">Ejemplos de cliente (Python y Node.js)</a></li>
+        <li><a href="#emision">Reglas de emisión</a></li>
+        <li><a href="#intereses">Intereses</a></li>
+        <li><a href="#recibidas">Qué facturas recibe cada grupo</a></li>
+      </ul>
+    </nav>
+
+    <h2 id="acceso">Acceso y autenticación</h2>
+    <table>
+      <tr><th>Endpoint</th><td><code>https://dev.proyecto.2026-2.tallerdeintegracion.cl/soap/billing</code></td></tr>
+      <tr><th>WSDL</th><td><a href="/soap/billing?wsdl"><code>/soap/billing?wsdl</code></a></td></tr>
+      <tr><th>Namespace</th><td><code>http://billing.tallerdeintegracion.cl</code></td></tr>
+      <tr><th>Límite</th><td>60 requests por minuto por IP.</td></tr>
+    </table>
+    <p>
+      Cada request lleva un header <strong>WS-Security <code>UsernameToken</code></strong> con el número
+      de tu grupo como <code>Username</code> y el secreto de tu grupo como <code>Password</code> (texto
+      plano; usa siempre HTTPS). Las operaciones actúan siempre sobre el grupo autenticado.
+    </p>
+    <pre>&lt;soapenv:Header&gt;
+  &lt;wsse:Security xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"&gt;
+    &lt;wsse:UsernameToken&gt;
+      &lt;wsse:Username&gt;3&lt;/wsse:Username&gt;
+      &lt;wsse:Password&gt;SECRETO_DEL_GRUPO&lt;/wsse:Password&gt;
+    &lt;/wsse:UsernameToken&gt;
+  &lt;/wsse:Security&gt;
+&lt;/soapenv:Header&gt;</pre>
+    <p>
+      Los clientes SOAP arman este header por ti: mira los <a href="#ejemplos">ejemplos en Python y
+      Node.js</a>.
+    </p>
+
+    <h2 id="operaciones">Operaciones</h2>
+    <p>
+      Los ejemplos usan el prefijo <code>bil</code> para el namespace del servicio
+      (<code>xmlns:bil="http://billing.tallerdeintegracion.cl"</code>) y omiten el header de seguridad.
+    </p>
+
+    <h3><code>getBankStatement</code></h3>
+    <p>Saldo del grupo: facturas pagadas recibidas menos facturas pagadas emitidas hacia terceros, incluidos los intereses ya cobrados.</p>
+    <pre>&lt;soapenv:Body&gt;
+  &lt;bil:getBankStatementRequest/&gt;
+&lt;/soapenv:Body&gt;
+
+&lt;!-- respuesta --&gt;
+&lt;BankStatement&gt;
+  &lt;group&gt;3&lt;/group&gt;
+  &lt;balance&gt;152000&lt;/balance&gt;
+&lt;/BankStatement&gt;</pre>
+
+    <h3><code>getInvoices</code></h3>
+    <p>
+      Lista las facturas del grupo según su estado (<code>pending</code> o <code>paid</code>) y su lado:
+      <code>client</code> (las que debes pagar) o <code>supplier</code> (las que emitiste o te cobran). El
+      rango <code>fromDate</code>–<code>toDate</code> filtra por fecha de creación y no puede superar 3 días.
+    </p>
+    <pre>&lt;soapenv:Body&gt;
+  &lt;bil:getInvoicesRequest&gt;
+    &lt;bil:status&gt;pending&lt;/bil:status&gt;
+    &lt;bil:side&gt;client&lt;/bil:side&gt;
+    &lt;bil:fromDate&gt;2026-11-18T10:00:00Z&lt;/bil:fromDate&gt;
+    &lt;bil:toDate&gt;2026-11-20T10:00:00Z&lt;/bil:toDate&gt;
+  &lt;/bil:getInvoicesRequest&gt;
+&lt;/soapenv:Body&gt;
+
+&lt;!-- respuesta: cero o más BillingDetails --&gt;
+&lt;BillingDetails&gt;
+  &lt;id&gt;507f191e810c19729de860ea&lt;/id&gt;
+  &lt;client&gt;3&lt;/client&gt;
+  &lt;supplier&gt;1000&lt;/supplier&gt;
+  &lt;channel&gt;fabric&lt;/channel&gt;
+  &lt;description&gt;...&lt;/description&gt;
+  &lt;status&gt;pending&lt;/status&gt;
+  &lt;price&gt;10000&lt;/price&gt;
+  &lt;interest&gt;300&lt;/interest&gt;
+  &lt;totalPrice&gt;10300&lt;/totalPrice&gt;
+  &lt;createdAt&gt;2026-11-18T10:05:00.000Z&lt;/createdAt&gt;
+  &lt;updatedAt&gt;2026-11-18T10:05:00.000Z&lt;/updatedAt&gt;
+&lt;/BillingDetails&gt;</pre>
+    <p>
+      En una factura <code>pending</code>, <code>interest</code> y <code>totalPrice</code> reflejan el
+      interés acumulado <em>al momento de la consulta</em>. En una <code>paid</code> son los valores
+      cobrados al pagar.
+    </p>
+
+    <h3><code>emitInvoice</code></h3>
+    <p>Emite la factura de una orden de compra cumplida. Responde con el <code>BillingDetails</code> creado.</p>
+    <pre>&lt;soapenv:Body&gt;
+  &lt;bil:emitInvoiceRequest&gt;
+    &lt;bil:order_id&gt;507f191e810c19729de860ea&lt;/bil:order_id&gt;
+  &lt;/bil:emitInvoiceRequest&gt;
+&lt;/soapenv:Body&gt;</pre>
+
+    <h3><code>payInvoice</code></h3>
+    <p>
+      Paga una factura <code>pending</code> de la que eres cliente. Se cobra el precio más el interés
+      acumulado hasta ese instante, que queda fijado en la factura junto con la fecha de pago.
+    </p>
+    <pre>&lt;soapenv:Body&gt;
+  &lt;bil:payInvoiceRequest&gt;
+    &lt;bil:invoice_id&gt;507f191e810c19729de860ea&lt;/bil:invoice_id&gt;
+  &lt;/bil:payInvoiceRequest&gt;
+&lt;/soapenv:Body&gt;</pre>
+
+    <h2 id="ejemplos">Ejemplos de cliente</h2>
+    <p>
+      Para llamar al servicio necesitas un cliente SOAP: en Python el más usado es
+      <a href="https://docs.python-zeep.org/">Zeep</a> y en Node.js el paquete
+      <a href="https://www.npmjs.com/package/soap"><code>soap</code></a>. Ambos leen el WSDL, exponen
+      las cuatro operaciones como funciones y arman el header <code>UsernameToken</code> por ti. El
+      usuario es el <strong>número de tu grupo</strong> y la contraseña es el <strong>mismo secreto</strong>
+      que usas para generar tokens en Bodega y Órdenes de compra. Guárdalos como variables de ambiente
+      (<code>SOAP_USER</code> y <code>SOAP_PASSWORD</code>) y no los imprimas ni los subas al repositorio.
+    </p>
+    <p class="note">
+      <code>getInvoices</code> acepta un rango de máximo 3 días, así que estos ejemplos consultan las
+      últimas 24 horas en vez de fechas fijas.
+    </p>
+
+    <h3>Python (Zeep)</h3>
+    <pre>pip install zeep</pre>
+    <pre>import os
+from datetime import datetime, timedelta, timezone
+
+from lxml import etree
+from zeep import Client
+from zeep.exceptions import Fault, TransportError
+from zeep.plugins import HistoryPlugin
+from zeep.wsse.username import UsernameToken
+
+WSDL = 'https://dev.proyecto.2026-2.tallerdeintegracion.cl/soap/billing?wsdl'
+
+history = HistoryPlugin()  # guarda el último sobre enviado y recibido
+client = Client(
+    WSDL,
+    wsse=UsernameToken(os.environ['SOAP_USER'], os.environ['SOAP_PASSWORD']),
+    plugins=[history],
+)
+
+print('Operaciones:', sorted(client.service._operations.keys()))
+
+
+def call(operation, **params):
+    """Llama a una operación y muestra el error del servidor si lo hay."""
+    try:
+        return getattr(client.service, operation)(**params)
+    except Fault as e:  # el servicio respondió con un SOAP Fault
+        # Zeep no siempre lee el texto del Fault (e.message puede ser None): si pasa,
+        # muestra el sobre recibido, que trae el código y el motivo del error.
+        detail = e.message or etree.tostring(history.last_received['envelope'], encoding='unicode')
+        print(f'{operation}: {detail}')
+    except TransportError as e:  # HTTP 401 (credenciales), 429 (rate limit), etc.
+        print(f'{operation}: HTTP {e.status_code}')
+
+
+# Saldo del grupo
+statement = call('getBankStatement')
+print(statement)
+
+# Facturas pendientes que debo pagar, últimas 24 horas
+now = datetime.now(timezone.utc)
+invoices = call(
+    'getInvoices',
+    status='pending',
+    side='client',
+    fromDate=now - timedelta(days=1),
+    toDate=now,
+)
+for invoice in invoices or []:
+    print(invoice.id, invoice.supplier, invoice.price, invoice.interest, invoice.totalPrice)
+
+# Emitir la factura de una orden cumplida (sólo el proveedor) y pagar una factura
+# invoice = call('emitInvoice', order_id='507f191e810c19729de860ea')
+# paid = call('payInvoice', invoice_id='507f191e810c19729de860ea')</pre>
+
+    <h3>Node.js (soap)</h3>
+    <pre>npm install soap</pre>
+    <pre>const soap = require('soap');
+
+const WSDL = 'https://dev.proyecto.2026-2.tallerdeintegracion.cl/soap/billing?wsdl';
+
+async function main() {
+  const client = await soap.createClientAsync(WSDL);
+  client.setSecurity(
+    new soap.WSSecurity(process.env.SOAP_USER, process.env.SOAP_PASSWORD, {})
+  );
+
+  console.log('Operaciones:', Object.keys(client.describe().BillingService.BillingServiceSoapPort));
+
+  // Saldo del grupo
+  const [statement] = await client.getBankStatementAsync({});
+  console.log(statement);
+
+  // Facturas pendientes que debo pagar, últimas 24 horas
+  const now = new Date();
+  const [result] = await client.getInvoicesAsync({
+    status: 'pending',
+    side: 'client',
+    fromDate: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+    toDate: now.toISOString()
+  });
+  for (const invoice of result.BillingDetails || []) {
+    console.log(invoice.id, invoice.supplier, invoice.price, invoice.interest, invoice.totalPrice);
+  }
+
+  // Emitir la factura de una orden cumplida (sólo el proveedor) y pagar una factura
+  // const [invoice] = await client.emitInvoiceAsync({order_id: '507f191e810c19729de860ea'});
+  // const [paid] = await client.payInvoiceAsync({invoice_id: '507f191e810c19729de860ea'});
+}
+
+main().catch(error => {
+  // Un SOAP Fault (p. ej. credenciales inválidas) llega como error
+  console.error('ERROR:', error.message);
+  process.exit(1);
+});</pre>
+    <p>
+      Si credenciales o permisos fallan, el servicio responde con un SOAP Fault (o HTTP 401): ambos
+      clientes lo entregan como excepción, por eso conviene siempre envolver las llamadas en
+      <code>try/except</code> (Python) o <code>try/catch</code> (Node.js).
+    </p>
+
+    <h2 id="emision">Reglas de emisión</h2>
+    <ul>
+      <li>Sólo el <strong>proveedor</strong> de la orden puede facturarla.</li>
+      <li>La orden debe estar <strong>cumplida</strong>.</li>
+      <li>Se factura <strong>una sola vez</strong> por orden; emitirla de nuevo devuelve un error.</li>
+      <li>El monto es <code>unit_price × quantity</code> de la orden.</li>
+      <li>
+        La factura nace <code>pending</code>. Sólo las órdenes de la tienda (cliente <code>999</code>)
+        se pagan solas; todas las demás, incluidas las ventas entre grupos en el mercado, las paga el
+        cliente con <code>payInvoice</code>.
+      </li>
+    </ul>
+
+    <h2 id="intereses">Intereses</h2>
+    <p>
+      Una factura impaga no genera interés durante las primeras <strong>6 horas</strong>
+      desde su emisión. Pasado ese plazo se cobra un <strong>1% del monto por cada hora
+      completa</strong>, interés simple (no se capitaliza).
+    </p>
+    <pre>interés = máx(0, horas_completas_desde_emisión − 6) × 1% × precio</pre>
+    <table>
+      <tr><th>Tiempo desde la emisión</th><th>Interés sobre el monto</th></tr>
+      <tr><td>5 h 59 min</td><td>0%</td></tr>
+      <tr><td>7 h</td><td>1%</td></tr>
+      <tr><td>12 h</td><td>6%</td></tr>
+      <tr><td>60 h</td><td>54%</td></tr>
+    </table>
+    <p class="note">
+      El interés se detiene al pagar. Una factura pagada antes de las 6 horas no paga
+      interés; una impaga al cierre del período evaluado cuenta con el interés acumulado hasta ese
+      momento.
+    </p>
+
+    <h2 id="recibidas">Qué facturas recibe cada grupo</h2>
+    <p>
+      Tu grupo aparece como <code>client</code> (debes pagarlas) o como <code>supplier</code> (te
+      deben) según el <code>channel</code>:
+    </p>
+    <table>
+      <tr><th>channel</th><th>Origen</th><th>Quién emite</th><th>Cliente</th></tr>
+      <tr><td><code>fabric</code></td><td>Compras de insumos a la Farma Central</td><td>Se genera sola, supplier <code>1000</code></td><td>Tu grupo</td></tr>
+      <tr><td><code>buffer</code></td><td>Cobro por hora del pulmón</td><td>Se genera sola, supplier <code>2000</code></td><td>Tu grupo</td></tr>
+      <tr><td><code>b2b</code>, <code>ftp</code>, <code>pubsub</code></td><td>Pedidos de clientes que despachaste</td><td>Tú (<code>emitInvoice</code>)</td><td>El cliente de la orden</td></tr>
+      <tr><td><code>mercado</code></td><td>Ventas entre grupos en el mercado</td><td>El grupo vendedor (<code>emitInvoice</code>)</td><td>El grupo comprador</td></tr>
+    </table>
+    <p>
+      Las facturas de costo (<code>fabric</code> y <code>buffer</code>) nacen <code>pending</code> y
+      también corren los intereses: págalas a tiempo.
+    </p>
+  </main>
+</body>
+
+</html>

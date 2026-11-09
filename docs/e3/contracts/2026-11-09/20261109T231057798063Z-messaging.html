@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mensajería - Documentación de integración</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  
+<script src="https://cdn.jsdelivr.net/npm/redoc@2.5.4/bundles/redoc.standalone.js"></script>
+
+<script src="/js/redoc-theme.js"></script>
+
+  <style>
+    :root {
+      --ink: #15211d;
+      --ink-muted: #4b5a54;
+      --paper: #f5f7f4;
+      --rail: #e9eee9;
+      --line: #d5ddd6;
+      --code-bg: #101a17;
+      --code-ink: #d7e3dc;
+      --font-display: 'Bricolage Grotesque', 'IBM Plex Sans', sans-serif;
+      --font-body: 'IBM Plex Sans', system-ui, sans-serif;
+      --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--font-body);
+      line-height: 1.55;
+    }
+
+    .guide {
+      max-width: 52rem;
+      margin: 0 auto;
+      padding: 3rem 1.5rem 5rem;
+    }
+
+    h1 {
+      font-family: var(--font-display);
+      font-size: 2rem;
+      margin-bottom: 0.25rem;
+    }
+
+    h2 {
+      font-family: var(--font-display);
+      font-size: 1.3rem;
+      margin-top: 2.5rem;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 0.4rem;
+    }
+
+    p.lede {
+      color: var(--ink-muted);
+      font-size: 1.05rem;
+    }
+
+    code, .code {
+      font-family: var(--font-mono);
+    }
+
+    code {
+      background: var(--rail);
+      padding: 0.1rem 0.35rem;
+      border-radius: 0.25rem;
+      font-size: 0.9em;
+    }
+
+    .code {
+      background: var(--code-bg);
+      color: var(--code-ink);
+      border-radius: 0.5rem;
+      padding: 1rem 1.2rem;
+      overflow-x: auto;
+      font-size: 0.85rem;
+    }
+
+    .code pre {
+      margin: 0;
+      white-space: pre-wrap;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--line);
+      font-size: 0.95rem;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--ink-muted);
+      font-weight: 600;
+    }
+
+    .pill {
+      display: inline-block;
+      background: var(--rail);
+      border-radius: 999px;
+      padding: 0.1rem 0.7rem;
+      font-size: 0.8rem;
+      font-family: var(--font-mono);
+    }
+
+    a {
+      color: #1f7a4d;
+    }
+
+    /* Redoc brings its own navigation and needs the full width of the page,
+       so its section lives outside .guide instead of inheriting its max-width. */
+    #api-reference {
+      border-top: 1px solid var(--line);
+      padding-top: 2rem;
+    }
+
+    #api-reference h2 {
+      max-width: 52rem;
+      margin-left: auto;
+      margin-right: auto;
+      padding-left: 1.5rem;
+      padding-right: 1.5rem;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="guide">
+    <h1>Mensajería</h1>
+    <p class="lede">
+      Canal de mensajería: el simulador envía mensajes de clientes (pedidos en lenguaje
+      natural, consultas de estado y otras solicitudes) al webhook de tu servidor, y tú
+      respondes cada mensaje una vez para registrarlo como pedido o descartarlo.
+    </p>
+
+    <h2>El webhook</h2>
+    <p>El simulador hace, por cada mensaje nuevo:</p>
+    <div class="code"><pre>POST https://choripanX.ing.uc.cl/api/messaging
+Authorization: Bearer &lt;OIDC&gt;
+Content-Type: application/json
+
+{
+  "messageId": "msg_01jb7q2f4r8s",
+  "sender": {"name": "Farmacia Los Aromos", "phone": "+56 9 5555 0123"},
+  "text": "Hola, necesito 1 kit para la atención respiratoria de un paciente adulto...",
+  "receivedAt": "2026-10-27T16:05:00Z"
+}</pre></div>
+    <p>
+      El token es un JWT OIDC firmado por la cuenta de servicio
+      <code>mensajeria@taller-integracion-310700.iam.gserviceaccount.com</code>, con <code>aud</code> igual a la URL exacta
+      de tu endpoint (<code>https://choripanX.ing.uc.cl/api/messaging</code>). Verifica el
+      <code>issuer</code> de Google, el <code>email</code> de esa cuenta,
+      <code>email_verified</code> y el <code>aud</code> antes de confiar en el request.
+    </p>
+    <p>
+      Responde <code>2xx</code> en menos de 15 segundos para confirmar la recepción. No
+      traigas <code>orderId</code> en tu lógica a partir de este payload: el mensaje puede
+      no ser un pedido (consultas de estado, solicitudes de ayuda, etc.).
+    </p>
+
+    <h2>Reintentos y duplicados</h2>
+    <p>
+      Si no respondes <code>2xx</code>, el sistema reintenta con backoff
+      <strong>sólo dentro de los 30 minutos</strong> siguientes a
+      <code>receivedAt</code>: pasada esa ventana ya no tiene sentido seguir intentando,
+      porque tu respuesta al mensaje tampoco se aceptaría. Un mensaje que agota los
+      reintentos sin una entrega exitosa se pierde — <strong>no hay un
+      <code>GET /messages</code></strong> de respaldo para recuperarlo, y cuenta como no
+      respondido.
+    </p>
+    <p>
+      El canal promete entregas <em>al menos una vez</em>: ocasionalmente vas a recibir el
+      mismo <code>messageId</code> más de una vez. Tu respuesta al primero vale; una
+      segunda respuesta al mismo mensaje devuelve <code>409</code>, así que puedes tratar
+      un <code>messageId</code> repetido como "ya lo vi" si ya respondiste.
+    </p>
+
+    <h2>Obtener un token</h2>
+    <div class="code"><pre>POST /messaging/auth
+Content-Type: application/json
+
+{"group": 1, "secret": "..."}</pre></div>
+    <p>El token se usa como <code>Authorization: Bearer &lt;token&gt;</code> en el servicio de respuesta.</p>
+
+    <h2>Responder un mensaje</h2>
+    <p>
+      Dentro de los 30 minutos desde <code>receivedAt</code>, respondes una
+      vez con <code>POST /messaging/messages/{messageId}/response</code>:
+    </p>
+    <table>
+      <tr><th>Código</th><th>Significado</th></tr>
+      <tr><td><span class="pill">200</span></td><td>Respuesta registrada. Si fue <code>order</code>, incluye el <code>orderId</code> de la OC creada.</td></tr>
+      <tr><td><span class="pill">404</span></td><td>El mensaje no existe, o pertenece a otro grupo/ambiente.</td></tr>
+      <tr><td><span class="pill">409</span></td><td>El mensaje ya tiene una respuesta registrada.</td></tr>
+      <tr><td><span class="pill">410</span></td><td>Ya pasó la ventana de respuesta.</td></tr>
+      <tr><td><span class="pill">422</span></td><td><code>interpretation.sku</code> no es un kit vendible, o faltan/son inválidos <code>quantity</code>/<code>deliveryDate</code>/<code>reason</code>.</td></tr>
+    </table>
+    <p>
+      Registrar como pedido (<code>status: "order"</code>) crea una orden de compra en
+      estado <code>creada</code>, canal <code>mensajeria</code>, con
+      <code>nombreCliente</code> igual al nombre del remitente. Desde ahí la orden sigue el
+      flujo normal de <a href="/ordenes-compra/docs">/ordenes-compra</a>:
+      la aceptas o rechazas, y vence en la <code>deliveryDate</code> que declaraste.
+    </p>
+    <p>
+      Descartar (<code>status: "discarded"</code>, con <code>reason</code>) es para
+      mensajes que no son pedidos, o pedidos ambiguos o imposibles de cumplir. No crea
+      ninguna orden.
+    </p>
+
+    <h2>Botones de prueba en el portal</h2>
+    <p>
+      En el ambiente de desarrollo, el portal de tu grupo tiene un botón "Simular mensaje"
+      que gatilla un mensaje con verdad real por este mismo canal, sin esperar al generador
+      periódico — útil para probar tu lógica de interpretación cuando quieras, incluso
+      contra una URL propia (p.ej. un túnel ngrok). Estos mensajes no cuentan para la nota.
+    </p>
+    <p>
+      También hay un botón "Probar conexión", siempre disponible (en desarrollo y en
+      producción, sin ventana de tiempo) que envía un mensaje de prueba fijo por este mismo
+      canal (misma cuenta de servicio, mismo <code>aud</code>), para que verifiques
+      conectividad y la firma del webhook. Los mensajes de prueba llevan
+      <code>messageId</code> con prefijo <code>test_</code>, no afectan tus métricas, y
+      responderlos no crea ninguna orden.
+    </p>
+
+  </div>
+
+  <div id="api-reference">
+    <h2>Referencia de la API</h2>
+    <div id="redoc-container"></div>
+  </div>
+
+  <script>
+    Redoc.init('/messaging/openapi.json', {
+      theme: window.REDOC_THEME,
+      hideDownloadButton: true,
+      expandResponses: '200,201'
+    }, document.getElementById('redoc-container'));
+  </script>
+</body>
+
+</html>
