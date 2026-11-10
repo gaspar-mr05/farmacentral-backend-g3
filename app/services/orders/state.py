@@ -10,6 +10,10 @@ def apply_official_state(
     session: Session, order: Order, status: ExternalOrderStatus
 ) -> None:
     order.external_status = status
+    if status == ExternalOrderStatus.FULFILLED:
+        from app.services.billing.queue import enqueue_fulfilled_sale
+
+        enqueue_fulfilled_sale(session, order)
     terminal_statuses = {
         ExternalOrderStatus.EXPIRED: OrderStatus.EXPIRED,
         ExternalOrderStatus.CANCELLED: OrderStatus.CANCELLED,

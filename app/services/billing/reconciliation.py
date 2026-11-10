@@ -4,7 +4,6 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.clients.billing import (
@@ -20,6 +19,9 @@ from app.models import (
     InvoiceSide,
     InvoiceStatus,
 )
+
+from .invoices import upsert_invoice
+from .periods import billing_cooldown
 
 logger = logging.getLogger(__name__)
 WINDOW = timedelta(days=3)
@@ -54,13 +56,7 @@ class BillingReconciliationService:
         horizon = min(now, self.period.ends_at or now)
         if horizon <= self.period.starts_at:
             return self.result
-        cooldown = self.session.scalar(
-            select(func.max(BillingSyncState.next_retry_at)).where(
-                BillingSyncState.period_id == self.period.id,
-                (BillingSyncState.http_status.in_([401, 403, 429]))
-                | (BillingSyncState.last_error == "BillingRateLimitError"),
-            )
-        )
+        cooldown = billing_cooldown(self.session, self.period.id)
         self.session.commit()
         if cooldown and cooldown > now:
             logger.warning("Billing reconciliation cooldown: retry_at=%s", cooldown)
@@ -110,7 +106,9 @@ class BillingReconciliationService:
             first.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0),
             self.period.starts_at,
         )
-        end = min(start + timedelta(days=1), horizon)
+        # An explicitly linked sale can be invoiced just after the period ends.
+        # Keep observing its status using its actual creation window.
+        end = min(start + timedelta(days=1), now)
         for status in InvoiceStatus:
             target = self._state(f"{side.value}:{status.value}")
             if not await self._query(target, side, status, start, end, now):
@@ -165,7 +163,7 @@ class BillingReconciliationService:
                     or not start <= invoice.issued_at <= end
                 ):
                     raise BillingInvalidResponseError("Invoice outside requested scope")
-                self._upsert(invoice, side, now)
+                upsert_invoice(self.session, self.period, invoice, side, now)
             state.last_success_at = now
             state.last_error = state.next_retry_at = state.http_status = None
             self.session.commit()
@@ -176,70 +174,6 @@ class BillingReconciliationService:
         self.result["queries"] += 1
         self.result["observations"] += len(invoices)
         return True
-
-    def _upsert(self, invoice, side, now):
-        existing = self.session.scalar(
-            select(Invoice).where(
-                Invoice.period_id == self.period.id,
-                Invoice.external_invoice_id == invoice.invoice_id,
-            )
-        )
-        counterparty = (
-            invoice.supplier_id if side == InvoiceSide.CLIENT else invoice.client_id
-        )
-        if existing and (
-            existing.side != side
-            or existing.counterparty_id != counterparty
-            or existing.issued_at != invoice.issued_at
-        ):
-            raise BillingInvalidResponseError("Invoice identity changed")
-        values = dict(
-            period_id=self.period.id,
-            external_invoice_id=invoice.invoice_id,
-            side=side,
-            counterparty_id=counterparty,
-            channel=invoice.channel,
-            status=invoice.status,
-            principal=invoice.principal,
-            interest=invoice.interest,
-            total=invoice.total,
-            issued_at=invoice.issued_at,
-            external_updated_at=invoice.updated_at,
-            observed_at=now,
-            paid_at=invoice.updated_at
-            if invoice.status == InvoiceStatus.PAID
-            else None,
-        )
-        statement = insert(Invoice).values(**values)
-        self.session.execute(
-            statement.on_conflict_do_update(
-                constraint="uq_invoice_external_id",
-                set_={
-                    "updated_at": now,
-                    **{
-                        name: getattr(statement.excluded, name)
-                        for name in (
-                            "status",
-                            "principal",
-                            "interest",
-                            "total",
-                            "external_updated_at",
-                            "observed_at",
-                            "paid_at",
-                        )
-                    },
-                },
-                where=(
-                    Invoice.external_updated_at
-                    <= statement.excluded.external_updated_at
-                )
-                & (
-                    (Invoice.status == InvoiceStatus.PENDING)
-                    | (statement.excluded.status == InvoiceStatus.PAID)
-                ),
-            )
-        )
-        self.session.expire_all()
 
     def _failure(self, state, exc, now):
         state.last_error = type(exc).__name__

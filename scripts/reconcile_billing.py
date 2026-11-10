@@ -1,11 +1,10 @@
-"""Continuously observe invoices and bank balance; never emit or pay."""
+"""Reconcile billing; optionally issue fulfilled sales invoices. Never pays."""
 
 import argparse
 import asyncio
 import hashlib
 import logging
-from contextlib import suppress
-from urllib.parse import urlsplit
+from contextlib import AsyncExitStack, suppress
 from uuid import UUID
 
 from sqlalchemy import text
@@ -13,15 +12,17 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.clients.billing import BillingClient
+from app.clients.purchase_orders import PurchaseOrdersClient
 from app.core.config import get_settings
 from app.db.session import engine
-from app.models import BusinessPeriod
 from app.services.billing import BillingReconciliationService
+from app.services.billing.periods import billing_period
+from app.services.billing.sales import SalesInvoicingService
 
 logger = logging.getLogger(__name__)
 
 
-async def run(*, period_id: UUID, once: bool = False) -> None:
+async def run(*, period_id: UUID, once: bool = False, emit_sales: bool = False) -> None:
     settings = get_settings()
     # A session-level advisory lock remains held across commits, but no DB
     # transaction is held open while waiting for SOAP. Unlock before pooling it.
@@ -37,28 +38,19 @@ async def run(*, period_id: UUID, once: bool = False) -> None:
             raise ValueError("Billing reconciliation already running for this period")
         try:
             with Session(bind=connection, expire_on_commit=False) as session:
-                period = session.get(BusinessPeriod, period_id)
-                if period is None:
-                    raise ValueError(
-                        "Billing period not found; create an explicit period first"
-                    )
-                host = urlsplit(settings.effective_billing_url).hostname or ""
-                environment = (
-                    "prod"
-                    if host.startswith("prod.")
-                    else "dev"
-                    if host.startswith("dev.")
-                    else settings.app_env
-                )
-                if (
-                    period.environment != environment
-                    or period.group_id != settings.farma_central_group
-                ):
-                    raise ValueError(
-                        "Billing period environment/group does not match configuration"
-                    )
+                period = billing_period(session, settings, period_id)
                 session.commit()
-                async with BillingClient(settings=settings) as client:
+                async with AsyncExitStack() as stack:
+                    client = await stack.enter_async_context(
+                        BillingClient(settings=settings)
+                    )
+                    orders = (
+                        await stack.enter_async_context(
+                            PurchaseOrdersClient(settings=settings)
+                        )
+                        if emit_sales
+                        else None
+                    )
                     while True:
                         try:
                             result = await BillingReconciliationService(
@@ -71,6 +63,20 @@ async def run(*, period_id: UUID, once: bool = False) -> None:
                                 result["observations"],
                                 result["failed"],
                             )
+                            if emit_sales and not result["failed"]:
+                                sales = await SalesInvoicingService(
+                                    client, orders, session, period, settings=settings
+                                ).poll()
+                                logger.info(
+                                    "Sales invoicing: confirmed=%s "
+                                    "missing=%s uncertain=%s",
+                                    sales["confirmed"],
+                                    sales["missing"],
+                                    sales["uncertain"],
+                                )
+                                result["failed"] += bool(
+                                    sales["missing"] or sales["uncertain"]
+                                )
                         except Exception as exc:
                             session.rollback()
                             logger.error(
@@ -97,6 +103,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--period-id", type=UUID)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument(
+        "--emit-sales",
+        action="store_true",
+        help="Issue invoices for officially fulfilled sales (remote mutation)",
+    )
     args = parser.parse_args()
     configured = args.period_id or get_settings().billing_period_id
     if not configured:
@@ -113,7 +124,13 @@ def main() -> None:
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
     with suppress(KeyboardInterrupt):
-        asyncio.run(run(period_id=period_id, once=args.once))
+        asyncio.run(
+            run(
+                period_id=period_id,
+                once=args.once,
+                emit_sales=args.emit_sales or get_settings().billing_emit_sales_enabled,
+            )
+        )
 
 
 if __name__ == "__main__":

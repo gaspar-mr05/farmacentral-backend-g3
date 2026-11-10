@@ -133,6 +133,14 @@ def test_billing_reconciliation_is_opt_in_with_bounded_default_intervals():
     assert settings.billing_full_sync_interval_seconds == 600
     assert settings.billing_bank_interval_seconds == 600
     assert settings.billing_stale_after_seconds == 300
+    assert settings.billing_emit_sales_enabled is False
+    assert settings.billing_sales_batch_size == 10
+
+
+@pytest.mark.parametrize("value", [0, 101])
+def test_billing_sales_batch_is_bounded(value):
+    with pytest.raises(ValidationError):
+        make_settings(billing_sales_batch_size=value)
 
 
 @pytest.mark.parametrize(

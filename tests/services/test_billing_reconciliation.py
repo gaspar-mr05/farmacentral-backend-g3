@@ -391,3 +391,31 @@ async def test_bank_failure_preserves_last_known_balance(db_session):
     assert state.balance == Decimal("-100.123456789")
     assert state.last_success_at == NOW
     assert state.last_error == "BillingSOAPFault"
+
+
+@pytest.mark.anyio
+async def test_linked_sale_invoiced_after_period_close_still_observes_payment(
+    db_session,
+):
+    created = NOW - timedelta(days=1)
+    source = BillingSource(
+        [
+            remote_invoice(
+                id="late-emission", status="paid", createdAt=created.isoformat()
+            )
+        ]
+    )
+    period, service = setup_service(db_session, source, days=5)
+    period.ends_at = NOW - timedelta(days=2)
+    db_session.add(
+        make_invoice(
+            period.id,
+            external_invoice_id="late-emission",
+            external_order_id="1" * 24,
+            issued_at=created,
+            external_updated_at=created,
+        )
+    )
+    db_session.commit()
+    assert (await service.poll(now=NOW))["failed"] == 0
+    assert db_session.scalar(select(Invoice.status)) == InvoiceStatus.PAID

@@ -42,6 +42,8 @@ async def test_worker_once_persists_observations_and_releases_lock(
     context = AsyncMock()
     context.__aenter__.return_value = source
     monkeypatch.setattr(module, "BillingClient", Mock(return_value=context))
+    sales_factory = Mock()
+    monkeypatch.setattr(module, "SalesInvoicingService", sales_factory)
 
     await module.run(period_id=period_id, once=True)
     await module.run(period_id=period_id, once=True)
@@ -64,6 +66,51 @@ async def test_worker_once_persists_observations_and_releases_lock(
     monkeypatch.setattr(module, "BillingReconciliationService", factory)
     await module.run(period_id=period_id, once=True)
     assert len(source.calls) == 12
+    sales_factory.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failed_reads", [0, 1])
+async def test_worker_emission_requires_opt_in_and_successful_reconciliation(
+    migration_database, monkeypatch, failed_reads
+):
+    engine = migration_database
+    run_migration(engine, "upgrade", "head")
+    with Session(engine) as session:
+        period = make_period(starts_at=datetime.now(UTC) - timedelta(days=1))
+        session.add(period)
+        session.commit()
+        period_id = period.id
+    worker_environment(monkeypatch, engine)
+    billing_context, orders_context = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(module, "BillingClient", Mock(return_value=billing_context))
+    monkeypatch.setattr(
+        module, "PurchaseOrdersClient", Mock(return_value=orders_context)
+    )
+    reader = Mock(
+        poll=AsyncMock(
+            return_value={"queries": 4, "observations": 0, "failed": failed_reads}
+        )
+    )
+    monkeypatch.setattr(
+        module, "BillingReconciliationService", Mock(return_value=reader)
+    )
+    emitter = Mock(
+        poll=AsyncMock(return_value={"confirmed": 1, "missing": 0, "uncertain": 0})
+    )
+    factory = Mock(return_value=emitter)
+    monkeypatch.setattr(module, "SalesInvoicingService", factory)
+    if failed_reads:
+        with pytest.raises(SystemExit):
+            await module.run(period_id=period_id, once=True, emit_sales=True)
+        emitter.poll.assert_not_awaited()
+    else:
+        await module.run(period_id=period_id, once=True, emit_sales=True)
+        emitter.poll.assert_awaited_once()
+        assert factory.call_args.args[:2] == (
+            billing_context.__aenter__.return_value,
+            orders_context.__aenter__.return_value,
+        )
 
 
 @pytest.mark.anyio
