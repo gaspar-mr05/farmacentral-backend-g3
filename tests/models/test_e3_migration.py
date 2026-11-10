@@ -73,7 +73,17 @@ def test_upgrade_and_downgrade_preserve_e1_e2_orders_and_checkout(migration_data
     with engine.connect() as connection:
         assert (
             compare_metadata(
-                MigrationContext.configure(connection, opts={"compare_type": True}),
+                MigrationContext.configure(
+                    connection,
+                    opts={
+                        "compare_type": True,
+                        # Step 4's independent migration is tested against current
+                        # metadata separately; this test stops at the step 2 revision.
+                        "include_object": lambda obj, name, *_: (
+                            name != "billing_sync_states"
+                        ),
+                    },
+                ),
                 Base.metadata,
             )
             == []
@@ -103,7 +113,15 @@ def test_upgrade_and_downgrade_preserve_e1_e2_orders_and_checkout(migration_data
     with engine.connect() as connection:
         assert (
             compare_metadata(
-                MigrationContext.configure(connection, opts={"compare_type": True}),
+                MigrationContext.configure(
+                    connection,
+                    opts={
+                        "compare_type": True,
+                        "include_object": lambda obj, name, *_: (
+                            name != "billing_sync_states"
+                        ),
+                    },
+                ),
                 Base.metadata,
             )
             == []

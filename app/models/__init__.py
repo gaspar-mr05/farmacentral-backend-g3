@@ -10,6 +10,7 @@ from app.models.billing import (
     InvoiceSide,
     InvoiceStatus,
 )
+from app.models.billing_sync import BillingSyncState
 from app.models.business_period import BusinessPeriod
 from app.models.custody_event import CustodyEvent, CustodyEventType
 from app.models.inbound_event import (
@@ -50,6 +51,7 @@ from app.models.unit import Unit
 __all__ = [
     "Base",
     "BusinessPeriod",
+    "BillingSyncState",
     "Invoice",
     "InvoiceSide",
     "InvoiceStatus",

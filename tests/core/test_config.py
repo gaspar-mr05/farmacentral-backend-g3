@@ -126,6 +126,30 @@ def test_billing_invalid_configuration_is_rejected(overrides):
         make_settings(**overrides)
 
 
+def test_billing_reconciliation_is_opt_in_with_bounded_default_intervals():
+    settings = make_settings(billing_period_id=None)
+    assert settings.billing_period_id is None
+    assert settings.billing_poll_interval_seconds == 60
+    assert settings.billing_full_sync_interval_seconds == 600
+    assert settings.billing_bank_interval_seconds == 600
+    assert settings.billing_stale_after_seconds == 300
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "billing_poll_interval_seconds",
+        "billing_full_sync_interval_seconds",
+        "billing_bank_interval_seconds",
+        "billing_stale_after_seconds",
+    ],
+)
+@pytest.mark.parametrize("value", [0, -1])
+def test_billing_reconciliation_rejects_invalid_intervals(field, value):
+    with pytest.raises(ValidationError):
+        make_settings(**{field: value})
+
+
 @pytest.mark.parametrize(
     ("host", "username"),
     [

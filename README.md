@@ -43,9 +43,7 @@ docker compose down
 
 ### Preparación de la Entrega 3
 
-La auditoría de base E2, contratos externos y separación de períodos está en
-[docs/ENTREGA3_PASO1.md](docs/ENTREGA3_PASO1.md), junto con sus resultados y
-pendientes. Para observar conexión, migraciones y salud local sin modificar datos:
+Para observar conexión, migraciones y salud local sin modificar datos:
 
 ```bash
 python -m scripts.verify_e3_baseline --api-url http://127.0.0.1:8000
@@ -56,21 +54,31 @@ python -m scripts.verify_e3_baseline --api-url http://127.0.0.1:8000
 La captura de documentación pública se ejecuta por separado mediante
 `scripts.capture_e3_contracts`; no realiza operaciones SOAP ni comerciales.
 
-El [modelo de datos del paso 2](docs/ENTREGA3_PASO2.md) incorpora períodos,
+El modelo de datos del paso 2 incorpora períodos,
 facturas, tareas/intentos durables y referencias de mercado. Su migración
 `c7b4e2a91d60` se aplica con `alembic upgrade head`. Conserva el checkout entero
 de E1 y prepara precios decimales para órdenes externas; todavía no emite ni paga
 facturas automáticamente.
 
-El [cliente SOAP del paso 3](docs/ENTREGA3_PASO3.md) permite consultar saldo y
+El cliente SOAP del paso 3 permite consultar saldo y
 facturas, emitir y pagar mediante WS-Security. Para probar sólo lectura:
 
 ```bash
 .venv/bin/python -m scripts.verify_billing_connection --include-invoices
 ```
 
-Todavía no hay emisión, pago ni conciliación automáticos; corresponden a los
-siguientes pasos.
+Todavía no hay emisión ni pago automáticos; corresponden a los siguientes pasos.
+
+El paso 4 incorpora la conciliación continua de facturas
+y saldo con cursores durables. Aplica `alembic upgrade head` y selecciona un
+período contable explícito para probarla:
+
+```bash
+.venv/bin/python -m scripts.reconcile_billing --period-id UUID_DEL_PERIODO --once
+```
+
+Sin `--once` permanece revisando; también admite `BILLING_PERIOD_ID` en la
+configuración. Este worker sólo consulta el servicio remoto: no emite ni paga.
 
 ### Esperar stock antes de rechazar una OC
 

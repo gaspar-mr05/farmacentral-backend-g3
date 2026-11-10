@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     billing_timeout_seconds: float = Field(default=10, gt=0)
     billing_requests_per_minute: int = Field(default=45, ge=1, le=60)
     billing_rate_limit_file: Path | None = None
+    billing_period_id: str | None = None
+    billing_poll_interval_seconds: float = Field(default=60, gt=0)
+    billing_full_sync_interval_seconds: float = Field(default=600, gt=0)
+    billing_bank_interval_seconds: float = Field(default=600, gt=0)
+    billing_stale_after_seconds: float = Field(default=300, gt=0)
     sftp_host: str = Field(default="choripan10.ing.uc.cl", min_length=1)
     sftp_port: int = Field(default=22, ge=1, le=65535)
     sftp_username: str | None = Field(default=None, min_length=1)
