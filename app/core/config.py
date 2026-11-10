@@ -1,3 +1,5 @@
+import os
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urljoin
@@ -23,6 +25,11 @@ class Settings(BaseSettings):
     farma_central_timeout_seconds: float = Field(default=10, gt=0)
     purchase_orders_base_url: AnyHttpUrl | None = None
     purchase_orders_timeout_seconds: float = Field(default=10, gt=0)
+    billing_url: AnyHttpUrl | None = None
+    billing_wsdl_url: AnyHttpUrl | None = None
+    billing_timeout_seconds: float = Field(default=10, gt=0)
+    billing_requests_per_minute: int = Field(default=45, ge=1, le=60)
+    billing_rate_limit_file: Path | None = None
     sftp_host: str = Field(default="choripan10.ing.uc.cl", min_length=1)
     sftp_port: int = Field(default=22, ge=1, le=65535)
     sftp_username: str | None = Field(default=None, min_length=1)
@@ -94,6 +101,26 @@ class Settings(BaseSettings):
             self.purchase_orders_base_url
             or urljoin(str(self.farma_central_base_url), "/ordenes-compra/")
         )
+
+    @property
+    def effective_billing_url(self) -> str:
+        return str(
+            self.billing_url
+            or urljoin(str(self.farma_central_base_url), "/soap/billing")
+        )
+
+    @property
+    def effective_billing_wsdl_url(self) -> str:
+        return str(self.billing_wsdl_url or self.effective_billing_url + "?wsdl")
+
+    @property
+    def effective_billing_rate_limit_file(self) -> Path:
+        if self.billing_rate_limit_file is not None:
+            return self.billing_rate_limit_file
+        shared = Path("/var/lib/farmacentral")
+        if shared.is_dir():
+            return shared / "billing.rate"
+        return Path(tempfile.gettempdir()) / f"farmacentral-billing-{os.getuid()}.rate"
 
     @property
     def effective_messaging_oidc_audience(self) -> str:

@@ -62,6 +62,16 @@ facturas, tareas/intentos durables y referencias de mercado. Su migración
 de E1 y prepara precios decimales para órdenes externas; todavía no emite ni paga
 facturas automáticamente.
 
+El [cliente SOAP del paso 3](docs/ENTREGA3_PASO3.md) permite consultar saldo y
+facturas, emitir y pagar mediante WS-Security. Para probar sólo lectura:
+
+```bash
+.venv/bin/python -m scripts.verify_billing_connection --include-invoices
+```
+
+Todavía no hay emisión, pago ni conciliación automáticos; corresponden a los
+siguientes pasos.
+
 ### Esperar stock antes de rechazar una OC
 
 Para activar la espera en el `.env` del ambiente correspondiente:

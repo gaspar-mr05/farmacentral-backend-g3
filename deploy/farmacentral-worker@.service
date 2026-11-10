@@ -20,6 +20,7 @@ TimeoutStopSec=30
 SyslogIdentifier=farmacentral-worker-%i
 NoNewPrivileges=true
 PrivateTmp=true
+StateDirectory=farmacentral
 ProtectSystem=full
 ProtectHome=read-only
 UMask=0077

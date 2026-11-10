@@ -88,6 +88,44 @@ def test_purchase_orders_url_can_be_configured_independently():
     assert settings.effective_purchase_orders_base_url == "https://orders.test/service/"
 
 
+@pytest.mark.parametrize("environment", ["dev", "prod"])
+def test_billing_endpoint_and_wsdl_follow_farma_central_environment(environment):
+    settings = make_settings(
+        farma_central_base_url=f"https://{environment}.example.test/farma-central/"
+    )
+    assert (
+        settings.effective_billing_url
+        == f"https://{environment}.example.test/soap/billing"
+    )
+    assert (
+        settings.effective_billing_wsdl_url == settings.effective_billing_url + "?wsdl"
+    )
+
+
+def test_billing_overrides_and_rate_path_are_explicit(tmp_path):
+    settings = make_settings(
+        billing_url="https://billing.test/service",
+        billing_wsdl_url="https://contracts.test/billing.xml",
+        billing_rate_limit_file=tmp_path / "shared.rate",
+    )
+    assert settings.effective_billing_url == "https://billing.test/service"
+    assert settings.effective_billing_wsdl_url == "https://contracts.test/billing.xml"
+    assert settings.effective_billing_rate_limit_file == tmp_path / "shared.rate"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"billing_timeout_seconds": 0},
+        {"billing_requests_per_minute": 0},
+        {"billing_requests_per_minute": 61},
+    ],
+)
+def test_billing_invalid_configuration_is_rejected(overrides):
+    with pytest.raises(ValidationError):
+        make_settings(**overrides)
+
+
 @pytest.mark.parametrize(
     ("host", "username"),
     [
