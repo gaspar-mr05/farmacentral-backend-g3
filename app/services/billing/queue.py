@@ -22,6 +22,18 @@ def enqueue_sale(session, period, external_order_id):
     )
 
 
+def enqueue_payment(session, invoice):
+    session.execute(
+        insert(BillingTask)
+        .values(
+            period_id=invoice.period_id,
+            kind=BillingTaskKind.PAY_INVOICE,
+            invoice_id=invoice.id,
+        )
+        .on_conflict_do_nothing(constraint="uq_billing_task_invoice")
+    )
+
+
 def enqueue_fulfilled_sale(session, order, *, settings=None):
     """Join the order transaction; remote billing happens in the worker."""
     settings = settings or get_settings()

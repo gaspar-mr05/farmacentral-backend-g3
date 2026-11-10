@@ -1,4 +1,4 @@
-"""Reconcile billing; optionally issue fulfilled sales invoices. Never pays."""
+"""Reconcile billing with opt-in sales invoicing and invoice payments."""
 
 import argparse
 import asyncio
@@ -16,13 +16,20 @@ from app.clients.purchase_orders import PurchaseOrdersClient
 from app.core.config import get_settings
 from app.db.session import engine
 from app.services.billing import BillingReconciliationService
+from app.services.billing.payments import InvoicePaymentService
 from app.services.billing.periods import billing_period
 from app.services.billing.sales import SalesInvoicingService
 
 logger = logging.getLogger(__name__)
 
 
-async def run(*, period_id: UUID, once: bool = False, emit_sales: bool = False) -> None:
+async def run(
+    *,
+    period_id: UUID,
+    once: bool = False,
+    emit_sales: bool = False,
+    pay_invoices: bool = False,
+) -> None:
     settings = get_settings()
     # A session-level advisory lock remains held across commits, but no DB
     # transaction is held open while waiting for SOAP. Unlock before pooling it.
@@ -63,7 +70,23 @@ async def run(*, period_id: UUID, once: bool = False, emit_sales: bool = False) 
                                 result["observations"],
                                 result["failed"],
                             )
-                            if emit_sales and not result["failed"]:
+                            reads_failed = result["failed"]
+                            if pay_invoices:
+                                payments = await InvoicePaymentService(
+                                    client, session, period, settings=settings
+                                ).poll()
+                                logger.info(
+                                    "Invoice payments: confirmed=%s pending=%s "
+                                    "uncertain=%s overdue=%s",
+                                    payments["confirmed"],
+                                    payments["pending"],
+                                    payments["uncertain"],
+                                    payments["overdue"],
+                                )
+                                result["failed"] += bool(
+                                    payments["pending"] or payments["uncertain"]
+                                )
+                            if emit_sales and not reads_failed:
                                 sales = await SalesInvoicingService(
                                     client, orders, session, period, settings=settings
                                 ).poll()
@@ -108,6 +131,11 @@ def main() -> None:
         action="store_true",
         help="Issue invoices for officially fulfilled sales (remote mutation)",
     )
+    parser.add_argument(
+        "--pay-invoices",
+        action="store_true",
+        help="Pay official client invoices (remote mutation)",
+    )
     args = parser.parse_args()
     configured = args.period_id or get_settings().billing_period_id
     if not configured:
@@ -129,6 +157,8 @@ def main() -> None:
                 period_id=period_id,
                 once=args.once,
                 emit_sales=args.emit_sales or get_settings().billing_emit_sales_enabled,
+                pay_invoices=args.pay_invoices
+                or get_settings().billing_pay_invoices_enabled,
             )
         )
 

@@ -44,6 +44,8 @@ async def test_worker_once_persists_observations_and_releases_lock(
     monkeypatch.setattr(module, "BillingClient", Mock(return_value=context))
     sales_factory = Mock()
     monkeypatch.setattr(module, "SalesInvoicingService", sales_factory)
+    payment_factory = Mock()
+    monkeypatch.setattr(module, "InvoicePaymentService", payment_factory)
 
     await module.run(period_id=period_id, once=True)
     await module.run(period_id=period_id, once=True)
@@ -67,6 +69,60 @@ async def test_worker_once_persists_observations_and_releases_lock(
     await module.run(period_id=period_id, once=True)
     assert len(source.calls) == 12
     sales_factory.assert_not_called()
+    payment_factory.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("reads_failed", [0, 1])
+async def test_payments_are_opt_in_and_verify_their_own_debts_before_sales(
+    migration_database, monkeypatch, reads_failed
+):
+    engine = migration_database
+    run_migration(engine, "upgrade", "head")
+    with Session(engine) as session:
+        period = make_period(starts_at=datetime.now(UTC) - timedelta(days=1))
+        session.add(period)
+        session.commit()
+        period_id = period.id
+    worker_environment(monkeypatch, engine)
+    monkeypatch.setattr(module, "BillingClient", Mock(return_value=AsyncMock()))
+    monkeypatch.setattr(module, "PurchaseOrdersClient", Mock(return_value=AsyncMock()))
+    reader = Mock(
+        poll=AsyncMock(
+            return_value={"queries": 4, "observations": 0, "failed": reads_failed}
+        )
+    )
+    monkeypatch.setattr(
+        module, "BillingReconciliationService", Mock(return_value=reader)
+    )
+    sequence = []
+
+    async def pay():
+        sequence.append("pay")
+        return {"confirmed": 1, "pending": 0, "uncertain": 0, "overdue": 0}
+
+    async def sell():
+        sequence.append("sell")
+        return {"confirmed": 1, "missing": 0, "uncertain": 0}
+
+    payer = Mock(poll=AsyncMock(side_effect=pay))
+    monkeypatch.setattr(module, "InvoicePaymentService", Mock(return_value=payer))
+    monkeypatch.setattr(
+        module,
+        "SalesInvoicingService",
+        Mock(return_value=Mock(poll=AsyncMock(side_effect=sell))),
+    )
+    if reads_failed:
+        with pytest.raises(SystemExit):
+            await module.run(
+                period_id=period_id, once=True, pay_invoices=True, emit_sales=True
+            )
+        assert sequence == ["pay"]
+    else:
+        await module.run(
+            period_id=period_id, once=True, pay_invoices=True, emit_sales=True
+        )
+        assert sequence == ["pay", "sell"]
 
 
 @pytest.mark.anyio

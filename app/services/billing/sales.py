@@ -10,13 +10,11 @@ from sqlalchemy.exc import IntegrityError
 from app.clients.billing import (
     BillingError,
     BillingInvalidResponseError,
-    BillingRateLimitError,
     BillingSOAPFault,
 )
 from app.clients.purchase_orders import PurchaseOrdersError
 from app.models import (
     BillingAttempt,
-    BillingSyncState,
     BillingTask,
     BillingTaskKind,
     ExternalOrderStatus,
@@ -34,6 +32,7 @@ from app.schemas.billing import BillingInvoice
 from app.schemas.purchase_orders import PurchaseOrderId, PurchaseOrderState
 
 from .invoices import upsert_invoice
+from .operations import block_billing
 from .periods import billing_cooldown
 from .queue import enqueue_sale
 
@@ -316,20 +315,7 @@ class SalesInvoicingService:
         return False
 
     def _block(self, exc, retry_at, now):
-        if getattr(exc, "status_code", None) not in {401, 403, 429} and not isinstance(
-            exc, BillingRateLimitError
-        ):
-            return False
-        state = self.session.get(BillingSyncState, (self.period.id, "sales"))
-        if state is None:
-            state = BillingSyncState(period_id=self.period.id, stream="sales")
-            self.session.add(state)
-        state.last_attempt_at = now
-        state.last_error = type(exc).__name__
-        state.http_status = getattr(exc, "status_code", None)
-        state.next_retry_at = retry_at or now + timedelta(minutes=1)
-        self.session.commit()
-        return True
+        return block_billing(self.session, self.period.id, "sales", exc, retry_at, now)
 
     def _preflight_failure(self, task, reason, now, *, delay=60, permanent=False):
         # Failed validation must not clear an earlier unknown remote effect.

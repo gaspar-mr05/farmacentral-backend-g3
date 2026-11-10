@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 from app.clients.billing import BillingInvalidResponseError
 from app.models import Invoice, InvoiceSide, InvoiceStatus
 
+from .queue import enqueue_payment
+
 
 def upsert_invoice(session: Session, period, invoice, side, now) -> Invoice:
     existing = session.scalar(
@@ -65,7 +67,7 @@ def upsert_invoice(session: Session, period, invoice, side, now) -> Invoice:
             ),
         )
     )
-    return session.scalars(
+    row = session.scalars(
         select(Invoice)
         .where(
             Invoice.period_id == period.id,
@@ -73,3 +75,6 @@ def upsert_invoice(session: Session, period, invoice, side, now) -> Invoice:
         )
         .execution_options(populate_existing=True)
     ).one()
+    if row.side == InvoiceSide.CLIENT and row.status == InvoiceStatus.PENDING:
+        enqueue_payment(session, row)
+    return row
