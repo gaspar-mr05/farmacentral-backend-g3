@@ -543,6 +543,20 @@ Errores:
 
 ## Pagos
 
+### Precisión monetaria de órdenes (Entrega 3)
+
+Los importes de órdenes (`total`, `items[].unit_price` e `items[].line_total`)
+conservan su formato JSON entero cuando no tienen fracción. Los nuevos importes
+fraccionarios de OC externas se devuelven como strings decimales exactos, por
+ejemplo `"1.123456789"`, para no perder precisión mediante float. Esto no cambia
+el catálogo ni el formato de los importes enteros existentes del portal.
+
+La fuente `market` identifica ventas propias del mercado. Las compras del grupo
+se registran como operaciones comerciales, no como órdenes locales de venta.
+
+El checkout mantiene importes enteros: iniciar el pago de una orden con total
+fraccionario devuelve `409` antes de comunicarse con el servicio de pagos.
+
 ### `POST /api/orders/{order_id}/payments`
 
 Inicializa una sesión en la pasarela de pago para el total calculado del pedido.

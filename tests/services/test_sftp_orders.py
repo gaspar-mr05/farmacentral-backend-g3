@@ -223,21 +223,12 @@ async def test_corrupt_persisted_payload_does_not_stop_other_events(db_session):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("overrides", "message"),
-    [
-        ({"proveedor": "4"}, "not the supplier"),
-        ({"precioUnitario": 1500.25}, "whole-peso"),
-    ],
-)
-async def test_rejects_wrong_supplier_or_unrepresentable_prices(
-    db_session, overrides, message
-):
-    orders = FakeOrders(make_purchase_order(**overrides))
+async def test_rejects_wrong_supplier(db_session):
+    orders = FakeOrders(make_purchase_order(proveedor="4"))
     result = await make_service(db_session, FakeSFTP(order_file()), orders).poll()
     event = db_session.scalars(select(InboundEvent)).one()
     assert result.failed == 1
-    assert message in event.last_error
+    assert "not the supplier" in event.last_error
     assert event.next_retry_at is None
     assert not db_session.scalars(select(Order)).all()
 

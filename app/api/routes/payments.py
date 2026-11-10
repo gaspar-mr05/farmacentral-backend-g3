@@ -34,6 +34,7 @@ from app.services.orders import (
     get_order,
 )
 from app.services.payments import (
+    InvalidPaymentAmountError,
     OrderAlreadyPaidError,
     PaymentAlreadyPendingError,
     PaymentNotFoundError,
@@ -60,7 +61,11 @@ async def start_payment(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
         ) from exc
-    except (OrderAlreadyPaidError, PaymentAlreadyPendingError) as exc:
+    except (
+        OrderAlreadyPaidError,
+        PaymentAlreadyPendingError,
+        InvalidPaymentAmountError,
+    ) as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc)
         ) from exc

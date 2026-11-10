@@ -1,4 +1,5 @@
 from .service import (
+    InvalidPaymentAmountError,
     OrderAlreadyPaidError,
     PaymentAlreadyPendingError,
     PaymentNotFoundError,
@@ -6,6 +7,7 @@ from .service import (
 )
 
 __all__ = [
+    "InvalidPaymentAmountError",
     "OrderAlreadyPaidError",
     "PaymentAlreadyPendingError",
     "PaymentNotFoundError",

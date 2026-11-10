@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -22,6 +23,10 @@ class PaymentAlreadyPendingError(Exception):
     pass
 
 
+class InvalidPaymentAmountError(Exception):
+    pass
+
+
 class PaymentService:
     def __init__(
         self,
@@ -39,9 +44,13 @@ class PaymentService:
         if self._has_pending_payment(order.id):
             raise PaymentAlreadyPendingError("The order already has a pending payment")
 
+        amount = Decimal(order.total)
+        if not amount.is_finite() or amount < 0 or amount != amount.to_integral_value():
+            raise InvalidPaymentAmountError("Checkout requires a whole-peso amount")
+        checkout_amount = int(amount)
         payment_id = uuid.uuid4()
         payload = await self._client.initialize_payment(
-            amount=order.total,
+            amount=checkout_amount,
             back_urls=self._back_urls(payment_id),
         )
         external_id = payload.get("payment_id")
@@ -59,7 +68,7 @@ class PaymentService:
             id=payment_id,
             order_id=order.id,
             external_transaction_id=external_id,
-            amount=order.total,
+            amount=checkout_amount,
             status=PaymentStatus.PENDING,
         )
         order.status = OrderStatus.PENDING_PAYMENT

@@ -1,10 +1,28 @@
 from datetime import datetime
-from typing import Literal
+from decimal import Decimal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from app.models import ExternalOrderStatus, OrderSource, OrderStatus
+
+
+def _whole_pesos_as_int(value):
+    # Preserve the E1 JSON contract; fractional external prices stay exact strings.
+    if (
+        isinstance(value, Decimal)
+        and value.is_finite()
+        and value == value.to_integral_value()
+    ):
+        return int(value)
+    return value
+
+
+OrderAmount = Annotated[
+    int | Annotated[Decimal, Field(allow_inf_nan=False)],
+    BeforeValidator(_whole_pesos_as_int),
+]
 
 
 class OrderItemCreate(BaseModel):
@@ -41,8 +59,8 @@ class OrderItemResponse(BaseModel):
 
     sku: str
     quantity: int
-    unit_price: int
-    line_total: int
+    unit_price: OrderAmount
+    line_total: OrderAmount
     assigned_units: list[OrderUnitResponse]
 
 
@@ -60,6 +78,6 @@ class OrderResponse(BaseModel):
     decision_reason: str | None
     source: OrderSource
     status: OrderStatus
-    total: int
+    total: OrderAmount
     items: list[OrderItemResponse]
     created_at: datetime

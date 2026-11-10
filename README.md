@@ -56,6 +56,12 @@ python -m scripts.verify_e3_baseline --api-url http://127.0.0.1:8000
 La captura de documentación pública se ejecuta por separado mediante
 `scripts.capture_e3_contracts`; no realiza operaciones SOAP ni comerciales.
 
+El [modelo de datos del paso 2](docs/ENTREGA3_PASO2.md) incorpora períodos,
+facturas, tareas/intentos durables y referencias de mercado. Su migración
+`c7b4e2a91d60` se aplica con `alembic upgrade head`. Conserva el checkout entero
+de E1 y prepara precios decimales para órdenes externas; todavía no emite ni paga
+facturas automáticamente.
+
 ### Esperar stock antes de rechazar una OC
 
 Para activar la espera en el `.env` del ambiente correspondiente:

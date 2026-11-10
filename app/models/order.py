@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -9,6 +10,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -42,6 +44,7 @@ class OrderSource(StrEnum):
     SFTP = "sftp"
     PUBSUB = "pubsub"
     MESSAGING = "messaging"
+    MARKET = "market"
 
 
 class ExternalOrderStatus(StrEnum):
@@ -65,6 +68,10 @@ class Order(Base, TimestampMixin):
             "source != 'WEB' OR buyer_email IS NOT NULL",
             name="ck_orders_web_buyer_email",
         ),
+        CheckConstraint(
+            "total >= 0 AND total < 'Infinity'::numeric",
+            name="ck_orders_total",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -86,7 +93,7 @@ class Order(Base, TimestampMixin):
     decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[OrderSource] = mapped_column(Enum(OrderSource), nullable=False)
     status: Mapped[OrderStatus] = mapped_column(Enum(OrderStatus), nullable=False)
-    total: Mapped[int] = mapped_column(Integer, nullable=False)
+    total: Mapped[Decimal] = mapped_column(Numeric(), nullable=False)
 
     items: Mapped[list["OrderItem"]] = relationship(
         back_populates="order", cascade="all, delete-orphan"
@@ -97,6 +104,12 @@ class Order(Base, TimestampMixin):
 
 class OrderItem(Base):
     __tablename__ = "order_items"
+    __table_args__ = (
+        CheckConstraint(
+            "unit_price >= 0 AND unit_price < 'Infinity'::numeric",
+            name="ck_order_items_price",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -106,7 +119,7 @@ class OrderItem(Base):
     )
     sku: Mapped[str] = mapped_column(String, nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
-    unit_price: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(), nullable=False)
 
     order: Mapped["Order"] = relationship(back_populates="items")
     assigned_units: Mapped[list["OrderUnit"]] = relationship(
@@ -114,5 +127,5 @@ class OrderItem(Base):
     )
 
     @property
-    def line_total(self) -> int:
-        return self.quantity * self.unit_price
+    def line_total(self) -> Decimal:
+        return self.quantity * Decimal(self.unit_price)

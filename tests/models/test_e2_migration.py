@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import create_engine, delete, inspect, select, text
+from sqlalchemy import Integer, MetaData, create_engine, delete, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.schema import CreateSchema, DropSchema
@@ -124,7 +124,12 @@ def test_migration_preserves_web_orders_and_allows_durable_event_linking(
                 ),
             },
         )
-        assert compare_metadata(context, Base.metadata) == []
+        # Compare the E2 revision with its monetary type, not E3's later NUMERIC.
+        legacy_metadata = MetaData()
+        for name in ("orders", "inbound_events"):
+            Base.metadata.tables[name].to_metadata(legacy_metadata)
+        legacy_metadata.tables["orders"].c.total.type = Integer()
+        assert compare_metadata(context, legacy_metadata) == []
 
     with pytest.raises(
         AssertionError, match="Cannot downgrade while Delivery 2 data exists"

@@ -1,6 +1,16 @@
 """SQLAlchemy models exported by the application."""
 
 from app.db.base import Base
+from app.models.billing import (
+    BillingAttempt,
+    BillingOperationStatus,
+    BillingTask,
+    BillingTaskKind,
+    Invoice,
+    InvoiceSide,
+    InvoiceStatus,
+)
+from app.models.business_period import BusinessPeriod
 from app.models.custody_event import CustodyEvent, CustodyEventType
 from app.models.inbound_event import (
     InboundEvent,
@@ -11,6 +21,7 @@ from app.models.inbound_event import (
 from app.models.location import Location
 from app.models.lot import Lot, LotOrigin
 from app.models.lot_identity_repair import LotIdentityRepair
+from app.models.market_trade import MarketRole, MarketTrade
 from app.models.order import (
     ExternalOrderStatus,
     Order,
@@ -38,6 +49,16 @@ from app.models.unit import Unit
 
 __all__ = [
     "Base",
+    "BusinessPeriod",
+    "Invoice",
+    "InvoiceSide",
+    "InvoiceStatus",
+    "BillingTask",
+    "BillingTaskKind",
+    "BillingOperationStatus",
+    "BillingAttempt",
+    "MarketTrade",
+    "MarketRole",
     "Product",
     "ProductCategory",
     "Location",

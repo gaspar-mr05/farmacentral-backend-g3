@@ -15,12 +15,8 @@ def upsert_external_order(
 ) -> Order:
     if detail.supplier_id != supplier_id:
         raise InvalidExternalOrderError("The group is not the supplier of this order")
-    if detail.unit_price != detail.unit_price.to_integral_value():
-        raise InvalidExternalOrderError(
-            "The local sales model requires whole-peso prices"
-        )
     session.flush()
-    unit_price = int(detail.unit_price)
+    unit_price = detail.unit_price
     values = {
         "external_customer_id": detail.customer_id,
         "buyer_name": detail.customer_name or detail.customer_id,
