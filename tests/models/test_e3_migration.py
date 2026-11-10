@@ -16,6 +16,14 @@ from tests.support.billing import make_period
 
 PREVIOUS = "8c62e71f4b09"
 REVISION = "c7b4e2a91d60"
+LATER_MIGRATION_TABLES = {
+    "billing_sync_states",
+    "business_metric_snapshots",
+}
+
+
+def is_step_2_object(_object, name, *_args):
+    return name not in LATER_MIGRATION_TABLES
 
 
 def seed_legacy_orders(engine):
@@ -77,11 +85,9 @@ def test_upgrade_and_downgrade_preserve_e1_e2_orders_and_checkout(migration_data
                     connection,
                     opts={
                         "compare_type": True,
-                        # Step 4's independent migration is tested against current
-                        # metadata separately; this test stops at the step 2 revision.
-                        "include_object": lambda obj, name, *_: (
-                            name != "billing_sync_states"
-                        ),
+                        # Later migrations are tested against current metadata
+                        # separately; this test stops at the step 2 revision.
+                        "include_object": is_step_2_object,
                     },
                 ),
                 Base.metadata,
@@ -117,9 +123,7 @@ def test_upgrade_and_downgrade_preserve_e1_e2_orders_and_checkout(migration_data
                     connection,
                     opts={
                         "compare_type": True,
-                        "include_object": lambda obj, name, *_: (
-                            name != "billing_sync_states"
-                        ),
+                        "include_object": is_step_2_object,
                     },
                 ),
                 Base.metadata,

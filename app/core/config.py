@@ -17,6 +17,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Farmacentral Backend"
     app_env: str = "local"
+    app_commit_sha: str = Field(default="unknown", min_length=1, max_length=64)
     database_url: str = Field(min_length=1)
     farma_central_base_url: AnyHttpUrl
     farma_central_api_secret: SecretStr
@@ -39,6 +40,7 @@ class Settings(BaseSettings):
     billing_sales_batch_size: int = Field(default=10, ge=1, le=100)
     billing_pay_invoices_enabled: bool = False
     billing_payments_batch_size: int = Field(default=10, ge=1, le=100)
+    business_metrics_snapshot_interval_seconds: float = Field(default=600, gt=0)
     sftp_host: str = Field(default="choripan10.ing.uc.cl", min_length=1)
     sftp_port: int = Field(default=22, ge=1, le=65535)
     sftp_username: str | None = Field(default=None, min_length=1)

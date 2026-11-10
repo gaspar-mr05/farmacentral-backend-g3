@@ -39,6 +39,34 @@ from .queue import enqueue_sale
 logger = logging.getLogger(__name__)
 
 
+def fulfilled_sales_query(period):
+    """Official order IDs that represent fulfilled sales in this period."""
+    orders = select(Order.external_order_id.label("order_id")).where(
+        Order.external_order_id.is_not(None),
+        or_(
+            Order.status == OrderStatus.DISPATCHED,
+            Order.external_status == ExternalOrderStatus.FULFILLED,
+        ),
+        Order.created_at >= period.starts_at,
+        ~exists(
+            select(MarketTrade.id).where(
+                MarketTrade.period_id == period.id,
+                MarketTrade.external_order_id == Order.external_order_id,
+                MarketTrade.role == MarketRole.BUYER,
+            )
+        ),
+    )
+    trades = select(MarketTrade.external_order_id.label("order_id")).where(
+        MarketTrade.period_id == period.id,
+        MarketTrade.role == MarketRole.SELLER,
+        MarketTrade.closed_at >= period.starts_at,
+    )
+    if period.ends_at:
+        orders = orders.where(Order.created_at < period.ends_at)
+        trades = trades.where(MarketTrade.closed_at < period.ends_at)
+    return orders.union(trades).subquery()
+
+
 class SalesInvoicingService:
     def __init__(self, billing, orders, session, period, *, settings):
         self.billing = billing
@@ -50,30 +78,7 @@ class SalesInvoicingService:
             raise ValueError("Billing period belongs to another group")
 
     def _sales(self):
-        orders = select(Order.external_order_id.label("order_id")).where(
-            Order.external_order_id.is_not(None),
-            or_(
-                Order.status == OrderStatus.DISPATCHED,
-                Order.external_status == ExternalOrderStatus.FULFILLED,
-            ),
-            Order.created_at >= self.period.starts_at,
-            ~exists(
-                select(MarketTrade.id).where(
-                    MarketTrade.period_id == self.period.id,
-                    MarketTrade.external_order_id == Order.external_order_id,
-                    MarketTrade.role == MarketRole.BUYER,
-                )
-            ),
-        )
-        trades = select(MarketTrade.external_order_id.label("order_id")).where(
-            MarketTrade.period_id == self.period.id,
-            MarketTrade.role == MarketRole.SELLER,
-            MarketTrade.closed_at >= self.period.starts_at,
-        )
-        if self.period.ends_at:
-            orders = orders.where(Order.created_at < self.period.ends_at)
-            trades = trades.where(MarketTrade.closed_at < self.period.ends_at)
-        return orders.union(trades).subquery()
+        return fulfilled_sales_query(self.period)
 
     def _sweep(self):
         sales = self._sales()
