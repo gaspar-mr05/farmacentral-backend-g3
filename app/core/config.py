@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     farma_central_timeout_seconds: float = Field(default=10, gt=0)
     purchase_orders_base_url: AnyHttpUrl | None = None
     purchase_orders_timeout_seconds: float = Field(default=10, gt=0)
+    trades_base_url: AnyHttpUrl | None = None
+    trades_timeout_seconds: float = Field(default=10, gt=0)
     billing_url: AnyHttpUrl | None = None
     billing_wsdl_url: AnyHttpUrl | None = None
     billing_timeout_seconds: float = Field(default=10, gt=0)
@@ -113,6 +115,13 @@ class Settings(BaseSettings):
         return str(
             self.purchase_orders_base_url
             or urljoin(str(self.farma_central_base_url), "/ordenes-compra/")
+        )
+
+    @property
+    def effective_trades_base_url(self) -> str:
+        return str(
+            self.trades_base_url
+            or urljoin(str(self.farma_central_base_url), "/trades/")
         )
 
     @property
