@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.clients.billing import BillingClient
 from app.clients.purchase_orders import PurchaseOrdersClient
 from app.core.config import get_settings
+from app.core.version import resolve_commit_sha
 from app.db.session import engine
 from app.services.billing import BillingReconciliationService, BusinessMetricsService
 from app.services.billing.payments import InvoicePaymentService
@@ -32,6 +33,7 @@ async def run(
     pay_invoices: bool = False,
 ) -> None:
     settings = get_settings()
+    commit_sha = resolve_commit_sha(settings.app_commit_sha)
     # A session-level advisory lock remains held across commits, but no DB
     # transaction is held open while waiting for SOAP. Unlock before pooling it.
     key = int.from_bytes(
@@ -102,7 +104,7 @@ async def run(
                                     sales["missing"] or sales["uncertain"]
                                 )
                             snapshot = BusinessMetricsService(session, period).capture(
-                                settings.app_commit_sha,
+                                commit_sha,
                                 minimum_interval=timedelta(
                                     seconds=settings.business_metrics_snapshot_interval_seconds
                                 ),

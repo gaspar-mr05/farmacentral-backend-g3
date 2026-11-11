@@ -17,7 +17,9 @@ class Settings(BaseSettings):
 
     app_name: str = "Farmacentral Backend"
     app_env: str = "local"
-    app_commit_sha: str = Field(default="unknown", min_length=1, max_length=64)
+    app_commit_sha: str = Field(
+        default="auto", min_length=1, max_length=64, pattern=r"^\S+$"
+    )
     database_url: str = Field(min_length=1)
     farma_central_base_url: AnyHttpUrl
     farma_central_api_secret: SecretStr

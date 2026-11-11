@@ -93,9 +93,9 @@ manual —o el cierre del período— sin llamar servicios externos:
   --period-id UUID_DEL_PERIODO --closing
 ```
 
-Configurar `APP_COMMIT_SHA` con el commit desplegado permite asociar cada
-snapshot al código que produjo las cifras. La migración
-`4f2a7c91e6d3` crea la tabla de snapshots.
+`APP_COMMIT_SHA=auto` asocia cada snapshot al commit desplegado mediante Git;
+también admite un hash explícito. La migración `4f2a7c91e6d3` crea la tabla de
+snapshots.
 
 ### Esperar stock antes de rechazar una OC
 

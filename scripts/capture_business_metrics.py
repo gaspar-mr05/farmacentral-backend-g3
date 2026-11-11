@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.version import resolve_commit_sha
 from app.db.session import engine
 from app.services.billing import BusinessMetricsService
 from app.services.billing.periods import billing_period
@@ -17,7 +18,7 @@ def capture(*, period_id: UUID, is_closing: bool = False) -> dict:
     with Session(engine) as session:
         period = billing_period(session, settings, period_id)
         snapshot = BusinessMetricsService(session, period).capture(
-            settings.app_commit_sha, is_closing=is_closing
+            resolve_commit_sha(settings.app_commit_sha), is_closing=is_closing
         )
         return snapshot.metrics
 
