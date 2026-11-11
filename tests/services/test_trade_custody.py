@@ -24,6 +24,7 @@ from app.models import (
     ProductCategory,
     Unit,
 )
+from app.schemas.purchase_orders import PurchaseOrder
 from app.schemas.trades import TradeOffer, TradeOfferCreate
 from app.schemas.units import UnitData
 from app.services.traceability import TraceabilityService
@@ -54,10 +55,34 @@ class TradesStub:
             raise self.response
         return self.response
 
+    async def get_order(self, order_id):
+        offer = self.response
+        return PurchaseOrder.model_validate(
+            {
+                "id": order_id,
+                "cliente": str(offer.publisher_group if offer.side == "buy" else 3),
+                "proveedor": str(3 if offer.side == "buy" else offer.publisher_group),
+                "sku": offer.sku,
+                "cantidad": offer.quantity,
+                "despachado": offer.quantity,
+                "precioUnitario": offer.unit_price,
+                "estado": "cumplida",
+                "historial": [],
+                "creada": offer.created_at,
+                "actualizada": offer.closed_at,
+                "vencimiento": offer.expires_at,
+                "facturado": False,
+            }
+        )
+
     async def accept_offer(self, offer_id: str):
         if isinstance(self.response, Exception):
             raise self.response
         return self.response
+
+
+def make_service(session, **kwargs):
+    return TradeCustodyService(session, purchase_orders=kwargs["trades"], **kwargs)
 
 
 def add_market_stock(
@@ -130,9 +155,11 @@ def official_offer(
         sku=sku,
         quantity=quantity,
         unitPrice="6.25",
-        status=status,
+        state=status,
+        counterparty="3" if status == "closed" else None,
+        closedAt=now if status == "closed" else None,
         orderId=order_id,
-        publisherGroup=publisher_group,
+        publisher=str(publisher_group),
         createdAt=now,
         expiresAt=now + timedelta(hours=1),
     )
@@ -145,7 +172,7 @@ async def test_publish_sell_reserves_fefo_stock_before_opening_offer(
     period, _, dispatch, units = add_market_stock(db_session)
     response = official_offer(sku=units[0].lot.product.sku)
     farma_central = FarmaCentralStub(dispatch.code)
-    service = TradeCustodyService(
+    service = make_service(
         db_session,
         farma_central=farma_central,
         trades=TradesStub(response),
@@ -194,7 +221,7 @@ async def test_publish_sell_reserves_fefo_stock_before_opening_offer(
 @pytest.mark.anyio
 async def test_uncertain_creation_keeps_units_reserved(db_session: Session) -> None:
     period, _, dispatch, units = add_market_stock(db_session)
-    service = TradeCustodyService(
+    service = make_service(
         db_session,
         farma_central=FarmaCentralStub(dispatch.code),
         trades=TradesStub(RuntimeError("response lost")),
@@ -232,14 +259,16 @@ async def test_accept_buy_records_sale_without_dispatching_again(
         order_id="b" * 24,
         publisher_group=5,
     )
-    service = TradeCustodyService(
+    service = make_service(
         db_session,
         farma_central=FarmaCentralStub(dispatch.code),
         trades=TradesStub(accepted),
         period=period,
     )
 
-    _, trade = await service.accept_buy(accepted)
+    _, trade = await service.accept_buy(
+        accepted.model_copy(update={"status": "open", "closed_at": None})
+    )
 
     assert (
         db_session.scalars(
@@ -293,7 +322,7 @@ def test_purchase_receipt_preserves_lot_and_supports_reentry(
     )
     db_session.add(trade)
     db_session.commit()
-    service = TradeCustodyService(
+    service = make_service(
         db_session,
         farma_central=FarmaCentralStub(dispatch.code),
         trades=TradesStub(RuntimeError()),
@@ -328,9 +357,7 @@ async def test_quarantine_before_movement_prevents_market_call(db_session):
     fc = RecalledStock(dispatch.code)
     trades = Mock(accept_offer=AsyncMock())
     offer = official_offer(sku=units[0].lot.product.sku, side="buy", publisher_group=5)
-    service = TradeCustodyService(
-        db_session, farma_central=fc, trades=trades, period=period
-    )
+    service = make_service(db_session, farma_central=fc, trades=trades, period=period)
     with pytest.raises(InvalidTradeStateError, match="blocked or changed"):
         await service.accept_buy(offer)
     trades.accept_offer.assert_not_awaited()
@@ -351,7 +378,7 @@ async def test_quarantine_after_movement_prevents_publication(db_session):
                 db_session.commit()
 
     trades = Mock(create_offer=AsyncMock())
-    service = TradeCustodyService(
+    service = make_service(
         db_session,
         farma_central=RecalledStock(dispatch.code),
         trades=trades,
@@ -378,13 +405,15 @@ async def test_actual_transfer_ids_supersede_unconfirmed_selection(db_session):
         order_id="b" * 24,
         publisher_group=5,
     )
-    service = TradeCustodyService(
+    service = make_service(
         db_session,
         farma_central=FarmaCentralStub(dispatch.code),
         trades=TradesStub(accepted),
         period=period,
     )
-    _, trade = await service.accept_buy(accepted)
+    _, trade = await service.accept_buy(
+        accepted.model_copy(update={"status": "open", "closed_at": None})
+    )
     assert (
         db_session.scalar(
             select(CustodyEvent.id).where(CustodyEvent.market_trade_id == trade.id)
@@ -409,7 +438,7 @@ async def test_movement_timeout_keeps_reservations_until_reconciled(db_session):
         async def move_product(self, *args):
             raise TimeoutError("response lost")
 
-    service = TradeCustodyService(
+    service = make_service(
         db_session,
         farma_central=LostMovement(dispatch.code),
         trades=TradesStub(RuntimeError()),
@@ -457,11 +486,119 @@ async def test_market_request_keeps_unit_locks_against_concurrent_recall(
                     contender.rollback()
                 return accepted
 
-        service = TradeCustodyService(
+        service = make_service(
             primary,
             farma_central=FarmaCentralStub(dispatch.code),
             trades=CheckLocks(accepted),
             period=period,
         )
-        await service.accept_buy(accepted)
+        await service.accept_buy(
+            accepted.model_copy(update={"status": "open", "closed_at": None})
+        )
         assert units[0].status == "trade_reserved"
+
+
+@pytest.mark.anyio
+async def test_reduced_official_delivery_uses_order_quantity_and_closure_time(
+    db_session,
+):
+    period, _, dispatch, units = add_market_stock(db_session, quantity=3)
+    accepted = official_offer(
+        sku=units[0].lot.product.sku,
+        side="buy",
+        status="closed",
+        order_id="b" * 24,
+        publisher_group=5,
+    )
+    closed_at = datetime.now(UTC) - timedelta(minutes=5)
+    accepted = accepted.model_copy(update={"closed_at": closed_at})
+
+    class ReducedDelivery(TradesStub):
+        async def get_order(self, order_id):
+            order = await super().get_order(order_id)
+            return order.model_copy(update={"quantity": 1, "dispatched_quantity": 1})
+
+    service = make_service(
+        db_session,
+        farma_central=FarmaCentralStub(dispatch.code),
+        trades=ReducedDelivery(accepted),
+        period=period,
+    )
+    _, trade = await service.accept_buy(accepted.model_copy(update={"status": "open"}))
+    assert trade.quantity == 1
+    assert trade.total == Decimal("6.25")
+    assert trade.closed_at == closed_at
+    service.record_trade_units(trade.id, [units[0].external_unit_id])
+    assert units[0].status == "dispatched"
+    assert units[1].status == "available"
+    assert all(
+        r.released_at is not None
+        for r in db_session.scalars(select(MarketOfferReservation))
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "invalid", ["wrong_buyer", "wrong_state", "wrong_quantity", "unavailable"]
+)
+async def test_unconfirmed_order_keeps_closure_and_reservations_without_trade(
+    db_session, invalid
+):
+    period, _, dispatch, units = add_market_stock(db_session, quantity=2)
+    accepted = official_offer(
+        sku=units[0].lot.product.sku,
+        side="buy",
+        status="closed",
+        order_id="b" * 24,
+        publisher_group=5,
+    )
+
+    class InvalidOrder(TradesStub):
+        async def get_order(self, order_id):
+            if invalid == "unavailable":
+                raise TimeoutError("Order service unavailable")
+            order = await super().get_order(order_id)
+            changes = {
+                "wrong_buyer": {"customer_id": "9"},
+                "wrong_state": {"state": "aceptada"},
+                "wrong_quantity": {"quantity": 3, "dispatched_quantity": 3},
+            }
+            return order.model_copy(update=changes[invalid])
+
+    service = make_service(
+        db_session,
+        farma_central=FarmaCentralStub(dispatch.code),
+        trades=InvalidOrder(accepted),
+        period=period,
+    )
+    with pytest.raises((InvalidTradeStateError, TimeoutError)):
+        await service.accept_buy(accepted.model_copy(update={"status": "open"}))
+    db_session.expire_all()
+    offer = db_session.scalar(select(MarketOffer))
+    assert offer.status == "closed"
+    assert offer.external_order_id == accepted.order_id
+    assert db_session.scalar(select(MarketTrade)) is None
+    assert all(unit.status == "trade_reserved" for unit in units)
+
+
+@pytest.mark.anyio
+async def test_accept_sell_confirms_buyer_role_with_official_order(db_session):
+    period, _, dispatch, units = add_market_stock(db_session, quantity=2)
+    accepted = official_offer(
+        sku=units[0].lot.product.sku,
+        side="sell",
+        status="closed",
+        order_id="b" * 24,
+        publisher_group=5,
+    )
+    service = make_service(
+        db_session,
+        farma_central=FarmaCentralStub(dispatch.code),
+        trades=TradesStub(accepted),
+        period=period,
+    )
+    _, trade = await service.accept_sell(accepted.model_copy(update={"status": "open"}))
+    assert trade.role == MarketRole.BUYER
+    assert trade.counterparty_id == "5"
+    assert trade.closed_at == accepted.closed_at
+    assert db_session.scalar(select(MarketOfferReservation)) is None

@@ -25,8 +25,10 @@ def offer_payload(**overrides):
         "sku": "EXC-LACTOSA-DC",
         "quantity": 20,
         "unitPrice": 6,
-        "status": "open",
-        "publisherGroup": 3,
+        "state": "open",
+        "publisher": "3",
+        "counterparty": None,
+        "closedAt": None,
         "createdAt": "2026-11-11T00:00:00Z",
         "expiresAt": "2026-11-11T01:00:00Z",
     }
@@ -44,16 +46,19 @@ async def test_offer_operations_follow_the_documented_contract_and_reuse_token()
             assert json.loads(request.content) == {"group": 3, "secret": "test-secret"}
             return httpx.Response(200, json={"success": True, "token": "test-token"})
 
-        assert request.headers["Authorization"] == "Bearer test-token"
+        if request.method == "GET":
+            assert "Authorization" not in request.headers
+        else:
+            assert request.headers["Authorization"] == "Bearer test-token"
         if request.method == "GET" and request.url.path == "/trades/offers":
             assert dict(request.url.params) == {
                 "sku": "EXC-LACTOSA-DC",
                 "side": "sell",
-                "status": "open",
+                "state": "open",
             }
-            return httpx.Response(200, json={"offers": [offer_payload()]})
+            return httpx.Response(200, json=[offer_payload()])
         if request.method == "GET":
-            return httpx.Response(200, json={"offer": offer_payload()})
+            return httpx.Response(200, json=offer_payload())
         if request.url.path == "/trades/offers":
             assert json.loads(request.content) == {
                 "side": "sell",
@@ -61,13 +66,18 @@ async def test_offer_operations_follow_the_documented_contract_and_reuse_token()
                 "quantity": 20,
                 "unitPrice": 6.0,
             }
-            return httpx.Response(201, json={"data": offer_payload()})
+            return httpx.Response(201, json=offer_payload())
         if request.url.path.endswith("/accept"):
             return httpx.Response(
                 200,
-                json=offer_payload(status="closed", orderId=ORDER_ID),
+                json=offer_payload(
+                    state="closed",
+                    orderId=ORDER_ID,
+                    counterparty="4",
+                    closedAt="2026-11-11T00:10:00Z",
+                ),
             )
-        return httpx.Response(204)
+        return httpx.Response(200, json=offer_payload(state="cancelled"))
 
     async with httpx.AsyncClient(
         base_url="https://trades.test/trades/",
@@ -75,7 +85,7 @@ async def test_offer_operations_follow_the_documented_contract_and_reuse_token()
     ) as http_client:
         client = TradesClient(settings=make_settings(), http_client=http_client)
         offers = await client.list_offers(
-            sku="EXC-LACTOSA-DC", side="sell", status="open"
+            sku="EXC-LACTOSA-DC", side="sell", state="open"
         )
         detail = await client.get_offer(OFFER_ID.upper())
         created = await client.create_offer(
@@ -94,7 +104,10 @@ async def test_offer_operations_follow_the_documented_contract_and_reuse_token()
     assert offers[0].id == detail.id == created.id == OFFER_ID
     assert detail.lifetime.total_seconds() == 3600
     assert accepted.order_id == ORDER_ID
-    assert cancelled is None
+    assert cancelled.status == "cancelled"
+    assert detail.publisher_group == 3
+    assert accepted.counterparty_group == 4
+    assert accepted.closed_at.isoformat() == "2026-11-11T00:10:00+00:00"
 
 
 def test_offer_request_validates_side_quantity_and_price():
@@ -244,3 +257,43 @@ async def test_mutation_with_server_error_or_invalid_success_is_uncertain(
             else:
                 await client.cancel_offer(OFFER_ID)
     assert len(mutations) == 1
+
+
+@pytest.mark.anyio
+async def test_public_listing_needs_no_authentication():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        assert request.url.path == "/trades/offers"
+        assert "Authorization" not in request.headers
+        return httpx.Response(200, json=[offer_payload()])
+
+    async with httpx.AsyncClient(
+        base_url="https://trades.test/trades/", transport=httpx.MockTransport(handler)
+    ) as http:
+        client = TradesClient(settings=make_settings(), http_client=http)
+        assert len(await client.list_offers()) == 1
+    assert len(requests) == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"state": "closing", "orderId": ORDER_ID},
+        {"state": "closed", "orderId": ORDER_ID},
+    ],
+)
+async def test_incomplete_acceptance_evidence_is_uncertain(changes):
+    def handler(request):
+        if request.url.path.endswith("/autenticar"):
+            return httpx.Response(200, json={"token": "test-token"})
+        return httpx.Response(200, json=offer_payload(**changes))
+
+    async with httpx.AsyncClient(
+        base_url="https://trades.test/trades/", transport=httpx.MockTransport(handler)
+    ) as http:
+        client = TradesClient(settings=make_settings(), http_client=http)
+        with pytest.raises(TradesUncertainResultError):
+            await client.accept_offer(OFFER_ID)

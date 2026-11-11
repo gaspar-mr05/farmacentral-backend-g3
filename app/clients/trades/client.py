@@ -7,7 +7,13 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from app.core.config import Settings, get_settings
-from app.schemas.trades import TradeOffer, TradeOfferCreate, TradeOfferId, TradeSide
+from app.schemas.trades import (
+    TradeOffer,
+    TradeOfferCreate,
+    TradeOfferId,
+    TradeSide,
+    TradeState,
+)
 
 from .exceptions import (
     TradesAuthenticationError,
@@ -55,11 +61,11 @@ class TradesClient:
         *,
         sku: str | None = None,
         side: TradeSide | None = None,
-        status: str | None = None,
+        state: TradeState | None = None,
     ) -> list[TradeOffer]:
         params = {
             key: value
-            for key, value in {"sku": sku, "side": side, "status": status}.items()
+            for key, value in {"sku": sku, "side": side, "state": state}.items()
             if value is not None
         }
         response = await self._request("GET", "offers", params=params)
@@ -98,9 +104,10 @@ class TradesClient:
             result_may_be_uncertain=True,
         )
         offer = self._mutation_offer(response, expected_id=offer_id)
-        if not offer.order_id:
+        if offer.status != "closed" or not offer.order_id or offer.closed_at is None:
             raise TradesUncertainResultError(
-                "Acceptance returned no order ID; reconcile before retrying"
+                "Acceptance returned incomplete closure evidence; "
+                "reconcile before retrying"
             )
         return offer
 
@@ -123,6 +130,10 @@ class TradesClient:
         result_may_be_uncertain: bool = False,
         **kwargs: Any,
     ) -> httpx.Response:
+        if method == "GET":
+            response = await self._send(method, path, **kwargs)
+            self._raise_for_status(response)
+            return response
         token = await self._get_token()
         response = await self._send(
             method,

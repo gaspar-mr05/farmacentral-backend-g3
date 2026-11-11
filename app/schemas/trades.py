@@ -14,8 +14,9 @@ from pydantic import (
 
 TradeOfferId = Annotated[str, Field(pattern=r"^[0-9a-fA-F]{24}$")]
 TradeSide = Literal["buy", "sell"]
+TradeState = Literal["open", "closing", "closed", "cancelled", "expired"]
 TradeText = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)
 ]
 TradeMoney = Annotated[Decimal, Field(gt=0, allow_inf_nan=False)]
 
@@ -23,7 +24,7 @@ TradeMoney = Annotated[Decimal, Field(gt=0, allow_inf_nan=False)]
 class TradeOfferCreate(BaseModel):
     side: TradeSide
     sku: TradeText
-    quantity: int = Field(gt=0, le=5000)
+    quantity: int = Field(gt=0, strict=True)
     unit_price: TradeMoney = Field(alias="unitPrice")
 
     @field_serializer("unit_price", when_used="json")
@@ -49,13 +50,19 @@ class TradeOffer(BaseModel):
     sku: TradeText
     quantity: int = Field(gt=0)
     unit_price: Decimal = Field(alias="unitPrice", gt=0, allow_inf_nan=False)
-    status: TradeText
+    status: TradeState = Field(
+        validation_alias=AliasChoices("state", "status"), serialization_alias="state"
+    )
     order_id: str | None = Field(default=None, alias="orderId")
     publisher_group: int | None = Field(
         default=None,
-        validation_alias=AliasChoices("publisherGroup", "group", "ownerGroup"),
+        validation_alias=AliasChoices(
+            "publisher", "publisherGroup", "group", "ownerGroup"
+        ),
         gt=0,
     )
+    counterparty_group: int | None = Field(default=None, alias="counterparty", gt=0)
+    closed_at: AwareDatetime | None = Field(default=None, alias="closedAt")
     created_at: AwareDatetime | None = Field(default=None, alias="createdAt")
     expires_at: AwareDatetime | None = Field(default=None, alias="expiresAt")
 

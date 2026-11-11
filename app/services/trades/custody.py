@@ -7,6 +7,7 @@ from sqlalchemy import exists, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.clients.farma_central import FarmaCentralClient
+from app.clients.purchase_orders import PurchaseOrdersClient
 from app.clients.trades import TradesClient
 from app.models import (
     BusinessPeriod,
@@ -24,6 +25,7 @@ from app.models import (
 )
 from app.queries.recalls import blocked_lots
 from app.schemas.farma_central import FarmaCentralSpace
+from app.schemas.purchase_orders import PurchaseOrder, PurchaseOrderState
 from app.schemas.trades import TradeOffer, TradeOfferCreate
 from app.services.custody.events import record_move
 
@@ -45,11 +47,13 @@ class TradeCustodyService:
         *,
         farma_central: FarmaCentralClient,
         trades: TradesClient,
+        purchase_orders: PurchaseOrdersClient,
         period: BusinessPeriod,
     ) -> None:
         self._session = session
         self._farma_central = farma_central
         self._trades = trades
+        self._purchase_orders = purchase_orders
         self._period = period
         self._group_id = period.group_id
 
@@ -130,7 +134,8 @@ class TradeCustodyService:
             raise
 
         offer.counterparty_group_id = self._group_id
-        trade = self._upsert_trade(offer, role=MarketRole.SELLER)
+        self._session.commit()
+        trade = await self._confirmed_trade(offer, accepted, role=MarketRole.SELLER)
         # A commercial closure is not yet evidence of which units were transferred.
         # Keep reservations until record_trade_units receives official IDs.
         self._session.commit()
@@ -149,7 +154,8 @@ class TradeCustodyService:
             raise
 
         offer.counterparty_group_id = self._group_id
-        trade = self._upsert_trade(offer, role=MarketRole.BUYER)
+        self._session.commit()
+        trade = await self._confirmed_trade(offer, accepted, role=MarketRole.BUYER)
         self._session.commit()
         return accepted, trade
 
@@ -167,7 +173,7 @@ class TradeCustodyService:
         unit_ids = tuple(dict.fromkeys(external_unit_ids))
         if len(unit_ids) != trade.quantity:
             raise InvalidTradeStateError(
-                "Trade unit evidence must match the complete offer quantity"
+                "Trade unit evidence must match the official order quantity"
             )
 
         offer = (
@@ -414,7 +420,12 @@ class TradeCustodyService:
 
     def _apply_official_offer(self, offer: MarketOffer, official: TradeOffer) -> None:
         if (
-            offer.sku != official.sku
+            (
+                offer.external_offer_id is not None
+                and offer.external_offer_id != official.id
+            )
+            or offer.publisher_group_id != official.publisher_group
+            or offer.sku != official.sku
             or offer.quantity != official.quantity
             or offer.side.value != official.side
             or Decimal(offer.unit_price) != official.unit_price
@@ -425,8 +436,44 @@ class TradeCustodyService:
         offer.status = official.status
         offer.opened_at = official.created_at
         offer.expires_at = official.expires_at
+        offer.counterparty_group_id = official.counterparty_group
 
-    def _upsert_trade(self, offer: MarketOffer, *, role: MarketRole) -> MarketTrade:
+    async def _confirmed_trade(
+        self, offer: MarketOffer, official: TradeOffer, *, role: MarketRole
+    ) -> MarketTrade:
+        if official.status != "closed" or official.closed_at is None:
+            raise InvalidTradeStateError("Official closure time and state are required")
+        order = await self._purchase_orders.get_order(offer.external_order_id)
+        seller = (
+            self._group_id if role == MarketRole.SELLER else offer.publisher_group_id
+        )
+        buyer = (
+            offer.publisher_group_id if role == MarketRole.SELLER else self._group_id
+        )
+        if (
+            order.id != offer.external_order_id
+            or order.state != PurchaseOrderState.FULFILLED
+            or order.supplier_id != str(seller)
+            or order.customer_id != str(buyer)
+            or order.sku != offer.sku
+            or order.quantity > offer.quantity
+            or order.dispatched_quantity != order.quantity
+            or order.unit_price != offer.unit_price
+            or official.counterparty_group != self._group_id
+        ):
+            raise InvalidTradeStateError("Official order does not match market closure")
+        return self._upsert_trade(
+            offer, role=role, order=order, closed_at=official.closed_at
+        )
+
+    def _upsert_trade(
+        self,
+        offer: MarketOffer,
+        *,
+        role: MarketRole,
+        order: PurchaseOrder,
+        closed_at: datetime,
+    ) -> MarketTrade:
         if not offer.external_offer_id or not offer.external_order_id:
             raise InvalidTradeStateError("Closed offer is missing official identifiers")
         trade = self._session.scalar(
@@ -451,9 +498,9 @@ class TradeCustodyService:
             role=role,
             counterparty_id=str(counterparty),
             sku=offer.sku,
-            quantity=offer.quantity,
-            unit_price=offer.unit_price,
-            closed_at=datetime.now(UTC),
+            quantity=order.quantity,
+            unit_price=order.unit_price,
+            closed_at=closed_at,
         )
         self._session.add(trade)
         self._session.flush()
@@ -467,7 +514,7 @@ class TradeCustodyService:
             for reservation in offer.reservations
             if reservation.released_at is None
         ]
-        if len(active) != trade.quantity:
+        if len(active) != offer.quantity:
             raise InvalidTradeStateError("Offer reservation is incomplete")
         # The official IDs can differ from our original FEFO selection.
         # Release the old intent, but record only the confirmed transfer evidence.
@@ -523,6 +570,8 @@ class TradeCustodyService:
     def _validate_counterparty_offer(
         self, offer: TradeOffer, *, side: MarketOfferSide
     ) -> None:
+        if offer.status != "open":
+            raise InvalidTradeStateError("Only open offers can be accepted")
         if offer.side != side.value:
             raise InvalidTradeStateError(f"Expected a {side.value} offer")
         if offer.publisher_group is None:
