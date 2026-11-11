@@ -5,16 +5,18 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models import Lot, ProductionInput
+from app.models import Lot, MarketRole, ProductionInput
 from app.queries.traceability import (
     get_lot_with_units,
     list_deliveries,
     list_lineage_inputs,
+    list_market_custody,
 )
 from app.schemas.traceability import (
     ProductionLinkResponse,
     TraceabilityDeliveryResponse,
     TraceabilityLotResponse,
+    TraceabilityMarketTransferResponse,
     TraceabilityResponse,
     TraceabilityUnitLocationResponse,
     TraceabilityUnitResponse,
@@ -50,6 +52,8 @@ class TraceabilityService:
         ancestors.pop(lot_id, None)
         descendants.pop(lot_id, None)
         links = {item.id: item for item in upstream_links + downstream_links}
+        traced_lot_ids = {lot_id, *descendants}
+        market_custody = list_market_custody(self._session, traced_lot_ids)
 
         response = TraceabilityResponse(
             lot=self._to_lot(lot),
@@ -63,7 +67,20 @@ class TraceabilityService:
                     external_unit_id=assignment.unit.external_unit_id,
                     dispatched_at=assignment.dispatched_at,
                 )
-                for assignment in list_deliveries(self._session, {lot_id, *descendants})
+                for assignment in list_deliveries(self._session, traced_lot_ids)
+            ]
+            + [
+                TraceabilityDeliveryResponse(
+                    lot_id=event.unit.lot_id,
+                    order_id=event.market_trade.external_order_id,
+                    buyer_name=f"Distribuidora {event.market_trade.counterparty_id}",
+                    buyer_email=None,
+                    sku=event.market_trade.sku,
+                    external_unit_id=event.unit.external_unit_id,
+                    dispatched_at=event.occurred_at,
+                )
+                for event in market_custody
+                if event.market_trade.role == MarketRole.SELLER
             ],
             current_units=[
                 TraceabilityUnitResponse(
@@ -76,13 +93,27 @@ class TraceabilityService:
                     ),
                 )
                 for unit in sorted(lot.units, key=lambda item: item.external_unit_id)
-                if unit.status in {"available", "reserved"}
+                if unit.status in {"available", "reserved", "trade_reserved"}
             ],
             ancestors=self._sorted_lots(ancestors.values()),
             descendants=self._sorted_lots(descendants.values()),
             production_links=[
                 self._to_production_link(item)
                 for item in sorted(links.values(), key=lambda item: str(item.id))
+            ],
+            market_transfers=[
+                TraceabilityMarketTransferResponse(
+                    trade_id=event.market_trade.id,
+                    external_offer_id=event.market_trade.external_offer_id,
+                    external_order_id=event.market_trade.external_order_id,
+                    role=event.market_trade.role,
+                    counterparty_id=event.market_trade.counterparty_id,
+                    lot_id=event.unit.lot_id,
+                    sku=event.market_trade.sku,
+                    external_unit_id=event.unit.external_unit_id,
+                    occurred_at=event.occurred_at,
+                )
+                for event in market_custody
             ],
         )
         elapsed_ms = (perf_counter() - started) * 1000

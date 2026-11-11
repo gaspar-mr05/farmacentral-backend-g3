@@ -5,7 +5,9 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models import (
+    CustodyEvent,
     Lot,
+    MarketRole,
     OrderItem,
     OrderUnit,
     ProductionInput,
@@ -99,4 +101,37 @@ def list_deliveries(session: Session, lot_ids: set[UUID]) -> Sequence[OrderUnit]
             joinedload(OrderUnit.order_item).joinedload(OrderItem.order),
         )
         .order_by(OrderUnit.dispatched_at, OrderUnit.id)
+    ).all()
+
+
+def list_market_custody(session: Session, lot_ids: set[UUID]) -> Sequence[CustodyEvent]:
+    return session.scalars(
+        select(CustodyEvent)
+        .join(CustodyEvent.unit)
+        .join(CustodyEvent.market_trade)
+        .where(Unit.lot_id.in_(lot_ids))
+        .options(
+            joinedload(CustodyEvent.unit),
+            joinedload(CustodyEvent.market_trade),
+        )
+        .order_by(CustodyEvent.occurred_at, CustodyEvent.id)
+    ).all()
+
+
+def list_market_deliveries(
+    session: Session, lot_ids: set[UUID]
+) -> Sequence[CustodyEvent]:
+    return session.scalars(
+        select(CustodyEvent)
+        .join(CustodyEvent.unit)
+        .join(CustodyEvent.market_trade)
+        .where(
+            Unit.lot_id.in_(lot_ids),
+            CustodyEvent.market_trade.has(role=MarketRole.SELLER),
+        )
+        .options(
+            joinedload(CustodyEvent.unit),
+            joinedload(CustodyEvent.market_trade),
+        )
+        .order_by(CustodyEvent.occurred_at, CustodyEvent.id)
     ).all()

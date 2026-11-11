@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, ForeignKey, func
+from sqlalchemy import DateTime, Enum, ForeignKey, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -11,6 +11,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.models.location import Location
+    from app.models.market_trade import MarketTrade
     from app.models.unit import Unit
 
 
@@ -24,6 +25,11 @@ class CustodyEventType(StrEnum):
 
 class CustodyEvent(Base):
     __tablename__ = "custody_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "market_trade_id", "unit_id", name="uq_custody_market_trade_unit"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -49,9 +55,15 @@ class CustodyEvent(Base):
     order_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("orders.id"), nullable=True
     )
+    market_trade_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("market_trades.id"), nullable=True
+    )
 
     unit: Mapped["Unit"] = relationship(back_populates="custody_events")
     from_location: Mapped["Location | None"] = relationship(
         foreign_keys=[from_location_id]
     )
     to_location: Mapped["Location | None"] = relationship(foreign_keys=[to_location_id])
+    market_trade: Mapped["MarketTrade | None"] = relationship(
+        back_populates="custody_events"
+    )

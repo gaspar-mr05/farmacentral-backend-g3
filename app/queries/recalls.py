@@ -17,7 +17,14 @@ from app.models import (
     Unit,
 )
 
-STOCK_STATUSES = ("available", "reserved", "recall_pending", "quarantined", "expired")
+STOCK_STATUSES = (
+    "available",
+    "reserved",
+    "trade_reserved",
+    "recall_pending",
+    "quarantined",
+    "expired",
+)
 
 
 def blocked_lots():

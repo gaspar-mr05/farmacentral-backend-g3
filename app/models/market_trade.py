@@ -21,6 +21,7 @@ from app.db.base import Base
 from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
+    from app.models.custody_event import CustodyEvent
     from app.models.order import Order
 
 
@@ -75,6 +76,9 @@ class MarketTrade(Base, TimestampMixin):
     sale_order_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("orders.id"))
 
     sale_order: Mapped["Order | None"] = relationship()
+    custody_events: Mapped[list["CustodyEvent"]] = relationship(
+        back_populates="market_trade"
+    )
 
     @property
     def total(self) -> Decimal:

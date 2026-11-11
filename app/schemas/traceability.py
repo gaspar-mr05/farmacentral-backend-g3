@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.models import LotOrigin
+from app.models import LotOrigin, MarketRole
 
 
 class TraceabilityLotResponse(BaseModel):
@@ -41,13 +41,25 @@ class ProductionLinkResponse(BaseModel):
 
 class TraceabilityDeliveryResponse(BaseModel):
     lot_id: UUID
-    order_id: UUID
+    order_id: UUID | str
     buyer_name: str
     buyer_email: str | None
     sku: str
     external_unit_id: str
     quantity: int = 1
     dispatched_at: datetime
+
+
+class TraceabilityMarketTransferResponse(BaseModel):
+    trade_id: UUID
+    external_offer_id: str
+    external_order_id: str
+    role: MarketRole
+    counterparty_id: str
+    lot_id: UUID
+    sku: str
+    external_unit_id: str
+    occurred_at: datetime
 
 
 class TraceabilityResponse(BaseModel):
@@ -57,3 +69,6 @@ class TraceabilityResponse(BaseModel):
     descendants: list[TraceabilityLotResponse]
     production_links: list[ProductionLinkResponse]
     deliveries: list[TraceabilityDeliveryResponse] = Field(default_factory=list)
+    market_transfers: list[TraceabilityMarketTransferResponse] = Field(
+        default_factory=list
+    )
