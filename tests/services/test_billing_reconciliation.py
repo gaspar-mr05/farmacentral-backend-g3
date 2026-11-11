@@ -419,3 +419,21 @@ async def test_linked_sale_invoiced_after_period_close_still_observes_payment(
     db_session.commit()
     assert (await service.poll(now=NOW))["failed"] == 0
     assert db_session.scalar(select(Invoice.status)) == InvoiceStatus.PAID
+
+
+@pytest.mark.anyio
+async def test_full_scan_timestamps_require_success_and_can_be_refreshed(db_session):
+    source = BillingSource()
+    period, service = setup_service(db_session, source)
+    await service.poll(now=NOW)
+    state = db_session.get(BillingSyncState, (period.id, "client:pending"))
+    assert state.full_started_at == state.full_completed_at == NOW
+    await service.poll(now=NOW + timedelta(minutes=1), full=True)
+    db_session.refresh(state)
+    assert (
+        state.full_started_at == state.full_completed_at == NOW + timedelta(minutes=1)
+    )
+    source.error = BillingSOAPFault("Server")
+    await service.poll(now=NOW + timedelta(minutes=2), full=True)
+    db_session.refresh(state)
+    assert state.full_completed_at == NOW + timedelta(minutes=1)

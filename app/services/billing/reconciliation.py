@@ -49,7 +49,7 @@ class BillingReconciliationService:
             self.session.commit()
         return state
 
-    async def poll(self, *, now: datetime | None = None) -> dict:
+    async def poll(self, *, now: datetime | None = None, full: bool = False) -> dict:
         self.blocked = False
         self.result = {"queries": 0, "observations": 0, "failed": 0}
         now = now or datetime.now(UTC)
@@ -67,6 +67,10 @@ class BillingReconciliationService:
         for side in InvoiceSide:
             for status in InvoiceStatus:
                 state = self._state(f"{side.value}:{status.value}")
+                if state.cursor is None and state.full_started_at is None:
+                    state.full_started_at = now
+                if full and state.full_target is None:
+                    state.next_full_at = now
                 start = max(
                     self.period.starts_at,
                     (state.cursor or self.period.starts_at) - OVERLAP,
@@ -123,12 +127,14 @@ class BillingReconciliationService:
                 state.next_full_at = now + timedelta(
                     seconds=self.settings.billing_full_sync_interval_seconds
                 )
+                state.full_completed_at = now
                 self.session.commit()
                 return
             if state.next_full_at > now:
                 return
             state.full_cursor = self.period.starts_at
             state.full_target = horizon
+            state.full_started_at = now
             self.session.commit()
         start = state.full_cursor
         end = min(start + WINDOW, state.full_target)
@@ -136,6 +142,7 @@ class BillingReconciliationService:
             return
         state.full_cursor = end
         if end >= state.full_target:
+            state.full_completed_at = now
             state.full_cursor = state.full_target = None
             state.next_full_at = now + timedelta(
                 seconds=self.settings.billing_full_sync_interval_seconds

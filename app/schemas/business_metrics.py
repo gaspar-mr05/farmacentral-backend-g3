@@ -21,6 +21,8 @@ class PendingPayments(BaseModel):
 class ReconciliationFreshness(BaseModel):
     last_complete_at: datetime | None
     age_seconds: int | None
+    covered_through: datetime | None = None
+    full_scan_pending: bool = True
 
 
 class BusinessMetrics(BaseModel):
@@ -28,9 +30,12 @@ class BusinessMetrics(BaseModel):
     environment: str
     period_code: str
     calculated_at: datetime
+    financial_as_of: datetime | None = None
     invoiced_income: Decimal
     invoiced_costs: Decimal
     client_interest: Decimal
+    client_interest_paid: Decimal = Decimal(0)
+    client_interest_pending: Decimal = Decimal(0)
     margin: Decimal
     costs_by_channel: dict[str, Decimal]
     bank_balance: Decimal | None

@@ -22,6 +22,7 @@ from app.models import (
     Product,
     Unit,
 )
+from app.queries.recalls import blocked_lots
 from app.schemas.farma_central import FarmaCentralSpace
 from app.schemas.trades import TradeOffer, TradeOfferCreate
 from app.services.custody.events import record_move
@@ -67,9 +68,14 @@ class TradeCustodyService:
             status="preparing",
         )
         try:
-            await self._move_reservations_to_dispatch(offer)
-        except Exception:
+            destination_id = await self._move_reservations_to_dispatch(offer)
+            self._ready_for_market(offer, destination_id)
+        except InvalidTradeStateError:
             self._release(offer, status="failed")
+            self._session.commit()
+            raise
+        except Exception:
+            offer.status = "movement_uncertain"
             self._session.commit()
             raise
 
@@ -78,6 +84,7 @@ class TradeCustodyService:
                 request,
                 current_unit_price=current_unit_price,
             )
+            self._apply_official_offer(offer, official)
         except Exception:
             # The request may have reached the market. Keep custody until a GET
             # proves that the offer never opened or is no longer open.
@@ -85,7 +92,6 @@ class TradeCustodyService:
             self._session.commit()
             raise
 
-        self._apply_official_offer(offer, official)
         self._session.commit()
         return official
 
@@ -104,23 +110,29 @@ class TradeCustodyService:
             status="accepting",
         )
         try:
-            await self._move_reservations_to_dispatch(offer)
-        except Exception:
+            destination_id = await self._move_reservations_to_dispatch(offer)
+            self._ready_for_market(offer, destination_id)
+        except InvalidTradeStateError:
             self._release(offer, status="failed")
+            self._session.commit()
+            raise
+        except Exception:
+            offer.status = "movement_uncertain"
             self._session.commit()
             raise
 
         try:
             accepted = await self._trades.accept_offer(official.id)
+            self._apply_official_offer(offer, accepted)
         except Exception:
             offer.status = "acceptance_uncertain"
             self._session.commit()
             raise
 
-        self._apply_official_offer(offer, accepted)
         offer.counterparty_group_id = self._group_id
         trade = self._upsert_trade(offer, role=MarketRole.SELLER)
-        self._record_sold_units(trade, offer)
+        # A commercial closure is not yet evidence of which units were transferred.
+        # Keep reservations until record_trade_units receives official IDs.
         self._session.commit()
         return accepted, trade
 
@@ -130,12 +142,12 @@ class TradeCustodyService:
         offer = self._store_offer(official, status="accepting")
         try:
             accepted = await self._trades.accept_offer(official.id)
+            self._apply_official_offer(offer, accepted)
         except Exception:
             offer.status = "acceptance_uncertain"
             self._session.commit()
             raise
 
-        self._apply_official_offer(offer, accepted)
         offer.counterparty_group_id = self._group_id
         trade = self._upsert_trade(offer, role=MarketRole.BUYER)
         self._session.commit()
@@ -147,7 +159,9 @@ class TradeCustodyService:
         external_unit_ids: Sequence[str],
     ) -> MarketTrade:
         """Attach official unit evidence to one closure without dispatching again."""
-        trade = self._session.get(MarketTrade, trade_id)
+        trade = self._session.scalar(
+            select(MarketTrade).where(MarketTrade.id == trade_id).with_for_update()
+        )
         if trade is None or trade.period_id != self._period.id:
             raise InvalidTradeStateError("Market trade was not found in this period")
         unit_ids = tuple(dict.fromkeys(external_unit_ids))
@@ -156,6 +170,11 @@ class TradeCustodyService:
                 "Trade unit evidence must match the complete offer quantity"
             )
 
+        offer = (
+            self._get_offer(trade.external_offer_id)
+            if trade.role == MarketRole.SELLER
+            else None
+        )
         units = list(
             self._session.scalars(
                 select(Unit)
@@ -167,6 +186,7 @@ class TradeCustodyService:
                 )
                 .order_by(Unit.id)
                 .with_for_update()
+                .execution_options(populate_existing=True)
             )
         )
         if len(units) != trade.quantity:
@@ -190,19 +210,27 @@ class TradeCustodyService:
             return trade
 
         if trade.role == MarketRole.SELLER:
-            offer = self._get_offer(trade.external_offer_id)
-            reserved_ids = {
-                reservation.unit_id
-                for reservation in offer.reservations
-                if reservation.released_at is None
-            }
-            if reserved_ids != requested_ids:
-                raise InvalidTradeStateError(
-                    "Sold units do not match the active offer reservation"
+            other_reservation = self._session.scalar(
+                select(MarketOfferReservation.id)
+                .where(
+                    MarketOfferReservation.unit_id.in_(requested_ids),
+                    MarketOfferReservation.offer_id != offer.id,
+                    MarketOfferReservation.released_at.is_(None),
                 )
-            self._record_sold_units(trade, offer)
+                .limit(1)
+            )
+            blocked = set(self._session.scalars(select(blocked_lots().c.lot_id)))
+            if other_reservation or any(
+                unit.status in {"reserved", "consumed", "quarantined", "recall_pending"}
+                or unit.lot_id in blocked
+                for unit in units
+            ):
+                raise InvalidTradeStateError(
+                    "Official unit evidence conflicts with blocked or reserved stock"
+                )
+            self._record_sold_units(trade, offer, units)
         else:
-            now = datetime.now(UTC)
+            blocked = set(self._session.scalars(select(blocked_lots().c.lot_id)))
             for unit in units:
                 self._session.add(
                     CustodyEvent(
@@ -211,12 +239,14 @@ class TradeCustodyService:
                         from_location_id=None,
                         to_location_id=unit.current_location_id,
                         market_trade_id=trade.id,
-                        occurred_at=now,
+                        occurred_at=trade.closed_at,
                     )
                 )
                 # A unit sold earlier can later re-enter with the same official ID.
                 if unit.status == "dispatched":
-                    unit.status = "available"
+                    unit.status = (
+                        "recall_pending" if unit.lot_id in blocked else "available"
+                    )
         self._session.commit()
         return trade
 
@@ -249,6 +279,7 @@ class TradeCustodyService:
                     Product.sku == request.sku,
                     Unit.status == "available",
                     Unit.effective_expires_at > now,
+                    Unit.lot_id.not_in(select(blocked_lots().c.lot_id)),
                     Location.is_sellable.is_(True),
                     ~exists().where(
                         MarketOfferReservation.unit_id == Unit.id,
@@ -285,10 +316,11 @@ class TradeCustodyService:
         self._session.commit()
         return offer
 
-    async def _move_reservations_to_dispatch(self, offer: MarketOffer) -> None:
+    async def _move_reservations_to_dispatch(self, offer: MarketOffer) -> UUID:
         destination = await self._dispatch_location()
         for reservation in offer.reservations:
-            unit = reservation.unit
+            locked = self._reserved_units(offer)
+            unit = next(unit for unit in locked if unit.id == reservation.unit_id)
             if unit.current_location_id == destination.id:
                 continue
             await self._farma_central.move_product(
@@ -296,6 +328,44 @@ class TradeCustodyService:
             )
             record_move(self._session, unit=unit, to_location_id=destination.id)
             self._session.commit()
+        return destination.id
+
+    def _reserved_units(self, offer):
+        self._session.execute(
+            select(MarketOffer.id).where(MarketOffer.id == offer.id).with_for_update()
+        )
+        units = list(
+            self._session.scalars(
+                select(Unit)
+                .join(MarketOfferReservation)
+                .where(
+                    MarketOfferReservation.offer_id == offer.id,
+                    MarketOfferReservation.released_at.is_(None),
+                )
+                .order_by(Unit.id)
+                .with_for_update(of=Unit)
+                .execution_options(populate_existing=True)
+            )
+        )
+        blocked = set(self._session.scalars(select(blocked_lots().c.lot_id)))
+        now = datetime.now(UTC)
+        if len(units) != offer.quantity or any(
+            unit.status != "trade_reserved"
+            or unit.effective_expires_at <= now
+            or unit.lot_id in blocked
+            for unit in units
+        ):
+            raise InvalidTradeStateError(
+                "Reserved stock expired, was blocked or changed"
+            )
+        return units
+
+    def _ready_for_market(self, offer, destination_id):
+        # Keep these unit locks through the market request. A recall that commits
+        # first is observed here; a concurrent recall cannot change locked stock.
+        units = self._reserved_units(offer)
+        if any(unit.current_location_id != destination_id for unit in units):
+            raise InvalidTradeStateError("Reserved units have not reached dispatch")
 
     async def _dispatch_location(self) -> Location:
         payload = await self._farma_central.get_spaces()
@@ -389,7 +459,9 @@ class TradeCustodyService:
         self._session.flush()
         return trade
 
-    def _record_sold_units(self, trade: MarketTrade, offer: MarketOffer) -> None:
+    def _record_sold_units(
+        self, trade: MarketTrade, offer: MarketOffer, units: Sequence[Unit]
+    ) -> None:
         active = [
             reservation
             for reservation in offer.reservations
@@ -397,11 +469,11 @@ class TradeCustodyService:
         ]
         if len(active) != trade.quantity:
             raise InvalidTradeStateError("Offer reservation is incomplete")
-        now = datetime.now(UTC)
-        for reservation in active:
-            unit = reservation.unit
+        # The official IDs can differ from our original FEFO selection.
+        # Release the old intent, but record only the confirmed transfer evidence.
+        self._release(offer, status=offer.status)
+        for unit in units:
             unit.status = "dispatched"
-            reservation.released_at = now
             self._session.add(
                 CustodyEvent(
                     unit_id=unit.id,
@@ -409,19 +481,26 @@ class TradeCustodyService:
                     from_location_id=unit.current_location_id,
                     to_location_id=None,
                     market_trade_id=trade.id,
-                    occurred_at=now,
+                    occurred_at=trade.closed_at,
                 )
             )
 
     def _release(self, offer: MarketOffer, *, status: str) -> None:
         now = datetime.now(UTC)
+        blocked = set(self._session.scalars(select(blocked_lots().c.lot_id)))
         offer.status = status
         for reservation in offer.reservations:
             if reservation.released_at is not None:
                 continue
             reservation.released_at = now
             if reservation.unit.status == "trade_reserved":
-                reservation.unit.status = "available"
+                reservation.unit.status = (
+                    "recall_pending"
+                    if reservation.unit.lot_id in blocked
+                    else "expired"
+                    if reservation.unit.effective_expires_at <= now
+                    else "available"
+                )
 
     def _get_offer(self, external_offer_id: str) -> MarketOffer:
         offer = self._session.scalar(

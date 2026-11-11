@@ -208,3 +208,26 @@ async def test_worker_rejects_wrong_accounting_scope_before_soap(
     with pytest.raises(ValueError, match="environment/group"):
         await module.run(period_id=period_id, once=True)
     factory.assert_not_called()
+
+
+def test_read_only_overrides_enabled_financial_operations(monkeypatch):
+    selected = uuid4()
+    settings = make_settings(
+        billing_period_id=str(selected),
+        billing_emit_sales_enabled=True,
+        billing_pay_invoices_enabled=True,
+    )
+    monkeypatch.setattr(module, "get_settings", lambda: settings)
+    runner = AsyncMock()
+    monkeypatch.setattr(module, "run", runner)
+    monkeypatch.setattr(
+        "sys.argv", ["reconcile_billing", "--read-only", "--full", "--once"]
+    )
+    module.main()
+    runner.assert_awaited_once_with(
+        period_id=selected,
+        once=True,
+        emit_sales=False,
+        pay_invoices=False,
+        full_sync=True,
+    )

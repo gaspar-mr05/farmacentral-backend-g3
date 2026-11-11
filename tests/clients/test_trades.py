@@ -213,3 +213,34 @@ async def test_invalid_offer_responses_raise_integration_error(payload):
         client = TradesClient(settings=make_settings(), http_client=http_client)
         with pytest.raises(TradesInvalidResponseError):
             await client.get_offer(OFFER_ID)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["create", "accept", "cancel"])
+@pytest.mark.parametrize("code", [500, 502, 408, 201])
+async def test_mutation_with_server_error_or_invalid_success_is_uncertain(
+    operation, code
+):
+    mutations = []
+
+    def handler(request):
+        if request.url.path.endswith("/autenticar"):
+            return httpx.Response(200, json={"token": "test"})
+        mutations.append(request)
+        return httpx.Response(code, content=b"invalid-json")
+
+    async with httpx.AsyncClient(
+        base_url="https://trades.test/trades/", transport=httpx.MockTransport(handler)
+    ) as http:
+        client = TradesClient(settings=make_settings(), http_client=http)
+        with pytest.raises(TradesUncertainResultError):
+            if operation == "create":
+                await client.create_offer(
+                    TradeOfferCreate(side="buy", sku="SKU", quantity=1, unitPrice=1),
+                    current_unit_price=Decimal(1),
+                )
+            elif operation == "accept":
+                await client.accept_offer(OFFER_ID)
+            else:
+                await client.cancel_offer(OFFER_ID)
+    assert len(mutations) == 1

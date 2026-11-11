@@ -13,6 +13,10 @@ class TradesTimeoutError(TradesError):
 class TradesUncertainResultError(TradesError):
     """The request may have succeeded, but its response was not received."""
 
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        self.status_code = status_code
+        super().__init__(message)
+
 
 class TradesHTTPError(TradesError):
     def __init__(

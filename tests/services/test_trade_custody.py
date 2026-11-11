@@ -1,9 +1,11 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.db.units import upsert_units
@@ -26,6 +28,9 @@ from app.schemas.trades import TradeOffer, TradeOfferCreate
 from app.schemas.units import UnitData
 from app.services.traceability import TraceabilityService
 from app.services.trades import TradeCustodyService
+from app.services.trades.custody import InvalidTradeStateError
+from tests.models.test_e2_migration import migration_database as migration_database
+from tests.models.test_e2_migration import run_migration
 
 
 class FarmaCentralStub:
@@ -236,6 +241,15 @@ async def test_accept_buy_records_sale_without_dispatching_again(
 
     _, trade = await service.accept_buy(accepted)
 
+    assert (
+        db_session.scalars(
+            select(CustodyEvent).where(CustodyEvent.market_trade_id == trade.id)
+        ).all()
+        == []
+    )
+    assert all(unit.status == "trade_reserved" for unit in units[:2])
+    service.record_trade_units(trade.id, [unit.external_unit_id for unit in units[:2]])
+
     db_session.expire_all()
     assert trade.role == MarketRole.SELLER
     assert trade.counterparty_id == "5"
@@ -244,6 +258,7 @@ async def test_accept_buy_records_sale_without_dispatching_again(
     ).all()
     assert {event.unit_id for event in events} == {units[0].id, units[1].id}
     assert {event.event_type for event in events} == {CustodyEventType.DISPATCHED}
+    assert all(event.occurred_at == trade.closed_at for event in events)
     assert db_session.get(Unit, units[0].id).status == "dispatched"
     assert db_session.get(Unit, units[1].id).status == "dispatched"
     assert all(
@@ -297,3 +312,156 @@ def test_purchase_receipt_preserves_lot_and_supports_reentry(
     )
     assert event.event_type == CustodyEventType.RECEIVED
     assert event.to_location_id == dispatch.id
+
+
+@pytest.mark.anyio
+async def test_quarantine_before_movement_prevents_market_call(db_session):
+
+    period, _, dispatch, units = add_market_stock(db_session, quantity=2)
+
+    class RecalledStock(FarmaCentralStub):
+        async def get_spaces(self):
+            units[0].status = "quarantined"
+            db_session.commit()
+            return await super().get_spaces()
+
+    fc = RecalledStock(dispatch.code)
+    trades = Mock(accept_offer=AsyncMock())
+    offer = official_offer(sku=units[0].lot.product.sku, side="buy", publisher_group=5)
+    service = TradeCustodyService(
+        db_session, farma_central=fc, trades=trades, period=period
+    )
+    with pytest.raises(InvalidTradeStateError, match="blocked or changed"):
+        await service.accept_buy(offer)
+    trades.accept_offer.assert_not_awaited()
+    assert fc.movements == []
+    assert units[0].status == "quarantined"
+
+
+@pytest.mark.anyio
+async def test_quarantine_after_movement_prevents_publication(db_session):
+
+    period, _, dispatch, units = add_market_stock(db_session, quantity=2)
+
+    class RecalledStock(FarmaCentralStub):
+        async def move_product(self, unit_id, location_code):
+            await super().move_product(unit_id, location_code)
+            if unit_id == units[1].external_unit_id:
+                units[0].status = "quarantined"
+                db_session.commit()
+
+    trades = Mock(create_offer=AsyncMock())
+    service = TradeCustodyService(
+        db_session,
+        farma_central=RecalledStock(dispatch.code),
+        trades=trades,
+        period=period,
+    )
+    with pytest.raises(InvalidTradeStateError):
+        await service.publish_sell(
+            TradeOfferCreate(
+                side="sell", sku=units[0].lot.product.sku, quantity=2, unitPrice="6.25"
+            ),
+            current_unit_price=Decimal(5),
+        )
+    trades.create_offer.assert_not_awaited()
+    assert units[0].status == "quarantined"
+
+
+@pytest.mark.anyio
+async def test_actual_transfer_ids_supersede_unconfirmed_selection(db_session):
+    period, _, dispatch, units = add_market_stock(db_session, quantity=4)
+    accepted = official_offer(
+        sku=units[0].lot.product.sku,
+        side="buy",
+        status="closed",
+        order_id="b" * 24,
+        publisher_group=5,
+    )
+    service = TradeCustodyService(
+        db_session,
+        farma_central=FarmaCentralStub(dispatch.code),
+        trades=TradesStub(accepted),
+        period=period,
+    )
+    _, trade = await service.accept_buy(accepted)
+    assert (
+        db_session.scalar(
+            select(CustodyEvent.id).where(CustodyEvent.market_trade_id == trade.id)
+        )
+        is None
+    )
+    service.record_trade_units(trade.id, [unit.external_unit_id for unit in units[2:]])
+    service.record_trade_units(trade.id, [unit.external_unit_id for unit in units[2:]])
+    events = db_session.scalars(
+        select(CustodyEvent).where(CustodyEvent.market_trade_id == trade.id)
+    ).all()
+    assert {event.unit_id for event in events} == {unit.id for unit in units[2:]}
+    assert all(unit.status == "available" for unit in units[:2])
+    assert all(unit.status == "dispatched" for unit in units[2:])
+
+
+@pytest.mark.anyio
+async def test_movement_timeout_keeps_reservations_until_reconciled(db_session):
+    period, _, dispatch, units = add_market_stock(db_session, quantity=2)
+
+    class LostMovement(FarmaCentralStub):
+        async def move_product(self, *args):
+            raise TimeoutError("response lost")
+
+    service = TradeCustodyService(
+        db_session,
+        farma_central=LostMovement(dispatch.code),
+        trades=TradesStub(RuntimeError()),
+        period=period,
+    )
+    with pytest.raises(TimeoutError):
+        await service.publish_sell(
+            TradeOfferCreate(
+                side="sell", sku=units[0].lot.product.sku, quantity=2, unitPrice="6.25"
+            ),
+            current_unit_price=Decimal(5),
+        )
+    offer = db_session.scalar(select(MarketOffer))
+    assert offer.status == "movement_uncertain"
+    assert all(reservation.released_at is None for reservation in offer.reservations)
+    assert all(unit.status == "trade_reserved" for unit in units)
+
+
+@pytest.mark.anyio
+async def test_market_request_keeps_unit_locks_against_concurrent_recall(
+    migration_database,
+):
+    engine = migration_database
+    run_migration(engine, "upgrade", "head")
+    with Session(engine, expire_on_commit=False) as primary:
+        period, _, dispatch, units = add_market_stock(primary, quantity=2)
+        accepted = official_offer(
+            sku=units[0].lot.product.sku,
+            side="buy",
+            status="closed",
+            order_id="b" * 24,
+            publisher_group=5,
+        )
+
+        class CheckLocks(TradesStub):
+            async def accept_offer(self, offer_id):
+                with Session(engine) as contender:
+                    contender.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                    with pytest.raises(OperationalError):
+                        contender.execute(
+                            update(Unit)
+                            .where(Unit.id == units[0].id)
+                            .values(status="quarantined")
+                        )
+                    contender.rollback()
+                return accepted
+
+        service = TradeCustodyService(
+            primary,
+            farma_central=FarmaCentralStub(dispatch.code),
+            trades=CheckLocks(accepted),
+            period=period,
+        )
+        await service.accept_buy(accepted)
+        assert units[0].status == "trade_reserved"

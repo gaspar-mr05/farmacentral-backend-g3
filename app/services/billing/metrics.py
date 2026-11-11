@@ -4,6 +4,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models import (
     BillingOperationStatus,
     BillingSyncState,
@@ -24,6 +25,7 @@ from app.schemas.business_metrics import (
     ReconciliationFreshness,
 )
 
+from .payments import estimated_interest
 from .sales import fulfilled_sales_query
 
 ZERO = Decimal(0)
@@ -37,11 +39,14 @@ class BusinessMetricsService:
         self.session = session
         self.period = period
 
-    def calculate(self, *, now: datetime | None = None) -> BusinessMetrics:
+    def calculate(
+        self, *, now: datetime | None = None, financial_as_of: datetime | None = None
+    ) -> BusinessMetrics:
         now = now or datetime.now(UTC)
-        invoices = self.session.scalars(
-            select(Invoice).where(Invoice.period_id == self.period.id)
-        ).all()
+        statement = select(Invoice).where(Invoice.period_id == self.period.id)
+        if financial_as_of is not None:
+            statement = statement.where(Invoice.issued_at <= financial_as_of)
+        invoices = self.session.scalars(statement).all()
         client_invoices = [row for row in invoices if row.side == InvoiceSide.CLIENT]
         supplier_invoices = [
             row for row in invoices if row.side == InvoiceSide.SUPPLIER
@@ -50,6 +55,19 @@ class BusinessMetricsService:
         income = sum((row.principal for row in supplier_invoices), ZERO)
         costs = sum((row.principal for row in client_invoices), ZERO)
         interest = sum((row.interest for row in client_invoices), ZERO)
+        paid_interest = sum(
+            (
+                row.interest
+                for row in client_invoices
+                if row.status == InvoiceStatus.PAID
+                and (
+                    financial_as_of is None
+                    or row.paid_at
+                    and row.paid_at <= financial_as_of
+                )
+            ),
+            ZERO,
+        )
         cost_channels: dict[str, Decimal] = {
             "fabric": ZERO,
             "buffer": ZERO,
@@ -75,14 +93,22 @@ class BusinessMetricsService:
             )
         ).all()
         state_by_stream = {state.stream: state for state in sync_states}
-        successes = [
-            state_by_stream[stream].last_success_at
+        completions = [
+            state_by_stream[stream].full_completed_at
             for stream in INVOICE_STREAMS
             if stream in state_by_stream
-            and state_by_stream[stream].last_success_at is not None
+            and state_by_stream[stream].full_completed_at is not None
         ]
+        cursors = [
+            state_by_stream[stream].cursor
+            for stream in INVOICE_STREAMS
+            if stream in state_by_stream and state_by_stream[stream].cursor is not None
+        ]
+        covered_through = min(cursors) if len(cursors) == len(INVOICE_STREAMS) else None
         last_complete = (
-            min(successes) if len(successes) == len(INVOICE_STREAMS) else None
+            min(*completions, covered_through)
+            if len(completions) == len(INVOICE_STREAMS) and covered_through
+            else None
         )
         freshness_age = (
             max(0, int((now - last_complete).total_seconds()))
@@ -90,16 +116,19 @@ class BusinessMetricsService:
             else None
         )
         bank = state_by_stream.get("bank")
-        purchases, sales = self._market_counts()
+        purchases, sales = self._market_counts(as_of=financial_as_of)
 
         return BusinessMetrics(
             period_id=str(self.period.id),
             environment=self.period.environment,
             period_code=self.period.code,
             calculated_at=now,
+            financial_as_of=financial_as_of or now,
             invoiced_income=income,
             invoiced_costs=costs,
             client_interest=interest,
+            client_interest_paid=paid_interest,
+            client_interest_pending=interest - paid_interest,
             margin=income - costs - interest,
             costs_by_channel=cost_channels,
             bank_balance=bank.balance if bank else None,
@@ -112,6 +141,13 @@ class BusinessMetricsService:
             reconciliation=ReconciliationFreshness(
                 last_complete_at=last_complete,
                 age_seconds=freshness_age,
+                covered_through=covered_through,
+                full_scan_pending=any(
+                    stream not in state_by_stream
+                    or state_by_stream[stream].full_target is not None
+                    or state_by_stream[stream].full_completed_at is None
+                    for stream in INVOICE_STREAMS
+                ),
             ),
             market_purchases=purchases,
             market_sales=sales,
@@ -138,7 +174,11 @@ class BusinessMetricsService:
             )
             if latest and now - latest < minimum_interval:
                 return None
-        report = self.calculate(now=now)
+        if is_closing:
+            self._validate_closing(now)
+        report = self.calculate(
+            now=now, financial_as_of=self.period.ends_at if is_closing else None
+        )
         snapshot = BusinessMetricSnapshot(
             period_id=self.period.id,
             captured_at=now,
@@ -149,6 +189,60 @@ class BusinessMetricsService:
         self.session.add(snapshot)
         self.session.commit()
         return snapshot
+
+    def _validate_closing(self, now):
+        cutoff = self.period.ends_at
+        if cutoff is None or now < cutoff:
+            raise ValueError("Closing requires a finished accounting period")
+        maximum_age = timedelta(seconds=get_settings().billing_stale_after_seconds)
+        states = {
+            state.stream: state
+            for state in self.session.scalars(
+                select(BillingSyncState).where(
+                    BillingSyncState.period_id == self.period.id
+                )
+            )
+        }
+        for stream in INVOICE_STREAMS:
+            state = states.get(stream)
+            if (
+                state is None
+                or state.cursor is None
+                or state.cursor < cutoff
+                or state.full_started_at is None
+                or state.full_started_at < cutoff
+                or state.full_completed_at is None
+                or state.full_completed_at < state.full_started_at
+                or not timedelta(0) <= now - state.full_completed_at <= maximum_age
+                or state.full_target is not None
+                or state.last_error
+            ):
+                raise ValueError(
+                    "Closing requires a recent full reconciliation after period end; "
+                    "run reconcile_billing --read-only --full --once"
+                )
+        invoices = self.session.scalars(
+            select(Invoice).where(
+                Invoice.period_id == self.period.id,
+                Invoice.side == InvoiceSide.CLIENT,
+                Invoice.issued_at <= cutoff,
+            )
+        )
+        for invoice in invoices:
+            if invoice.status == InvoiceStatus.PAID:
+                if invoice.paid_at is None:
+                    raise ValueError("Cannot establish payment time for closing")
+                if invoice.paid_at <= cutoff:
+                    continue
+            if invoice.observed_at < cutoff or now - invoice.observed_at > maximum_age:
+                raise ValueError("Closing has stale pending invoice observations")
+            if invoice.interest != estimated_interest(
+                invoice.principal, invoice.issued_at, cutoff
+            ):
+                raise ValueError(
+                    "Observed interest does not establish the period-end amount; "
+                    "preserve closing evidence before interest changes"
+                )
 
     def _invoicing_coverage(self) -> InvoicingCoverage:
         sales = set(
@@ -191,8 +285,11 @@ class BusinessMetricsService:
             ratio=ratio,
         )
 
-    def _market_counts(self) -> tuple[int, int]:
-        roles = self.session.scalars(
-            select(MarketTrade.role).where(MarketTrade.period_id == self.period.id)
-        ).all()
+    def _market_counts(self, *, as_of=None) -> tuple[int, int]:
+        statement = select(MarketTrade.role).where(
+            MarketTrade.period_id == self.period.id
+        )
+        if as_of is not None:
+            statement = statement.where(MarketTrade.closed_at <= as_of)
+        roles = self.session.scalars(statement).all()
         return roles.count(MarketRole.BUYER), roles.count(MarketRole.SELLER)

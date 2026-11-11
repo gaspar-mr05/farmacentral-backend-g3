@@ -31,6 +31,7 @@ async def run(
     once: bool = False,
     emit_sales: bool = False,
     pay_invoices: bool = False,
+    full_sync: bool = False,
 ) -> None:
     settings = get_settings()
     commit_sha = resolve_commit_sha(settings.app_commit_sha)
@@ -63,9 +64,14 @@ async def run(
                     )
                     while True:
                         try:
-                            result = await BillingReconciliationService(
+                            reconciliation = BillingReconciliationService(
                                 client, session, period, settings=settings
-                            ).poll()
+                            )
+                            result = (
+                                await reconciliation.poll(full=True)
+                                if full_sync
+                                else await reconciliation.poll()
+                            )
                             logger.info(
                                 "Billing reconciliation: queries=%s "
                                 "observations=%s failed=%s",
@@ -146,6 +152,16 @@ def main() -> None:
     parser.add_argument("--period-id", type=UUID)
     parser.add_argument("--once", action="store_true")
     parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Request a complete invoice scan; resumes unfinished windows",
+    )
+    parser.add_argument(
+        "--read-only",
+        action="store_true",
+        help="Override emission/payment settings and only reconcile observations",
+    )
+    parser.add_argument(
         "--emit-sales",
         action="store_true",
         help="Issue invoices for officially fulfilled sales (remote mutation)",
@@ -175,9 +191,11 @@ def main() -> None:
             run(
                 period_id=period_id,
                 once=args.once,
-                emit_sales=args.emit_sales or get_settings().billing_emit_sales_enabled,
-                pay_invoices=args.pay_invoices
-                or get_settings().billing_pay_invoices_enabled,
+                emit_sales=not args.read_only
+                and (args.emit_sales or get_settings().billing_emit_sales_enabled),
+                pay_invoices=not args.read_only
+                and (args.pay_invoices or get_settings().billing_pay_invoices_enabled),
+                full_sync=args.full,
             )
         )
 

@@ -39,7 +39,11 @@ def main() -> None:
         period_id = UUID(str(configured))
     except ValueError:
         parser.error("BILLING_PERIOD_ID must be a UUID")
-    print(json.dumps(capture(period_id=period_id, is_closing=args.closing), indent=2))
+    try:
+        report = capture(period_id=period_id, is_closing=args.closing)
+    except ValueError as exc:
+        parser.error(str(exc))
+    print(json.dumps(report, indent=2))
 
 
 if __name__ == "__main__":

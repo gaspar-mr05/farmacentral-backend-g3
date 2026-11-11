@@ -21,6 +21,8 @@ class BillingSyncState(Base):
     cursor: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     full_cursor: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     full_target: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    full_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    full_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_full_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     pending_cursor: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

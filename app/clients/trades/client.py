@@ -88,7 +88,7 @@ class TradesClient:
             json=offer.model_dump(mode="json", by_alias=True),
             result_may_be_uncertain=True,
         )
-        return self._validate_offer_response(response)
+        return self._mutation_offer(response)
 
     async def accept_offer(self, offer_id: str) -> TradeOffer:
         offer_id = OFFER_ID_ADAPTER.validate_python(offer_id).lower()
@@ -97,10 +97,10 @@ class TradesClient:
             f"offers/{offer_id}/accept",
             result_may_be_uncertain=True,
         )
-        offer = self._validate_offer_response(response, expected_id=offer_id)
+        offer = self._mutation_offer(response, expected_id=offer_id)
         if not offer.order_id:
-            raise TradesInvalidResponseError(
-                "Accepted offer response did not include an order ID"
+            raise TradesUncertainResultError(
+                "Acceptance returned no order ID; reconcile before retrying"
             )
         return offer
 
@@ -113,7 +113,7 @@ class TradesClient:
         )
         if response.status_code == 204 or not response.content:
             return None
-        return self._validate_offer_response(response, expected_id=offer_id)
+        return self._mutation_offer(response, expected_id=offer_id)
 
     async def _request(
         self,
@@ -140,8 +140,27 @@ class TradesClient:
                 result_may_be_uncertain=result_may_be_uncertain,
                 **kwargs,
             )
+        if result_may_be_uncertain and (
+            response.status_code >= 500
+            or response.status_code == 408
+            or 300 <= response.status_code < 400
+        ):
+            raise TradesUncertainResultError(
+                "Trades may have processed the request; reconcile before retrying",
+                status_code=response.status_code,
+            )
         self._raise_for_status(response)
         return response
+
+    @classmethod
+    def _mutation_offer(cls, response, *, expected_id=None):
+        try:
+            return cls._validate_offer_response(response, expected_id=expected_id)
+        except TradesInvalidResponseError:
+            raise TradesUncertainResultError(
+                "Mutation returned invalid offer data; reconcile before retrying",
+                status_code=response.status_code,
+            ) from None
 
     async def _get_token(self) -> str:
         async with self._auth_lock:
