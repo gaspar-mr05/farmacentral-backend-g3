@@ -19,11 +19,21 @@ REVISION = "c7b4e2a91d60"
 LATER_MIGRATION_TABLES = {
     "billing_sync_states",
     "business_metric_snapshots",
+    "market_offers",
+    "market_offer_reservations",
 }
 
 
-def is_step_2_object(_object, name, *_args):
-    return name not in LATER_MIGRATION_TABLES
+def is_step_2_object(obj, name, object_type, *_args):
+    if name in LATER_MIGRATION_TABLES:
+        return False
+    table = getattr(obj, "table", None)
+    if table is None or table.name != "custody_events":
+        return True
+    if object_type == "column":
+        return name != "market_trade_id"
+    columns = getattr(obj, "columns", ())
+    return not any(column.name == "market_trade_id" for column in columns)
 
 
 def seed_legacy_orders(engine):

@@ -23,6 +23,11 @@ from app.models.inbound_event import (
 from app.models.location import Location
 from app.models.lot import Lot, LotOrigin
 from app.models.lot_identity_repair import LotIdentityRepair
+from app.models.market_offer import (
+    MarketOffer,
+    MarketOfferReservation,
+    MarketOfferSide,
+)
 from app.models.market_trade import MarketRole, MarketTrade
 from app.models.order import (
     ExternalOrderStatus,
@@ -63,6 +68,9 @@ __all__ = [
     "BillingAttempt",
     "MarketTrade",
     "MarketRole",
+    "MarketOffer",
+    "MarketOfferReservation",
+    "MarketOfferSide",
     "Product",
     "ProductCategory",
     "Location",

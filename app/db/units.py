@@ -108,7 +108,10 @@ def upsert_units(
             if unit.id in consumed_unit_ids
             else unit.status
             if unit.status in {"consumed", "dispatched"}
-            or (unit.status == "reserved" and record.status == "available")
+            or (
+                unit.status in {"reserved", "trade_reserved"}
+                and record.status == "available"
+            )
             else record.status
         )
         if lot.id in blocked_lot_ids and synchronized_status not in {
