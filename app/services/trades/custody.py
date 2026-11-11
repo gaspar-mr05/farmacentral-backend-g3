@@ -1,5 +1,6 @@
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
@@ -39,6 +40,13 @@ class InsufficientTradeStockError(InvalidTradeStateError):
     pass
 
 
+@dataclass(frozen=True)
+class ReservationGuard:
+    unit_ids: Sequence[UUID]
+    keep_quantity: int
+    minimum_lifetime_seconds: float = 3660
+
+
 class TradeCustodyService:
     """Coordinates durable local reservations with official market custody."""
 
@@ -63,18 +71,25 @@ class TradeCustodyService:
         request: TradeOfferCreate,
         *,
         current_unit_price: Decimal,
+        guard: ReservationGuard | None = None,
+        strategy: str | None = None,
+        estimated_unit_cost: Decimal | None = None,
     ) -> TradeOffer:
         if request.side != MarketOfferSide.SELL.value:
             raise InvalidTradeStateError("Only sell offers reserve local stock")
 
+        request.validate_market_price(current_unit_price)
         offer = self._reserve_offer(
             request,
             publisher_group_id=self._group_id,
             status="preparing",
+            guard=guard,
+            strategy=strategy,
+            estimated_unit_cost=estimated_unit_cost,
         )
         try:
             destination_id = await self._move_reservations_to_dispatch(offer)
-            self._ready_for_market(offer, destination_id)
+            self._ready_for_market(offer, destination_id, guard=guard)
         except InvalidTradeStateError:
             self._release(offer, status="failed")
             self._session.commit()
@@ -312,8 +327,16 @@ class TradeCustodyService:
         publisher_group_id: int,
         status: str,
         external_offer_id: str | None = None,
+        guard: ReservationGuard | None = None,
+        strategy: str | None = None,
+        estimated_unit_cost: Decimal | None = None,
     ) -> MarketOffer:
+        if guard and (guard.keep_quantity < 0 or guard.minimum_lifetime_seconds < 0):
+            raise ValueError(
+                "Reservation guard quantities/lifetime must be nonnegative"
+            )
         now = datetime.now(UTC)
+        cutoff = now + timedelta(seconds=guard.minimum_lifetime_seconds if guard else 0)
         units = list(
             self._session.scalars(
                 select(Unit)
@@ -323,26 +346,32 @@ class TradeCustodyService:
                 .where(
                     Product.sku == request.sku,
                     Unit.status == "available",
-                    Unit.effective_expires_at > now,
+                    Unit.effective_expires_at > cutoff,
+                    ~Unit.order_assignment.has(),
                     Unit.lot_id.not_in(select(blocked_lots().c.lot_id)),
                     Location.is_sellable.is_(True),
+                    Unit.id.in_(guard.unit_ids) if guard else True,
                     ~exists().where(
                         MarketOfferReservation.unit_id == Unit.id,
                         MarketOfferReservation.released_at.is_(None),
                     ),
                 )
                 .order_by(Unit.effective_expires_at, Unit.id)
-                .limit(request.quantity)
+                .limit(request.quantity + (guard.keep_quantity if guard else 0))
                 .with_for_update(of=Unit, skip_locked=True)
             )
         )
-        if len(units) != request.quantity:
+        if len(units) != request.quantity + (guard.keep_quantity if guard else 0):
             self._session.rollback()
             raise InsufficientTradeStockError(
                 f"Insufficient unreserved stock for {request.sku}"
             )
 
+        units = units[: request.quantity]
         offer = MarketOffer(
+            strategy=strategy,
+            estimated_unit_cost=estimated_unit_cost,
+            protected_quantity=guard.keep_quantity if guard else None,
             period_id=self._period.id,
             external_offer_id=external_offer_id,
             side=MarketOfferSide(request.side),
@@ -353,7 +382,10 @@ class TradeCustodyService:
             status=status,
         )
         offer.reservations = [
-            MarketOfferReservation(unit=unit, reserved_at=now) for unit in units
+            MarketOfferReservation(
+                unit=unit, source_location_id=unit.current_location_id, reserved_at=now
+            )
+            for unit in units
         ]
         for unit in units:
             unit.status = "trade_reserved"
@@ -405,10 +437,18 @@ class TradeCustodyService:
             )
         return units
 
-    def _ready_for_market(self, offer, destination_id):
+    def _ready_for_market(self, offer, destination_id, *, guard=None):
         # Keep these unit locks through the market request. A recall that commits
         # first is observed here; a concurrent recall cannot change locked stock.
         units = self._reserved_units(offer)
+        if guard and any(
+            unit.effective_expires_at
+            <= datetime.now(UTC) + timedelta(seconds=guard.minimum_lifetime_seconds)
+            for unit in units
+        ):
+            raise InvalidTradeStateError(
+                "Reserved stock no longer covers the offer lifetime"
+            )
         if any(unit.current_location_id != destination_id for unit in units):
             raise InvalidTradeStateError("Reserved units have not reached dispatch")
 

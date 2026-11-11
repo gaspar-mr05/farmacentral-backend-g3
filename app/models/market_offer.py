@@ -68,6 +68,9 @@ class MarketOffer(Base, TimestampMixin):
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(), nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False)
+    strategy: Mapped[str | None] = mapped_column(String)
+    estimated_unit_cost: Mapped[Decimal | None] = mapped_column(Numeric())
+    protected_quantity: Mapped[int | None] = mapped_column(Integer)
     opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -108,6 +111,9 @@ class MarketOfferReservation(Base):
     )
     unit_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("units.id"), nullable=False, index=True
+    )
+    source_location_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("locations.id")
     )
     reserved_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
