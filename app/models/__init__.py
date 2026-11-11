@@ -38,6 +38,7 @@ from app.models.order import (
 )
 from app.models.order_unit import OrderUnit
 from app.models.payment import Payment, PaymentStatus
+from app.models.procurement import ProcurementRequest
 from app.models.product import Product, ProductCategory
 from app.models.production_input import ProductionInput
 from app.models.production_input_unit import ProductionInputUnit
@@ -71,6 +72,7 @@ __all__ = [
     "MarketOffer",
     "MarketOfferReservation",
     "MarketOfferSide",
+    "ProcurementRequest",
     "Product",
     "ProductCategory",
     "Location",

@@ -21,6 +21,7 @@ LATER_MIGRATION_TABLES = {
     "business_metric_snapshots",
     "market_offers",
     "market_offer_reservations",
+    "procurement_requests",
 }
 
 

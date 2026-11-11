@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -7,6 +8,8 @@ from pydantic import BaseModel, Field
 class FarmaCentralProduction(BaseModel):
     batch: int = Field(gt=0)
     at: Literal["farma-central", "packaging"]
+    time: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    groups: tuple[str, ...] | None = None
 
 
 class FarmaCentralStorage(BaseModel):
@@ -25,10 +28,13 @@ class FarmaCentralProduct(BaseModel):
     sellable: bool
     storage: FarmaCentralStorage = Field(default_factory=FarmaCentralStorage)
     components: tuple[FarmaCentralComponent, ...] = ()
+    cost: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class FarmaCentralSpace(BaseModel):
     external_id: str = Field(alias="_id", min_length=1)
+    total_space: int | None = Field(default=None, alias="totalSpace", ge=0)
+    used_space: int | None = Field(default=None, alias="usedSpace", ge=0)
     buffer: bool = False
     packaging: bool = False
     check_in: bool = Field(default=False, alias="checkIn")

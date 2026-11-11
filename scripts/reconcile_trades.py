@@ -5,7 +5,6 @@ import asyncio
 import hashlib
 import logging
 from contextlib import AsyncExitStack, suppress
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from sqlalchemy import text
@@ -17,7 +16,7 @@ from app.clients.purchase_orders import PurchaseOrdersClient
 from app.clients.trades import TradesClient
 from app.core.config import get_settings
 from app.db.session import engine
-from app.services.billing.periods import billing_period
+from app.services.trades.periods import market_period
 from app.services.trades.reconciliation import TradeReconciliationService
 
 logger = logging.getLogger(__name__)
@@ -37,25 +36,8 @@ async def run(*, period_id: UUID, once=False, interval=60, batch_size=50):
             raise ValueError("Market reconciliation already running for this period")
         try:
             with Session(bind=connection, expire_on_commit=False) as session:
-                period = billing_period(session, settings, period_id)
+                period = market_period(session, settings, period_id)
                 session.commit()
-                for url in (
-                    settings.effective_trades_base_url,
-                    settings.effective_purchase_orders_base_url,
-                    str(settings.farma_central_base_url),
-                ):
-                    host = urlsplit(url).hostname or ""
-                    environment = (
-                        "prod"
-                        if host.startswith("prod.")
-                        else "dev"
-                        if host.startswith("dev.")
-                        else settings.app_env
-                    )
-                    if environment != period.environment:
-                        raise ValueError(
-                            "Market integration environment does not match period"
-                        )
                 async with AsyncExitStack() as stack:
                     trades = await stack.enter_async_context(
                         TradesClient(settings=settings)
