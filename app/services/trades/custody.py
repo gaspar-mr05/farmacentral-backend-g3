@@ -27,6 +27,7 @@ from app.queries.recalls import blocked_lots
 from app.schemas.farma_central import FarmaCentralSpace
 from app.schemas.purchase_orders import PurchaseOrder, PurchaseOrderState
 from app.schemas.trades import TradeOffer, TradeOfferCreate
+from app.services.billing.queue import enqueue_sale
 from app.services.custody.events import record_move
 
 
@@ -158,6 +159,44 @@ class TradeCustodyService:
         trade = await self._confirmed_trade(offer, accepted, role=MarketRole.BUYER)
         self._session.commit()
         return accepted, trade
+
+    async def reconcile_offer(self, official: TradeOffer) -> MarketTrade | None:
+        """Observe one known offer; never accept, cancel, or dispatch it again."""
+        offer = self._get_offer(official.id)
+        self._apply_official_offer(offer, official)
+        if official.status in {"cancelled", "expired"}:
+            self._release(offer, status=official.status)
+            self._session.commit()
+            return None
+        if official.status != "closed":
+            self._session.commit()
+            return None
+        if (
+            official.closed_at is None
+            or not official.order_id
+            or official.counterparty_group is None
+        ):
+            raise InvalidTradeStateError("Closed offer lacks official closure evidence")
+        if (
+            offer.publisher_group_id != self._group_id
+            and official.counterparty_group != self._group_id
+        ):
+            # Someone else won the acceptance race. Our units were not sold.
+            self._release(offer, status=official.status)
+            self._session.commit()
+            return None
+        seller = (
+            official.publisher_group
+            if official.side == "sell"
+            else official.counterparty_group
+        )
+        role = MarketRole.SELLER if seller == self._group_id else MarketRole.BUYER
+        self._session.commit()  # Preserve orderId even if its subsequent GET fails.
+        trade = await self._confirmed_trade(offer, official, role=role)
+        if trade.role == MarketRole.SELLER:
+            enqueue_sale(self._session, self._period, trade.external_order_id)
+        self._session.commit()
+        return trade
 
     def record_trade_units(
         self,
@@ -445,11 +484,26 @@ class TradeCustodyService:
             raise InvalidTradeStateError("Official closure time and state are required")
         order = await self._purchase_orders.get_order(offer.external_order_id)
         seller = (
-            self._group_id if role == MarketRole.SELLER else offer.publisher_group_id
+            official.publisher_group
+            if official.side == "sell"
+            else official.counterparty_group
         )
         buyer = (
-            offer.publisher_group_id if role == MarketRole.SELLER else self._group_id
+            official.counterparty_group
+            if official.side == "sell"
+            else official.publisher_group
         )
+        if (
+            self._group_id not in {seller, buyer}
+            or seller == buyer
+            or (role == MarketRole.SELLER) != (seller == self._group_id)
+            or official.closed_at < self._period.starts_at
+            or (
+                self._period.ends_at is not None
+                and official.closed_at >= self._period.ends_at
+            )
+        ):
+            raise InvalidTradeStateError("Market closure outside group/period scope")
         if (
             order.id != offer.external_order_id
             or order.state != PurchaseOrderState.FULFILLED
@@ -459,7 +513,6 @@ class TradeCustodyService:
             or order.quantity > offer.quantity
             or order.dispatched_quantity != order.quantity
             or order.unit_price != offer.unit_price
-            or official.counterparty_group != self._group_id
         ):
             raise InvalidTradeStateError("Official order does not match market closure")
         return self._upsert_trade(
@@ -533,6 +586,20 @@ class TradeCustodyService:
             )
 
     def _release(self, offer: MarketOffer, *, status: str) -> None:
+        # Re-read under unit locks so a concurrent recall cannot be undone.
+        list(
+            self._session.scalars(
+                select(Unit)
+                .join(MarketOfferReservation)
+                .where(
+                    MarketOfferReservation.offer_id == offer.id,
+                    MarketOfferReservation.released_at.is_(None),
+                )
+                .order_by(Unit.id)
+                .with_for_update(of=Unit)
+                .execution_options(populate_existing=True)
+            )
+        )
         now = datetime.now(UTC)
         blocked = set(self._session.scalars(select(blocked_lots().c.lot_id)))
         offer.status = status

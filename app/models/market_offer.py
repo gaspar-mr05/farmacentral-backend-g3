@@ -71,6 +71,17 @@ class MarketOffer(Base, TimestampMixin):
     opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_retry_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    last_error: Mapped[str | None] = mapped_column(String)
+    http_status: Mapped[int | None] = mapped_column(Integer)
+    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     period: Mapped["BusinessPeriod"] = relationship()
     reservations: Mapped[list["MarketOfferReservation"]] = relationship(
         back_populates="offer", cascade="all, delete-orphan"
