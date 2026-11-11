@@ -67,8 +67,6 @@ facturas, emitir y pagar mediante WS-Security. Para probar sólo lectura:
 .venv/bin/python -m scripts.verify_billing_connection --include-invoices
 ```
 
-Todavía no hay emisión ni pago automáticos; corresponden a los siguientes pasos.
-
 El paso 4 incorpora la conciliación continua de facturas
 y saldo con cursores durables. Aplica `alembic upgrade head` y selecciona un
 período contable explícito para probarla:
@@ -79,6 +77,25 @@ período contable explícito para probarla:
 
 Sin `--once` permanece revisando; también admite `BILLING_PERIOD_ID` en la
 configuración. Este worker sólo consulta el servicio remoto: no emite ni paga.
+
+Los pasos 5 y 6 añaden emisión y pago automáticos durables. Permanecen
+desactivados por defecto y se habilitan con `--emit-sales` y `--pay-invoices`, o
+con `BILLING_EMIT_SALES_ENABLED` y `BILLING_PAY_INVOICES_ENABLED`.
+
+El paso 7 calcula margen devengado, costos por canal, cobertura de facturación,
+deuda pendiente, frescura de conciliación y cierres de mercado. El worker de
+facturación guarda un snapshot cada diez minutos por defecto. Para capturar uno
+manual —o el cierre del período— sin llamar servicios externos:
+
+```bash
+.venv/bin/python -m scripts.capture_business_metrics --period-id UUID_DEL_PERIODO
+.venv/bin/python -m scripts.capture_business_metrics \
+  --period-id UUID_DEL_PERIODO --closing
+```
+
+Configurar `APP_COMMIT_SHA` con el commit desplegado permite asociar cada
+snapshot al código que produjo las cifras. La migración
+`4f2a7c91e6d3` crea la tabla de snapshots.
 
 ### Esperar stock antes de rechazar una OC
 

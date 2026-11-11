@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import logging
 from contextlib import AsyncExitStack, suppress
+from datetime import timedelta
 from uuid import UUID
 
 from sqlalchemy import text
@@ -15,7 +16,7 @@ from app.clients.billing import BillingClient
 from app.clients.purchase_orders import PurchaseOrdersClient
 from app.core.config import get_settings
 from app.db.session import engine
-from app.services.billing import BillingReconciliationService
+from app.services.billing import BillingReconciliationService, BusinessMetricsService
 from app.services.billing.payments import InvoicePaymentService
 from app.services.billing.periods import billing_period
 from app.services.billing.sales import SalesInvoicingService
@@ -99,6 +100,22 @@ async def run(
                                 )
                                 result["failed"] += bool(
                                     sales["missing"] or sales["uncertain"]
+                                )
+                            snapshot = BusinessMetricsService(session, period).capture(
+                                settings.app_commit_sha,
+                                minimum_interval=timedelta(
+                                    seconds=settings.business_metrics_snapshot_interval_seconds
+                                ),
+                            )
+                            if snapshot:
+                                metrics = snapshot.metrics
+                                logger.info(
+                                    "Business metrics: margin=%s income=%s "
+                                    "costs=%s pending_payments=%s",
+                                    metrics["margin"],
+                                    metrics["invoiced_income"],
+                                    metrics["invoiced_costs"],
+                                    metrics["pending_payments"]["count"],
                                 )
                         except Exception as exc:
                             session.rollback()
