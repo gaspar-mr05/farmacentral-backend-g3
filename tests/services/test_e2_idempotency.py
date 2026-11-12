@@ -397,8 +397,10 @@ async def test_recall_claim_remains_exclusive_after_commits_and_stale_timeout(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("preclassified", [False, True])
 async def test_lost_messaging_response_creates_one_official_oc_and_recovers_without_llm(
     recall_database,
+    preclassified,
 ):
     deadline = datetime.now(UTC) + timedelta(hours=2)
 
@@ -433,6 +435,9 @@ async def test_lost_messaging_response_creates_one_official_oc_and_recovers_with
     )
     with Session(recall_database) as session:
         event = add_event(session, received_at=datetime.now(UTC))
+        if preclassified:
+            await interpreter.interpret(event)
+            session.commit()
         worker = MessagingProcessingService(
             remote, interpreter, official, session, settings=make_settings()
         )
@@ -441,6 +446,8 @@ async def test_lost_messaging_response_creates_one_official_oc_and_recovers_with
         session.commit()
         assert (await worker.process_pending()).failed == 1
         assert event.next_retry_at is None
+        assert event.responded_at is None
+        assert event.attempt_count == 2
         assert remote.created == interpreter.calls == 1
         assert remote.requests == 2
         assert (await worker.process_pending()).processed == 0

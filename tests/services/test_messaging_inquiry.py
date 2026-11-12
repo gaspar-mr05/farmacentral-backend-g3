@@ -1,10 +1,16 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from app.clients.purchase_orders import PurchaseOrdersHTTPError
 from app.db.messaging_messages import add_inbound_message
-from app.models import InboundEvent, InboundEventSource, MessagingDecision
+from app.models import (
+    BusinessPeriod,
+    InboundEvent,
+    InboundEventSource,
+    MessageDirection,
+    MessagingDecision,
+)
 from app.schemas.messaging import MessagingWebhookPayload
 from app.services.messaging import InquiryResolutionService
 from tests.support.farma_central import make_settings
@@ -49,6 +55,7 @@ def add_message(
     order_id=None,
     sku=None,
     quantity=None,
+    settings=None,
 ):
     payload = MessagingWebhookPayload.model_validate(
         {
@@ -68,7 +75,7 @@ def add_message(
         interpreted_quantity=quantity,
     )
     db_session.add(event)
-    add_inbound_message(db_session, event, payload, make_settings())
+    add_inbound_message(db_session, event, payload, settings or make_settings())
     db_session.flush()
     return event
 
@@ -124,7 +131,7 @@ async def test_natural_reference_selects_the_correct_prior_order_and_snapshots_i
 
 
 @pytest.mark.anyio
-async def test_cited_order_is_looked_up_without_prior_phone_history(db_session):
+async def test_cited_order_of_another_phone_is_not_queried(db_session):
     add_message(
         db_session,
         message_id="own-order",
@@ -160,12 +167,142 @@ async def test_cited_order_is_looked_up_without_prior_phone_history(db_session):
 
     response = await service.resolve(inquiry)
 
-    assert "1 de 2" in response
-    assert orders.requested == [SECOND_ORDER_ID]
-    assert inquiry.consulted_external_order_id == SECOND_ORDER_ID
-    assert inquiry.resolution_evidence["status"] == "resolved"
-    assert inquiry.resolution_evidence["method"] == "cited_order_id"
+    assert "No pude identificar" in response
+    assert orders.requested == []
+    assert inquiry.consulted_external_order_id is None
+    assert inquiry.order_status_snapshot is None
+    assert inquiry.resolution_evidence["status"] == "order_not_in_conversation"
+    assert inquiry.resolution_evidence["candidateOrderIds"] == [FIRST_ORDER_ID]
     assert inquiry.resolution_evidence["criteria"] == ["order_id"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("cited_id", [FIRST_ORDER_ID, FIRST_ORDER_ID.upper()])
+async def test_cited_order_from_same_prior_conversation_is_resolved(
+    db_session, cited_id
+):
+    for message_id, order_id, occurred_at in (
+        ("first-order", FIRST_ORDER_ID, MORNING),
+        ("second-order", SECOND_ORDER_ID, AFTERNOON),
+    ):
+        add_message(
+            db_session,
+            message_id=message_id,
+            phone="+56 9 5555 0123",
+            text="Quiero dos kits",
+            occurred_at=occurred_at,
+            decision=MessagingDecision.ORDER,
+            order_id=order_id,
+            sku="KIT-CURACION",
+            quantity=2,
+        )
+    inquiry = add_message(
+        db_session,
+        message_id="inquiry-with-id",
+        phone="+56955550123",
+        text=f"¿Cómo va la OC {cited_id}?",
+        occurred_at=QUERY_TIME,
+        decision=MessagingDecision.INQUIRY,
+    )
+    orders = FakeOrders()
+    response = await InquiryResolutionService(orders, db_session, group_id=3).resolve(
+        inquiry, now=QUERY_TIME
+    )
+
+    assert "1 de 2" in response
+    assert orders.requested == [FIRST_ORDER_ID]
+    assert inquiry.consulted_external_order_id == FIRST_ORDER_ID
+    assert inquiry.resolution_evidence["method"] == "cited_order_id"
+    assert inquiry.resolution_evidence["selectedOrderId"] == FIRST_ORDER_ID
+    assert inquiry.order_status_snapshot["observedAt"] == QUERY_TIME.isoformat()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing",
+        "different_id",
+        "group",
+        "environment",
+        "period",
+        "query_period",
+        "query_group",
+        "same_time",
+        "future",
+        "not_order",
+        "outbound",
+    ],
+)
+async def test_cited_id_must_belong_to_an_earlier_order_in_the_same_scope(
+    db_session,
+    case,
+):
+    prior = add_message(
+        db_session,
+        message_id="prior",
+        phone="+56955550123",
+        text="Quiero dos kits",
+        occurred_at=MORNING,
+        decision=MessagingDecision.ORDER,
+        order_id=SECOND_ORDER_ID,
+        sku="KIT-CURACION",
+        quantity=2,
+    )
+    inquiry = add_message(
+        db_session,
+        message_id="inquiry-without-authorized-reference",
+        phone="+56955550123",
+        text=f"¿Cómo va la OC {SECOND_ORDER_ID}?",
+        occurred_at=QUERY_TIME,
+        decision=MessagingDecision.INQUIRY,
+    )
+    history = prior.conversation_messages[0]
+    if case == "missing":
+        db_session.delete(history)
+    elif case == "different_id":
+        prior.external_order_id = FIRST_ORDER_ID
+    elif case == "group":
+        history.group_id = 7
+    elif case == "environment":
+        history.environment = "another-environment"
+    elif case == "query_group":
+        history.group_id = 7
+        inquiry.conversation_messages[0].group_id = 7
+    elif case in {"period", "query_period"}:
+        period = BusinessPeriod(
+            environment=history.environment,
+            group_id=3,
+            code="another-period",
+            starts_at=MORNING,
+        )
+        db_session.add(period)
+        db_session.flush()
+        target = history if case == "period" else inquiry.conversation_messages[0]
+        target.period_id = period.id
+    elif case == "same_time":
+        history.occurred_at = QUERY_TIME
+    elif case == "future":
+        history.occurred_at = QUERY_TIME + timedelta(seconds=1)
+    elif case == "not_order":
+        prior.decision = MessagingDecision.DISCARDED
+    else:
+        history.direction = MessageDirection.OUTBOUND
+    db_session.flush()
+    orders = FakeOrders()
+
+    response = await InquiryResolutionService(orders, db_session, group_id=3).resolve(
+        inquiry
+    )
+
+    assert orders.requested == []
+    assert "No pude identificar" in response
+    assert inquiry.consulted_external_order_id is None
+    assert inquiry.order_status_snapshot is None
+    expected_status = (
+        "missing_conversation" if case == "query_group" else "order_not_in_conversation"
+    )
+    assert inquiry.resolution_evidence["status"] == expected_status
 
 
 @pytest.mark.anyio
@@ -179,6 +316,17 @@ async def test_cited_order_is_looked_up_without_prior_phone_history(db_session):
 async def test_cited_order_must_exist_and_belong_to_the_group(
     db_session, orders, expected_status
 ):
+    add_message(
+        db_session,
+        message_id="prior-order",
+        phone="+56955550123",
+        text="Quiero dos kits",
+        occurred_at=MORNING,
+        decision=MessagingDecision.ORDER,
+        order_id=SECOND_ORDER_ID,
+        sku="KIT-CURACION",
+        quantity=2,
+    )
     inquiry = add_message(
         db_session,
         message_id=f"inquiry-{expected_status}",

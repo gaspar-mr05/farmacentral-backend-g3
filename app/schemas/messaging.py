@@ -9,6 +9,8 @@ from pydantic import (
     field_validator,
 )
 
+from app.schemas.purchase_orders import PurchaseOrderId
+
 NonBlankString = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
 
 
@@ -50,9 +52,20 @@ class MessagingDiscardRequest(BaseModel):
     reason: NonBlankString
 
 
+class MessagingInquiryRequest(BaseModel):
+    status: Literal["inquiry"] = "inquiry"
+    order_id: PurchaseOrderId = Field(alias="orderId")
+
+
+class MessagingSendRequest(BaseModel):
+    to: NonBlankString
+    reply_to: NonBlankString = Field(alias="replyTo")
+    text: NonBlankString
+
+
 class MessagingResponse(BaseModel):
     order_id: str | None = Field(
         default=None, alias="orderId", pattern=r"^[0-9a-fA-F]{24}$"
     )
-    status: Literal["discarded"] | None = None
-    test: bool = False
+    status: Literal["order", "inquiry", "discarded"] | None = None
+    test: bool = Field(default=False, strict=True)

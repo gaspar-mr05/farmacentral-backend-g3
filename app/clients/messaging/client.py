@@ -12,9 +12,12 @@ from pydantic import ValidationError
 from app.core.config import Settings, get_settings
 from app.schemas.messaging import (
     MessagingDiscardRequest,
+    MessagingInquiryRequest,
     MessagingOrderInterpretation,
     MessagingOrderRequest,
     MessagingResponse,
+    MessagingSendRequest,
+    MessagingWebhookPayload,
 )
 
 from .exceptions import (
@@ -65,7 +68,7 @@ class MessagingClient:
         sku: str,
         quantity: int,
         delivery_date: datetime,
-    ) -> str:
+    ) -> MessagingResponse:
         request = MessagingOrderRequest(
             interpretation=MessagingOrderInterpretation(
                 sku=sku,
@@ -76,11 +79,54 @@ class MessagingClient:
         response = await self._respond(
             message_id, request.model_dump(by_alias=True, mode="json")
         )
-        if response.order_id is None:
+        if response.status not in (None, "order"):
+            raise MessagingInvalidResponseError(
+                "Messaging service returned a different response status"
+            )
+        if response.order_id is None and not response.test:
             raise MessagingInvalidResponseError(
                 "Messaging service did not return the created order ID"
             )
-        return response.order_id.lower()
+        if response.order_id is not None:
+            response.order_id = response.order_id.lower()
+        return response
+
+    async def respond_inquiry(
+        self, message_id: str, *, order_id: str
+    ) -> dict[str, Any]:
+        request = MessagingInquiryRequest(orderId=order_id)
+        request.order_id = request.order_id.lower()
+        path = self._response_path(message_id)
+        response = await self._request(
+            "POST", path, json=request.model_dump(by_alias=True)
+        )
+        confirmation = self._confirmation(response)
+        if confirmation.get("status") not in (None, "inquiry"):
+            raise MessagingInvalidResponseError(
+                "Messaging service returned a different inquiry status"
+            )
+        if "orderId" in confirmation:
+            returned_id = confirmation["orderId"]
+            if (
+                not isinstance(returned_id, str)
+                or returned_id.lower() != request.order_id
+            ):
+                raise MessagingInvalidResponseError(
+                    "Messaging service returned a different inquiry order ID"
+                )
+        return confirmation
+
+    async def send_reply(
+        self, message: MessagingWebhookPayload, *, text: str
+    ) -> dict[str, Any]:
+        # Derive routing from the original query: callers cannot override it.
+        request = MessagingSendRequest(
+            to=message.sender.phone, replyTo=message.message_id, text=text
+        )
+        response = await self._request(
+            "POST", "messages", json=request.model_dump(by_alias=True)
+        )
+        return self._confirmation(response)
 
     async def discard(self, message_id: str, *, reason: str) -> None:
         request = MessagingDiscardRequest(reason=reason)
@@ -95,7 +141,7 @@ class MessagingClient:
     async def _respond(
         self, message_id: str, payload: dict[str, Any]
     ) -> MessagingResponse:
-        path = f"messages/{quote(message_id, safe='')}/response"
+        path = self._response_path(message_id)
         response = await self._request("POST", path, json=payload)
         if response.status_code != 200:
             raise MessagingInvalidResponseError(
@@ -107,6 +153,34 @@ class MessagingClient:
             raise MessagingInvalidResponseError(
                 "Messaging service returned invalid response data"
             ) from exc
+
+    @staticmethod
+    def _response_path(message_id: str) -> str:
+        if not message_id.strip():
+            raise ValueError("message_id must not be blank")
+        return f"messages/{quote(message_id, safe='')}/response"
+
+    @staticmethod
+    def _confirmation(response: httpx.Response) -> dict[str, Any]:
+        # E3 request bodies are specified in the assignment; the public API still
+        # documents E2. Preserve confirmations without inventing response IDs.
+        if not response.is_success:
+            raise MessagingInvalidResponseError(
+                f"Messaging service returned unexpected HTTP {response.status_code}"
+            )
+        if response.status_code == 204 and not response.content:
+            return {}
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise MessagingInvalidResponseError(
+                "Messaging service returned invalid confirmation JSON"
+            ) from exc
+        if not isinstance(payload, dict) or payload.get("success") is False:
+            raise MessagingInvalidResponseError(
+                "Messaging service returned an invalid confirmation"
+            )
+        return payload
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         token = await self._get_token()
@@ -182,7 +256,9 @@ class MessagingClient:
             authenticating and response.status_code in (400, 403)
         ):
             raise MessagingAuthenticationError(response.status_code)
-        if response.status_code == 409:
+        if response.status_code == 409 and response.request.url.path.endswith(
+            "/response"
+        ):
             raise MessagingAlreadyRespondedError(response.status_code)
         retry_after = None
         if response.status_code == 429:

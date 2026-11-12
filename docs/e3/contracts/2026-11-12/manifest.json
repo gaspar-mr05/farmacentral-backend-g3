@@ -1,0 +1,39 @@
+{
+  "captured_at": "2026-11-12T20:18:45.727705+00:00",
+  "scope": "public_documentation_only",
+  "llm_calls": 0,
+  "e3_inquiry_and_outbound_contract": "not_present_in_public_documentation",
+  "request_contract_source": "Proyecto - Entrega 3.pdf",
+  "live_chat_verification": "pending",
+  "sources": {
+    "messaging.openapi.json": {
+      "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/messaging/openapi.json",
+      "http_status": 200,
+      "file": "messaging.openapi.json",
+      "sha256": "46f80d72474f8642731b65be0e595fe0cdc511e67bdcc936d994de32935657bc",
+      "bytes": 7844,
+      "paths": [
+        "/messaging/auth",
+        "/messaging/messages/{messageId}/response"
+      ],
+      "response_statuses": [
+        "order",
+        "discarded"
+      ]
+    },
+    "messaging.html": {
+      "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/messaging/docs",
+      "http_status": 200,
+      "file": "messaging.html",
+      "sha256": "85521c2480ad42a8f63bb4ad14bf5cad1227bc128ed75bd04f3ef1dd71d454b5",
+      "bytes": 8812
+    }
+  },
+  "live_outbound_verification": {
+    "status": "failed",
+    "authentication_http_status": 200,
+    "send_http_status": 404,
+    "attempts": 1,
+    "evidence_file": "messaging-outbound-probe.json"
+  }
+}

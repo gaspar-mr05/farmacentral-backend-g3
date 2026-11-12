@@ -101,11 +101,93 @@ El paso 14 persiste el historial de mensajería por teléfono normalizado. Cada
 mensaje conserva remitente y payload originales, dirección, fecha, grupo,
 ambiente y período; las respuestas exitosas quedan vinculadas al evento que las
 originó y, mediante éste, a su OC. La migración `91c4e7a2d5f0` añade el historial.
-Los pasos 15 y 16 clasifican consultas y resuelven los IDs explícitos contra el
-servicio oficial, verificando que la OC pertenezca al grupo. Las referencias
-naturales sólo consideran OCs previas de la misma conversación y una referencia
-ambigua no selecciona una OC por defecto. La respuesta conserva la evidencia
-usada y un snapshot del estado oficial.
+Los pasos 15 y 16 clasifican consultas y resuelven sus OCs contra el servicio
+oficial. Tanto los IDs explícitos como las referencias naturales sólo consideran
+pedidos anteriores del mismo teléfono, grupo, ambiente y período; además, se
+verifica el proveedor de la OC oficial. Una referencia ajena o ambigua no
+selecciona una OC por defecto. La respuesta conserva la evidencia usada y un
+snapshot del estado oficial.
+
+Un `409` de mensajería deja el evento fallido sin reintento automático: no prueba
+que la clasificación coincida ni que el cliente haya recibido un texto. No se
+fabrican fechas de respuesta ni mensajes salientes. Los intentos se guardan antes
+de llamar al servicio remoto, conservando la posibilidad de recuperar una OC con
+`scripts.recover_messaging_order` aunque se haya perdido su respuesta.
+
+### Mensajería saliente — paso 17
+
+El cliente existente incorpora dos operaciones definidas por el enunciado E3:
+
+- `MessagingClient.respond_inquiry(message_id, order_id=...)` declara
+  `status=inquiry` en `POST /messaging/messages/{messageId}/response`.
+- `MessagingClient.send_reply(message, text=...)` envía el texto mediante
+  `POST /messaging/messages`. Deriva `to` y `replyTo` del payload original del
+  webhook, sin permitir que el llamador cambie el destinatario o el mensaje.
+
+Ambas reutilizan autenticación, timeout y manejo de errores. Un timeout no
+repite automáticamente el POST; el único reintento interno es renovar el token
+ante un `401`. Un `409` de clasificación conserva su error específico; un `409`
+del envío de texto es un error HTTP y no demuestra una clasificación previa.
+
+`respond_order` devuelve ahora `MessagingResponse`, conservando `order_id` y
+`test`. Si el servicio confirma `test=true` sin OC, el worker guarda esa respuesta
+y termina el evento sin importar, decidir ni facturar una orden inexistente. El
+prefijo del `messageId` no basta para reconocer una prueba. Si existe un
+`orderId`, la OC sigue el flujo normal, incluso si la respuesta indica prueba.
+
+**Contrato E3 pendiente de confirmación:** el 12 de noviembre se consultaron
+[OpenAPI](https://dev.proyecto.2026-2.tallerdeintegracion.cl/messaging/openapi.json)
+y [la guía pública](https://dev.proyecto.2026-2.tallerdeintegracion.cl/messaging/docs).
+Ambos todavía muestran sólo `order/discarded` y no publican el envío de texto.
+La captura queda en `docs/e3/contracts/2026-11-12/`. Por eso, las operaciones
+nuevas conservan el objeto JSON de confirmación (o `{}` ante un `204` vacío),
+sin exigir un ID remoto ni inventar una clave de idempotencia. Si la respuesta
+incluye estado u OC de la clasificación, deben coincidir con la consulta.
+Los códigos y cuerpos de éxito concretos, deduplicación y consulta de envío
+deben contrastarse cuando esté publicado el contrato; la prueba real contra el
+chat de desarrollo sigue pendiente.
+
+El 12 de noviembre a las 18:18 de Chile se ejecutó un envío real con un webhook
+auténtico recibido a las 18:16: autenticación `200`, pero el POST de texto devolvió
+`404`. Hubo un solo intento, sin llamadas al LLM ni operaciones de órdenes. No se
+confirmó entrega y ese `404` no permite distinguir entre una ruta no habilitada
+y una referencia rechazada por el servicio. La evidencia sin datos del cliente
+está en `docs/e3/contracts/2026-11-12/messaging-outbound-probe.json`.
+
+La integración de ambas acciones en el worker, sus fases durables y la
+recuperación entre clasificación y envío corresponden al paso 18. Hasta esa
+integración, la rama de consultas del worker conserva su respuesta E2 mediante
+`discarded`; no constituye una respuesta de consulta completa de E3.
+
+Pruebas locales, con servicios simulados y PostgreSQL de pruebas:
+
+```bash
+.venv/bin/python -m pytest -q tests/clients/test_messaging.py \
+  tests/services/test_messaging_processing.py tests/services/test_messaging_inquiry.py \
+  tests/services/test_messaging_recovery.py tests/services/test_e2_idempotency.py
+```
+
+Para probar sólo el envío HTTP, usa **Simular mensaje** en el portal de desarrollo
+y guarda el payload auténtico que recibió el backend en `/tmp/mensaje-paso17.json`.
+También sirve un mensaje del chat cuando esa función esté habilitada. No hace
+falta introducir un texto especial: se utiliza el contenido real del simulador.
+
+```bash
+.venv/bin/python -m scripts.verify_messaging_outbound \
+  --message-file /tmp/mensaje-paso17.json \
+  --text "Prueba paso 17: respuesta recibida."
+```
+
+El comando exige la URL de desarrollo y un mensaje de menos de treinta minutos;
+usa su teléfono y `messageId` originales, sin consultar la base ni el LLM ni
+clasificar o crear una OC. Hace un solo envío y reporta errores sin repetirlo.
+`status=accepted` significa que hubo una confirmación HTTP; no demuestra que el
+texto apareció en un chat. La pantalla con sólo **Simular mensaje** y **Probar
+conexión** no permite esa comprobación visual. **Probar conexión** verifica la
+recepción del webhook/OIDC y el marcador de prueba; no prueba el envío de texto.
+Para verificar la entrega real debe estar habilitado el chat. Ante un resultado incierto,
+no repitas el comando a ciegas: el contrato todavía no garantiza deduplicación.
+El JSON del webhook es un archivo local con datos del cliente y no se versiona.
 
 ### Esperar stock antes de rechazar una OC
 

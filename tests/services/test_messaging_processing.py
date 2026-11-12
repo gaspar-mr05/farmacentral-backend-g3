@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from sqlalchemy import select
 
@@ -8,6 +9,7 @@ from app.clients.farma_central import FarmaCentralClient, FarmaCentralTimeoutErr
 from app.clients.llm_gateway import LLMGatewayClient, LLMGatewayTimeoutError
 from app.clients.messaging import (
     MessagingAlreadyRespondedError,
+    MessagingClient,
     MessagingHTTPError,
     MessagingTimeoutError,
 )
@@ -25,7 +27,7 @@ from app.models import (
     Product,
     ProductCategory,
 )
-from app.schemas.messaging import MessagingWebhookPayload
+from app.schemas.messaging import MessagingResponse, MessagingWebhookPayload
 from app.services.messaging import (
     MessageInterpretationService,
     MessagingProcessingService,
@@ -38,16 +40,17 @@ DEADLINE = NOW + timedelta(hours=2)
 
 
 class FakeMessaging:
-    def __init__(self):
+    def __init__(self, *, test=False):
         self.orders = []
         self.discards = []
         self.error = None
+        self.test = test
 
     async def respond_order(self, message_id, **interpretation):
         self.orders.append((message_id, interpretation))
         if self.error:
             raise self.error
-        return EXTERNAL_ORDER_ID
+        return MessagingResponse(orderId=EXTERNAL_ORDER_ID, test=self.test)
 
     async def discard(self, message_id, *, reason):
         self.discards.append((message_id, reason))
@@ -133,9 +136,12 @@ def make_service(db_session, messaging=None, interpreter=None, orders=None):
 
 
 @pytest.mark.anyio
-async def test_order_is_registered_imported_and_decided(db_session):
+@pytest.mark.parametrize("test", [False, True])
+async def test_order_is_registered_imported_and_decided(db_session, test):
     incoming = add_event(db_session, decision=MessagingDecision.ORDER)
-    service, messaging, interpreter, orders = make_service(db_session)
+    service, messaging, interpreter, orders = make_service(
+        db_session, messaging=FakeMessaging(test=test)
+    )
 
     result = await service.process_pending()
     db_session.refresh(incoming)
@@ -167,6 +173,7 @@ async def test_order_is_registered_imported_and_decided(db_session):
     ).one()
     assert outbound.phone_normalized == "+56911111111"
     assert outbound.payload["orderId"] == EXTERNAL_ORDER_ID
+    assert outbound.payload["test"] is test
 
 
 @pytest.mark.anyio
@@ -191,6 +198,53 @@ async def test_discard_is_answered_without_creating_an_order(db_session):
         )
     ).one()
     assert outbound.text == "No corresponde a un pedido"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "message_id", ["test_connection", "chat_message", "msg-worker"]
+)
+async def test_confirmed_test_order_without_oc_is_completed_without_import(
+    db_session,
+    message_id,
+):
+    incoming = add_event(
+        db_session, decision=MessagingDecision.ORDER, message_id=message_id
+    )
+    posts = []
+
+    def handler(request):
+        if request.url.path.endswith("/auth"):
+            return httpx.Response(200, json={"token": "test-token"})
+        posts.append(request)
+        return httpx.Response(200, json={"test": True, "orderId": None})
+
+    async with httpx.AsyncClient(
+        base_url="https://messaging.test/messaging/",
+        transport=httpx.MockTransport(handler),
+    ) as http_client:
+        messaging = MessagingClient(settings=make_settings(), http_client=http_client)
+        service, _, interpreter, orders = make_service(db_session, messaging=messaging)
+        result = await service.process_pending()
+        db_session.refresh(incoming)
+        assert (result.processed, result.failed) == (1, 0)
+        assert incoming.status is InboundEventStatus.PROCESSED
+        assert incoming.responded_at is not None
+        assert incoming.processed_at == incoming.responded_at
+        assert incoming.external_order_id is None
+        assert incoming.order_id is None
+        assert orders.requested == orders.decisions == []
+        assert interpreter.calls == 0
+        assert db_session.scalars(select(Order)).all() == []
+        outbound = db_session.scalars(
+            select(MessagingMessage).where(
+                MessagingMessage.direction == MessageDirection.OUTBOUND
+            )
+        ).one()
+        assert outbound.payload["test"] is True
+        assert outbound.payload["orderId"] is None
+        assert (await service.process_pending()).processed == 0
+    assert len(posts) == 1
 
 
 @pytest.mark.anyio
@@ -478,27 +532,43 @@ async def test_response_is_not_repeated_when_order_import_temporarily_fails(db_s
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("decision", "expected_status"),
+    "decision",
     [
-        (MessagingDecision.DISCARDED, InboundEventStatus.PROCESSED),
-        (MessagingDecision.INQUIRY, InboundEventStatus.PROCESSED),
-        (MessagingDecision.ORDER, InboundEventStatus.FAILED),
+        MessagingDecision.DISCARDED,
+        MessagingDecision.INQUIRY,
+        MessagingDecision.ORDER,
     ],
 )
-async def test_already_answered_message_stops_retrying(
-    db_session, decision, expected_status
+async def test_409_does_not_confirm_a_response_or_create_outbound_evidence(
+    db_session,
+    decision,
 ):
     incoming = add_event(db_session, decision=decision)
     messaging = FakeMessaging()
     messaging.error = MessagingAlreadyRespondedError(409)
     service, _, _, _ = make_service(db_session, messaging=messaging)
 
-    await service.process_pending()
+    result = await service.process_pending()
     db_session.refresh(incoming)
 
-    assert incoming.status is expected_status
-    assert incoming.responded_at is not None
+    assert (result.processed, result.failed) == (0, 1)
+    assert incoming.status is InboundEventStatus.FAILED
+    assert incoming.responded_at is None
+    assert incoming.processed_at is None
+    assert incoming.attempt_count == 1
+    assert incoming.last_attempt_at is not None
     assert incoming.next_retry_at is None
+    assert (
+        db_session.scalars(
+            select(MessagingMessage).where(
+                MessagingMessage.direction == MessageDirection.OUTBOUND
+            )
+        ).all()
+        == []
+    )
+    retried = await service.process_pending()
+    assert (retried.processed, retried.failed) == (0, 0)
+    assert len(messaging.orders) + len(messaging.discards) == 1
 
 
 @pytest.mark.anyio

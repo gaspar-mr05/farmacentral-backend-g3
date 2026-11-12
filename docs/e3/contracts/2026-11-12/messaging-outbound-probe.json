@@ -1,0 +1,35 @@
+{
+  "checked_at": "2026-11-12T21:18:04.157417+00:00",
+  "scope": "development_outbound_probe",
+  "llm_calls": 0,
+  "send_attempts": 1,
+  "authentication_http_status": 200,
+  "http_status": 404,
+  "response_format": "dict",
+  "response_field_types": {
+    "success": "bool",
+    "error": "str",
+    "message": "str",
+    "code": "str",
+    "statusCode": "int",
+    "timestamp": "str",
+    "path": "str",
+    "method": "str",
+    "module": "str"
+  },
+  "result": {
+    "scope": "messaging_development_reply",
+    "status": "failed",
+    "llm_calls": 0,
+    "chat_delivery_verified": false,
+    "error": "MessagingHTTPError",
+    "http_status": 404,
+    "outcome_uncertain": false
+  },
+  "source_payload_stored": false,
+  "endpoint": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/messaging/messages",
+  "request_source": "authentic_recent_webhook_supplied_by_user",
+  "delivery_confirmed": false,
+  "route_existence_confirmed": false,
+  "order_operations": 0
+}

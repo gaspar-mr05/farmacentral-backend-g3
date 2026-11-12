@@ -71,7 +71,7 @@ class InquiryResolutionService:
 
         text = str(event.payload.get("text", ""))
         cited_ids = _cited_order_ids(text)
-        candidates: list[OrderCandidate] = []
+        candidates = self._candidates(current)
         if cited_ids:
             if len(cited_ids) != 1:
                 return self._unresolved(
@@ -81,10 +81,18 @@ class InquiryResolutionService:
                     criteria=["order_id"],
                 )
             selected_order_id = cited_ids.pop()
+            if selected_order_id not in {
+                candidate.order_id for candidate in candidates
+            }:
+                return self._unresolved(
+                    event,
+                    "order_not_in_conversation",
+                    candidates,
+                    criteria=["order_id"],
+                )
             method = "cited_order_id"
             criteria = ["order_id"]
         else:
-            candidates = self._candidates(current)
             selected, method, criteria = _select_candidate(
                 text, current.occurred_at, candidates
             )
@@ -139,6 +147,7 @@ class InquiryResolutionService:
             select(MessagingMessage).where(
                 MessagingMessage.inbound_event_id == event.id,
                 MessagingMessage.direction == MessageDirection.INBOUND,
+                MessagingMessage.group_id == self._group_id,
             )
         )
 

@@ -747,14 +747,22 @@ evento `messaging`, pendiente de interpretación. Un duplicado por `messageId`
 devuelve también `204`, conservando el payload original y su estado. No se llama
 al LLM ni se crea una OC en esta operación.
 
-El worker posterior distingue pedidos, consultas y mensajes descartables. Un ID
-de OC explícito se consulta directamente y sólo se responde si el proveedor es
-el grupo configurado. Las referencias naturales buscan una única OC previa del
-mismo teléfono, grupo, ambiente y período. En ambos casos se guarda el snapshot
-usado. Como la plataforma sólo admite respuestas `order` o `discarded`, la
-consulta se responde como `discarded` con el estado de la OC, sin crear otra
-orden. Si la referencia es ambigua, solicita el ID o más detalles y no adivina
-una OC.
+El worker posterior distingue pedidos, consultas y mensajes descartables.
+Tanto los IDs explícitos como las referencias naturales deben identificar una OC
+anterior del mismo teléfono, grupo, ambiente y período. Sólo entonces se consulta
+el estado oficial y se verifica el proveedor. Se guarda el snapshot usado; una
+referencia ajena o ambigua no permite revelar el estado de una OC.
+
+El cliente de integración incorpora la clasificación `inquiry` y el envío de
+texto de E3. `send_reply` deriva `to` y `replyTo` del mensaje original. Estas
+operaciones todavía no se conectan a las fases del worker: hasta el paso 18,
+éste conserva la respuesta E2 mediante `discarded`, que no completa el flujo de
+consulta de E3. La documentación pública consultada el 12 de noviembre aún no
+incluye el contrato nuevo; ver la captura y las limitaciones en el README.
+
+Las respuestas de prueba con `test=true` y sin `orderId` se registran sin intentar
+crear o importar una OC. Un `409` por sí solo no confirma una respuesta anterior
+ni la entrega de un texto y queda para revisión, sin reintentos automáticos.
 
 Errores: `401` para Bearer ausente o token inválido, `422` para payload inválido
 y `503` si no se pueden verificar certificados o confirmar la persistencia.

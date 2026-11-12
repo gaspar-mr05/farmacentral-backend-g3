@@ -42,7 +42,7 @@ from app.models import (
     MessagingDecision,
     OrderSource,
 )
-from app.schemas.messaging import MessagingWebhookPayload
+from app.schemas.messaging import MessagingResponse, MessagingWebhookPayload
 from app.services.orders import (
     InvalidExternalOrderStateError,
     OrderIngestionService,
@@ -201,6 +201,8 @@ class MessagingProcessingService:
             result.failed += 1
             return
 
+        # Preserve the attempt even if a remote error later rolls back local work.
+        self._session.commit()
         try:
             if event.decision is None:
                 await self._interpreter.interpret(event)
@@ -242,8 +244,14 @@ class MessagingProcessingService:
                     self._session.commit()
                     result.failed += 1
                     return
-                await self._respond(event)
+                response = await self._respond(event)
                 event.responded_at = datetime.now(UTC)
+                if response is not None and response.test and response.order_id is None:
+                    event.status = InboundEventStatus.PROCESSED
+                    event.processed_at = event.responded_at
+                    self._session.commit()
+                    result.processed += 1
+                    return
                 self._session.commit()
 
             if event.decision is MessagingDecision.ORDER:
@@ -263,32 +271,21 @@ class MessagingProcessingService:
         except MessagingAlreadyRespondedError:
             self._session.rollback()
             event = self._session.get(InboundEvent, event.id)
-            event.responded_at = datetime.now(UTC)
-            if event.decision in (
-                MessagingDecision.DISCARDED,
-                MessagingDecision.INQUIRY,
-            ):
-                if event.decision is MessagingDecision.INQUIRY:
-                    response = event.resolution_evidence["responseText"]
-                    add_outbound_message(
-                        self._session,
-                        event,
-                        payload={"status": "discarded", "reason": response},
-                        text=response,
-                        occurred_at=event.responded_at,
-                    )
-                event.status = InboundEventStatus.PROCESSED
-                event.processed_at = event.responded_at
-                result.processed += 1
-            else:
+            if event.decision is MessagingDecision.ORDER:
                 self._fail(
                     event,
                     "Message was already answered; order ID is unavailable. "
                     "Recover with scripts.recover_messaging_order "
                     "and the official OC ID",
                 )
-                result.failed += 1
+            else:
+                self._fail(
+                    event,
+                    "Message was already answered; the previous response is not "
+                    "confirmed locally. A 409 does not confirm text delivery",
+                )
             self._session.commit()
+            result.failed += 1
             return
         except (
             MessagingError,
@@ -329,7 +326,7 @@ class MessagingProcessingService:
             event.external_order_id,
         )
 
-    async def _respond(self, event: InboundEvent) -> None:
+    async def _respond(self, event: InboundEvent) -> MessagingResponse | None:
         if event.decision is MessagingDecision.DISCARDED:
             reason = event.reason or "El mensaje no corresponde a un pedido válido."
             await self._messaging.discard(
@@ -352,12 +349,13 @@ class MessagingProcessingService:
             raise InvalidExternalOrderError(
                 "An order decision requires SKU, quantity and delivery date"
             )
-        event.external_order_id = await self._messaging.respond_order(
+        response = await self._messaging.respond_order(
             event.external_event_id,
             sku=event.interpreted_sku,
             quantity=event.interpreted_quantity,
             delivery_date=event.interpreted_delivery_date,
         )
+        event.external_order_id = response.order_id
         add_outbound_message(
             self._session,
             event,
@@ -369,9 +367,11 @@ class MessagingProcessingService:
                     "deliveryDate": event.interpreted_delivery_date.isoformat(),
                 },
                 "orderId": event.external_order_id,
+                "test": response.test,
             },
             occurred_at=datetime.now(UTC),
         )
+        return response
 
     @staticmethod
     def _response_window_expired(event: InboundEvent, now: datetime) -> bool:
