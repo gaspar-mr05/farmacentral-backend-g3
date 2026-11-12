@@ -27,6 +27,7 @@ from app.clients.purchase_orders import (
 )
 from app.core.config import Settings, get_settings
 from app.db.external_orders import InvalidExternalOrderError
+from app.db.messaging_messages import add_outbound_message
 from app.db.operation_locks import operation_lock
 from app.models import (
     InboundEvent,
@@ -266,9 +267,17 @@ class MessagingProcessingService:
 
     async def _respond(self, event: InboundEvent) -> None:
         if event.decision is MessagingDecision.DISCARDED:
+            reason = event.reason or "El mensaje no corresponde a un pedido válido."
             await self._messaging.discard(
                 event.external_event_id,
-                reason=event.reason or "El mensaje no corresponde a un pedido válido.",
+                reason=reason,
+            )
+            add_outbound_message(
+                self._session,
+                event,
+                payload={"status": "discarded", "reason": reason},
+                text=reason,
+                occurred_at=datetime.now(UTC),
             )
             return
         if not (
@@ -284,6 +293,20 @@ class MessagingProcessingService:
             sku=event.interpreted_sku,
             quantity=event.interpreted_quantity,
             delivery_date=event.interpreted_delivery_date,
+        )
+        add_outbound_message(
+            self._session,
+            event,
+            payload={
+                "status": "order",
+                "interpretation": {
+                    "sku": event.interpreted_sku,
+                    "quantity": event.interpreted_quantity,
+                    "deliveryDate": event.interpreted_delivery_date.isoformat(),
+                },
+                "orderId": event.external_order_id,
+            },
+            occurred_at=datetime.now(UTC),
         )
 
     @staticmethod

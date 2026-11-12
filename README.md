@@ -97,6 +97,13 @@ manual —o el cierre del período— sin llamar servicios externos:
 también admite un hash explícito. La migración `4f2a7c91e6d3` crea la tabla de
 snapshots.
 
+El paso 14 persiste el historial de mensajería por teléfono normalizado. Cada
+mensaje conserva remitente y payload originales, dirección, fecha, grupo,
+ambiente y período; las respuestas exitosas quedan vinculadas al evento que las
+originó y, mediante éste, a su OC. La migración `91c4e7a2d5f0` añade el historial
+y prepara decisiones `inquiry`, evidencia de resolución y snapshots de estado
+sin implementar todavía la clasificación ni resolución de los pasos 15 y 16.
+
 ### Esperar stock antes de rechazar una OC
 
 Para activar la espera en el `.env` del ambiente correspondiente:

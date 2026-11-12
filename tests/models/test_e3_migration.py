@@ -21,6 +21,7 @@ LATER_MIGRATION_TABLES = {
     "business_metric_snapshots",
     "market_offers",
     "market_offer_reservations",
+    "messaging_messages",
     "procurement_requests",
     "replenishment_states",
 }
@@ -30,6 +31,13 @@ def is_step_2_object(obj, name, object_type, *_args):
     if name in LATER_MIGRATION_TABLES:
         return False
     table = getattr(obj, "table", None)
+    if table is not None and table.name == "inbound_events":
+        return name not in {
+            "classified_at",
+            "consulted_external_order_id",
+            "resolution_evidence",
+            "order_status_snapshot",
+        }
     if table is not None and table.name == "production_runs":
         return name != "operation_key" and not any(
             c.name == "operation_key" for c in getattr(obj, "columns", ())

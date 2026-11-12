@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.clients.pubsub import PubSubOrderMessage
 from app.clients.sftp import SFTPOrderFile
+from app.core.config import Settings, get_settings
+from app.db.messaging_messages import add_inbound_message
 from app.models import InboundEvent, InboundEventSource
 from app.schemas.messaging import MessagingWebhookPayload
 from app.schemas.recalls import RecallWebhookPayload
@@ -65,7 +67,10 @@ def record_pubsub_messages(session: Session, messages: list[PubSubOrderMessage])
 
 
 def record_messaging_message(
-    session: Session, message: MessagingWebhookPayload
+    session: Session,
+    message: MessagingWebhookPayload,
+    *,
+    settings: Settings | None = None,
 ) -> bool:
     statement = (
         insert(InboundEvent)
@@ -77,7 +82,12 @@ def record_messaging_message(
         .on_conflict_do_nothing(constraint="uq_inbound_events_source_external_id")
         .returning(InboundEvent.id)
     )
-    return session.scalar(statement) is not None
+    event_id = session.scalar(statement)
+    if event_id is None:
+        return False
+    event = session.get(InboundEvent, event_id)
+    add_inbound_message(session, event, message, settings or get_settings())
+    return True
 
 
 def record_recall(session: Session, recall: RecallWebhookPayload) -> bool:

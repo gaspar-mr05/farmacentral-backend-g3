@@ -129,6 +129,7 @@ class MessageInterpretationService:
         event.decision = (
             MessagingDecision.DISCARDED if reason else MessagingDecision.ORDER
         )
+        event.classified_at = datetime.now(UTC)
         event.reason = reason
         event.interpreted_sku = proposal.sku if not reason else None
         event.interpreted_quantity = proposal.quantity if not reason else None

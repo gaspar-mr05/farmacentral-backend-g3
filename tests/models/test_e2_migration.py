@@ -9,13 +9,13 @@ from uuid import uuid4
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import Integer, MetaData, create_engine, delete, inspect, select, text
+from sqlalchemy import Integer, MetaData, create_engine, delete, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 from app.db.base import Base
-from app.models import InboundEvent, InboundEventSource, InboundEventStatus, Order
+from app.models import InboundEventStatus, Order
 from tests.support.orders import make_external_order
 
 PREVIOUS_REVISION = "7e3a8b91f2c4"
@@ -87,14 +87,15 @@ def test_migration_preserves_web_orders_and_allows_durable_event_linking(
         assert old_order.buyer_email == "anterior@example.com"
         assert old_order.external_order_id is None
         assert old_order.items[0].id == web_item_id
-        event = InboundEvent(
-            source=InboundEventSource.SFTP,
-            external_event_id="orders.xml",
-            payload={"orderId": "pending"},
+        event_id = uuid4()
+        session.execute(
+            text(
+                "INSERT INTO inbound_events (id,source,external_event_id,payload) "
+                "VALUES (:id,'SFTP','orders.xml','{\"orderId\": \"pending\"}')"
+            ),
+            {"id": event_id},
         )
-        session.add(event)
         session.commit()
-        event_id = event.id
 
     with pytest.raises(
         AssertionError, match="Cannot downgrade while Delivery 2 data exists"
@@ -102,25 +103,55 @@ def test_migration_preserves_web_orders_and_allows_durable_event_linking(
         run_migration(engine, "downgrade", PREVIOUS_REVISION)
 
     with Session(engine) as session:
-        event = session.get(InboundEvent, event_id)
-        assert event.order_id is None
-        assert event.status is InboundEventStatus.PENDING
+        assert (
+            session.scalar(
+                text("SELECT order_id FROM inbound_events WHERE id=:id"),
+                {"id": event_id},
+            )
+            is None
+        )
+        assert (
+            session.scalar(
+                text("SELECT status FROM inbound_events WHERE id=:id"),
+                {"id": event_id},
+            )
+            == InboundEventStatus.PENDING.name
+        )
         order = make_external_order()
         session.add(order)
-        event.order = order
+        session.flush()
+        session.execute(
+            text("UPDATE inbound_events SET order_id=:order_id WHERE id=:event_id"),
+            {"order_id": order.id, "event_id": event_id},
+        )
         session.commit()
         order_id = order.id
 
-    with Session(engine) as session:
-        assert session.get(InboundEvent, event_id).order_id == order_id
-        assert session.get(Order, order_id).inbound_events[0].id == event_id
     with engine.connect() as connection:
+        assert (
+            connection.scalar(
+                text("SELECT order_id FROM inbound_events WHERE id=:id"),
+                {"id": event_id},
+            )
+            == order_id
+        )
         context = MigrationContext.configure(
             connection,
             opts={
                 "compare_type": True,
                 "include_object": lambda obj, name, kind, reflected, compare_to: (
-                    kind != "table" or name in {"orders", "inbound_events"}
+                    (kind != "table" or name in {"orders", "inbound_events"})
+                    and not (
+                        getattr(getattr(obj, "table", None), "name", None)
+                        == "inbound_events"
+                        and name
+                        in {
+                            "classified_at",
+                            "consulted_external_order_id",
+                            "resolution_evidence",
+                            "order_status_snapshot",
+                        }
+                    )
                 ),
             },
         )
@@ -140,7 +171,7 @@ def test_migration_preserves_web_orders_and_allows_durable_event_linking(
             connection.scalar(text("SELECT version_num FROM alembic_version"))
             == REVISION
         )
-        connection.execute(delete(InboundEvent))
+        connection.execute(text("DELETE FROM inbound_events"))
         connection.execute(
             text("DELETE FROM order_items WHERE order_id = :id"), {"id": order_id}
         )
@@ -165,19 +196,21 @@ def test_unique_event_constraint_handles_concurrent_deliveries(migration_databas
     ready = Barrier(2)
 
     def record_event():
-        with Session(engine) as session:
-            session.add(
-                InboundEvent(
-                    source=InboundEventSource.PUBSUB,
-                    external_event_id="same-message",
-                    payload={"orderId": "pending"},
-                )
-            )
+        with engine.connect() as connection:
             ready.wait(timeout=5)
             try:
-                session.commit()
+                connection.execute(
+                    text(
+                        "INSERT INTO inbound_events "
+                        "(id,source,external_event_id,payload) "
+                        "VALUES (:id,'PUBSUB','same-message',"
+                        '\'{"orderId": "pending"}\')'
+                    ),
+                    {"id": uuid4()},
+                )
+                connection.commit()
             except IntegrityError as error:
-                session.rollback()
+                connection.rollback()
                 assert (
                     error.orig.diag.constraint_name
                     == "uq_inbound_events_source_external_id"
@@ -192,5 +225,5 @@ def test_unique_event_constraint_handles_concurrent_deliveries(migration_databas
             "created",
             "duplicate",
         ]
-    with Session(engine) as session:
-        assert len(session.scalars(select(InboundEvent)).all()) == 1
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT count(*) FROM inbound_events")) == 1

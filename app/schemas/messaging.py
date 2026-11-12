@@ -1,6 +1,13 @@
+import re
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, Field, StringConstraints
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    Field,
+    StringConstraints,
+    field_validator,
+)
 
 NonBlankString = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
 
@@ -8,6 +15,16 @@ NonBlankString = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
 class MessageSender(BaseModel):
     name: NonBlankString
     phone: NonBlankString
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str) -> str:
+        digits = re.sub(r"\D", "", value)
+        if value.strip().startswith("00"):
+            digits = digits[2:]
+        if not 8 <= len(digits) <= 15:
+            raise ValueError("phone must contain between 8 and 15 digits")
+        return value
 
 
 class MessagingWebhookPayload(BaseModel):

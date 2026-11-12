@@ -22,6 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 if TYPE_CHECKING:
+    from app.models.messaging_message import MessagingMessage
     from app.models.order import Order
 
 
@@ -41,6 +42,7 @@ class InboundEventStatus(StrEnum):
 
 class MessagingDecision(StrEnum):
     ORDER = "order"
+    INQUIRY = "inquiry"
     DISCARDED = "discarded"
 
 
@@ -111,10 +113,25 @@ class InboundEvent(Base):
     decision: Mapped[MessagingDecision | None] = mapped_column(
         Enum(MessagingDecision), nullable=True
     )
+    classified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     external_order_id: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    consulted_external_order_id: Mapped[str | None] = mapped_column(
+        String(24), nullable=True
+    )
+    resolution_evidence: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    order_status_snapshot: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
     responded_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
     order: Mapped["Order | None"] = relationship(back_populates="inbound_events")
+    conversation_messages: Mapped[list["MessagingMessage"]] = relationship(
+        back_populates="inbound_event", cascade="all, delete-orphan"
+    )

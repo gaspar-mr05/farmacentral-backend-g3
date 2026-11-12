@@ -9,7 +9,13 @@ from sqlalchemy.exc import OperationalError
 from app.api import dependencies
 from app.api.dependencies import get_oidc_verifier
 from app.main import app
-from app.models import InboundEvent, InboundEventSource, InboundEventStatus
+from app.models import (
+    InboundEvent,
+    InboundEventSource,
+    InboundEventStatus,
+    MessageDirection,
+    MessagingMessage,
+)
 from tests.support.farma_central import make_settings
 from tests.support.oidc import AUDIENCE, TestTokenIssuer
 
@@ -76,6 +82,14 @@ def test_persists_message_before_ack_without_processing(
     assert saved.processed_at is None
     assert saved.attempt_count == 0
     assert saved.received_at is not None
+    conversation_message = db_session.scalars(select(MessagingMessage)).one()
+    assert conversation_message.inbound_event_id == saved.id
+    assert conversation_message.direction is MessageDirection.INBOUND
+    assert conversation_message.phone_normalized == "+56955550123"
+    assert conversation_message.sender == message()["sender"]
+    assert conversation_message.text == message()["text"]
+    assert conversation_message.group_id == 3
+    assert conversation_message.environment == "local"
 
 
 @pytest.mark.parametrize("already_processed", [False, True])
@@ -103,6 +117,7 @@ def test_duplicate_does_not_overwrite_or_reprocess_original(
         else InboundEventStatus.PENDING
     )
     assert saved.attempt_count == int(already_processed)
+    assert db_session.scalar(select(func.count()).select_from(MessagingMessage)) == 1
 
 
 @pytest.mark.parametrize(

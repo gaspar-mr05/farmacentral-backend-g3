@@ -29,6 +29,7 @@ from app.models.market_offer import (
     MarketOfferSide,
 )
 from app.models.market_trade import MarketRole, MarketTrade
+from app.models.messaging_message import MessageDirection, MessagingMessage
 from app.models.order import (
     ExternalOrderStatus,
     Order,
@@ -87,6 +88,8 @@ __all__ = [
     "InboundEventSource",
     "InboundEventStatus",
     "MessagingDecision",
+    "MessagingMessage",
+    "MessageDirection",
     "OrderItem",
     "OrderSource",
     "OrderStatus",

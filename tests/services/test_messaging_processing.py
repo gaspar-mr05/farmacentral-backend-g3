@@ -12,16 +12,20 @@ from app.clients.messaging import (
     MessagingTimeoutError,
 )
 from app.clients.purchase_orders import PurchaseOrdersConnectionError
+from app.db.messaging_messages import add_inbound_message
 from app.models import (
     InboundEvent,
     InboundEventSource,
     InboundEventStatus,
+    MessageDirection,
     MessagingDecision,
+    MessagingMessage,
     Order,
     OrderSource,
     Product,
     ProductCategory,
 )
+from app.schemas.messaging import MessagingWebhookPayload
 from app.services.messaging import (
     MessageInterpretationService,
     MessagingProcessingService,
@@ -83,12 +87,12 @@ class FakeOrders:
         self.decisions.append((order_id, state))
 
 
-def add_event(db_session, *, decision=None, received_at=NOW):
+def add_event(db_session, *, decision=None, received_at=NOW, message_id="msg-worker"):
     event = InboundEvent(
         source=InboundEventSource.MESSAGING,
-        external_event_id="msg-worker",
+        external_event_id=message_id,
         payload={
-            "messageId": "msg-worker",
+            "messageId": message_id,
             "sender": {"name": "Farmacia", "phone": "+56911111111"},
             "text": "Necesito dos kits para hoy a las 19:00",
             "receivedAt": received_at.isoformat(),
@@ -102,6 +106,12 @@ def add_event(db_session, *, decision=None, received_at=NOW):
     elif decision is MessagingDecision.DISCARDED:
         event.reason = "No corresponde a un pedido"
     db_session.add(event)
+    add_inbound_message(
+        db_session,
+        event,
+        MessagingWebhookPayload.model_validate(event.payload),
+        make_settings(),
+    )
     db_session.commit()
     return event
 
@@ -150,6 +160,13 @@ async def test_order_is_registered_imported_and_decided(db_session):
     assert incoming.order_id == order.id
     assert order.source is OrderSource.MESSAGING
     assert orders.decisions == [(EXTERNAL_ORDER_ID, "rechazada")]
+    outbound = db_session.scalars(
+        select(MessagingMessage).where(
+            MessagingMessage.direction == MessageDirection.OUTBOUND
+        )
+    ).one()
+    assert outbound.phone_normalized == "+56911111111"
+    assert outbound.payload["orderId"] == EXTERNAL_ORDER_ID
 
 
 @pytest.mark.anyio
@@ -168,6 +185,12 @@ async def test_discard_is_answered_without_creating_an_order(db_session):
     assert incoming.status is InboundEventStatus.PROCESSED
     assert incoming.responded_at is not None
     assert db_session.scalars(select(Order)).all() == []
+    outbound = db_session.scalars(
+        select(MessagingMessage).where(
+            MessagingMessage.direction == MessageDirection.OUTBOUND
+        )
+    ).one()
+    assert outbound.text == "No corresponde a un pedido"
 
 
 @pytest.mark.anyio
@@ -315,16 +338,14 @@ async def test_expired_backlog_does_not_block_a_current_message(db_session):
     first = add_event(
         db_session,
         received_at=datetime.now(UTC) - timedelta(minutes=32),
+        message_id="msg-old-1",
     )
-    first.external_event_id = "msg-old-1"
     second = add_event(
         db_session,
         received_at=datetime.now(UTC) - timedelta(minutes=31),
+        message_id="msg-old-2",
     )
-    second.external_event_id = "msg-old-2"
-    current = add_event(db_session)
-    current.external_event_id = "msg-current"
-    db_session.commit()
+    current = add_event(db_session, message_id="msg-current")
     service, messaging, interpreter, _ = make_service(db_session)
     service._settings.messaging_batch_size = 1
 
@@ -343,7 +364,11 @@ async def test_expired_backlog_does_not_block_a_current_message(db_session):
 
 @pytest.mark.anyio
 async def test_response_is_not_repeated_when_order_import_temporarily_fails(db_session):
-    incoming = add_event(db_session, decision=MessagingDecision.ORDER)
+    incoming = add_event(
+        db_session,
+        decision=MessagingDecision.ORDER,
+        message_id="msg-order-import-retry",
+    )
     messaging = FakeMessaging()
     orders = FakeOrders()
     orders.error = PurchaseOrdersConnectionError("temporary")
