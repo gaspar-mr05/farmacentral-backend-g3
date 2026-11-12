@@ -19,6 +19,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Farmacentral Backend"
     app_env: str = "local"
+    operations_api_key: SecretStr | None = Field(default=None, min_length=1)
     app_commit_sha: str = Field(
         default="auto", min_length=1, max_length=64, pattern=r"^\S+$"
     )

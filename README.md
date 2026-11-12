@@ -305,6 +305,38 @@ Las pruebas usan servicios simulados y PostgreSQL de pruebas:
   tests/models/test_market_recall_migration.py tests/api/test_recalls.py
 ```
 
+### APIs operativas y coordinación con frontend — paso 20
+
+La trazabilidad incluye las compras y ventas de los lotes ancestros, además del
+lote consultado y sus derivados. Conserva las OCs, contrapartes, SKU e IDs de
+unidad; una venta del insumo no se confunde con una entrega del kit. Tanto
+trazabilidad como retiros consultan PostgreSQL, sin depender de SOAP, mercado o
+LLM. El catálogo y el checkout mantienen sus dependencias propias, separadas
+de esos servicios.
+
+El equipo puede consultar `/api/operations/waiting-orders`, `/offers`,
+`/invoices` y `/metrics` bajo el mismo prefijo `/api/operations`. Son consultas
+locales de sólo lectura: no activan conciliaciones ni operaciones comerciales.
+Cada una requiere `period_id`, con validación de grupo y ambiente. Las listas
+usan `limit`, `offset` y `has_more`; las fechas de observación y captura permiten
+distinguir lo leído localmente de una actualización remota.
+
+Para habilitar estas consultas, configura `OPERATIONS_API_KEY` con una clave
+privada independiente y envíala como `Authorization: Bearer <clave>`. Si no está
+configurada, permanecen desactivadas (`503`); una credencial incorrecta produce
+`401`. La clave no se incluye en el frontend público. Los esquemas y la
+coordinación de contratos están documentados en `docs/API.md` y `/openapi.json`.
+Este repositorio no contiene el frontend; los tipos públicos existentes se
+conservan. Este paso no requiere migraciones nuevas.
+
+Las pruebas simulan una caída de los servicios E3 y verifican compra, inicio de
+checkout, trazabilidad y recalls, además de autenticación y lectura sin escrituras:
+
+```bash
+.venv/bin/python -m pytest -q tests/api/test_operations.py \
+  tests/api/test_e3_frontend_availability.py
+```
+
 ### Esperar stock antes de rechazar una OC
 
 Para activar la espera en el `.env` del ambiente correspondiente:

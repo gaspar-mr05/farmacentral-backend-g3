@@ -12,7 +12,8 @@ respuestas y principales errores.
   `2026-10-02T12:00:00Z`.
 - Los UUID deben enviarse en su representación textual estándar.
 - Los webhooks `/api/messaging` y `/api/recalls` exigen un Bearer OIDC de la
-  plataforma; los demás endpoints actuales no exigen autenticación. Las
+  plataforma. `/api/operations/*` exige una clave Bearer privada independiente;
+  los demás endpoints actuales no exigen autenticación. Las
   credenciales de Farma Central y de checkout se utilizan internamente y no
   deben enviarse desde el frontend.
 - FastAPI devuelve `422 Unprocessable Entity` automáticamente cuando un path,
@@ -46,6 +47,10 @@ La documentación interactiva generada por FastAPI está disponible en:
 | `POST` | `/api/recalls` | Recibir y persistir retiros autenticados, sin duplicados. |
 | `GET` | `/api/recalls` | Listar los retiros y su estado de procesamiento. |
 | `GET` | `/api/recalls/{recall_id}` | Consultar un retiro y las unidades de stock identificadas. |
+| `GET` | `/api/operations/waiting-orders` | Diagnóstico privado de OC pendientes de decisión. |
+| `GET` | `/api/operations/offers` | Ofertas locales y estado de conciliación. |
+| `GET` | `/api/operations/invoices` | Facturas persistidas del período. |
+| `GET` | `/api/operations/metrics` | Último snapshot de métricas del período. |
 
 ## Salud
 
@@ -336,6 +341,19 @@ La respuesta incluye:
 - lotes ancestros consumidos para producirlo;
 - lotes descendientes producidos a partir de él;
 - enlaces de producción y las unidades específicas consumidas.
+
+`market_transfers` conserva compras y ventas de los lotes consultado, ancestros
+y descendientes. Cada entrada identifica `trade_id`, `external_offer_id`,
+`external_order_id`, `role` (`buyer/seller`), `counterparty_id`, `lot_id`, `sku`,
+`external_unit_id` y `occurred_at`. Así, al consultar un kit también se observa
+la compra de mercado del insumo usado para producirlo. `deliveries` mantiene
+únicamente las entregas del lote consultado y sus descendientes; las ventas
+de lotes ancestros no se presentan como entregas del kit consultado.
+La consulta usa PostgreSQL y no llama a SOAP, mercado ni gateway.
+`current_units` incluye también las unidades físicas bloqueadas por retiro,
+en cuarentena o vencidas; su presencia en trazabilidad no significa que estén
+disponibles para venta. Las unidades consumidas o despachadas siguen figurando
+en su historial y no se incluyen como stock actual.
 
 Valores posibles de `origin`:
 
@@ -799,3 +817,85 @@ y la fecha de verificación del inventario y del historial; un retiro aún sin
 investigar devuelve `ownership=null`.
 La sincronización bloquea también los derivados tardíos. Si queda plazo, el
 worker actualiza la investigación y el reporte para incorporarlos.
+
+## Diagnóstico operativo privado — paso 20
+
+Estas cuatro rutas consultan exclusivamente datos persistidos. No concilian,
+interpretan, compran, publican ofertas, emiten facturas ni pagan. Exigen:
+
+```http
+Authorization: Bearer <OPERATIONS_API_KEY>
+```
+
+Configura `OPERATIONS_API_KEY` con una clave privada independiente en el entorno
+del backend. Si está ausente, las rutas devuelven `503`; una credencial ausente
+o incorrecta devuelve `401`. Las respuestas exitosas y los errores de
+autenticación incluyen `Cache-Control: no-store`. La clave no debe incluirse
+en URLs ni en el código de un frontend público; su uso corresponde al equipo
+o a un servidor autenticado del frontend.
+
+Todas requieren `period_id` (UUID). El período debe existir y corresponder al
+grupo y ambiente configurados para facturación; de lo contrario se devuelve
+`404`. Una consulta no crea períodos. Las listas admiten `limit` (1–100,
+por defecto 50) y `offset` (entero no negativo, por defecto 0). Los parámetros
+inválidos producen `422`. El contrato común de las listas es:
+
+```json
+{
+  "period_id": "5b62dc1c-87fd-474d-9252-364e15eab51f",
+  "read_at": "2026-11-12T23:00:00Z",
+  "data_source": "persisted",
+  "items": [],
+  "limit": 50,
+  "offset": 0,
+  "has_more": false
+}
+```
+
+`read_at` es la fecha de lectura local, no una confirmación remota. `has_more`
+permite solicitar la siguiente página aumentando `offset`; la paginación no
+congela los datos si los workers los modifican entre solicitudes.
+
+- `GET /api/operations/waiting-orders`: OC externas con estado local `received`,
+  creadas dentro de las fechas del período, ordenadas por plazo más próximo.
+  Incluye `id`, `external_order_id`, `status`, `external_status`,
+  `decision_reason`, `delivery_deadline`, `created_at` y `updated_at`.
+  Comprende tanto las que esperan su primera decisión como las aplazadas por
+  stock; la razón persistida distingue esos casos. No devuelve datos del comprador.
+- `GET /api/operations/offers`: ofertas del período, ordenadas por actualización
+  local descendente. Incluye `id`, `external_offer_id`, `external_order_id`,
+  `side`, `publisher_group_id`, `counterparty_group_id`, `sku`, `quantity`,
+  `unit_price`, `status`, `updated_at`, `last_checked_at`, `reconciled_at`,
+  `next_retry_at`, `http_status` y `has_error`. No expone cuerpos de errores.
+  `status` es el último estado local, no una garantía de que siga abierto en el
+  servicio remoto. `last_checked_at` corresponde al último intento de
+  conciliación; `http_status` y `has_error` permiten distinguir sus fallos.
+  Las fechas de conciliación nulas indican que esa etapa no está registrada.
+- `GET /api/operations/invoices`: facturas del período, ordenadas por emisión
+  descendente. Incluye `id`, `external_invoice_id`, `external_order_id`, `side`,
+  `counterparty_id`, `channel`, `status`, `principal`, `interest`, `total`,
+  `issued_at`, `external_updated_at`, `observed_at` y `paid_at`. Los importes de
+  facturas y ofertas son cadenas decimales exactas, sin redondeo a `float`.
+- `GET /api/operations/metrics`: devuelve `period_id`, `read_at`,
+  `data_source=persisted`, `state`, `captured_at`, `commit_sha` y `metrics`.
+  `state=not_captured` conserva los tres últimos campos en `null` cuando aún no
+  hay snapshot. `state=captured` entrega el último `BusinessMetrics` guardado:
+  ingresos, costos, intereses, margen, cobertura de facturación, pagos pendientes,
+  conciliación y conteos de mercado. No recalcula el snapshot ni simula una
+  actualización. `metrics.reconciliation` distingue una conciliación incompleta
+  y conserva su fecha de cobertura; `captured_at` permite evaluar la antigüedad.
+
+Las rutas sólo admiten GET. El diagnóstico no habilita operaciones manuales de
+pago o compra. El portal, creación de órdenes, checkout, trazabilidad y retiros
+no dependen de estas rutas ni de que se configure su clave. El flujo de compra
+conserva sus dependencias propias: precios vigentes de Farma Central, checkout
+y confirmación de despacho; no utiliza SOAP, ofertas de mercado ni LLM.
+
+El repositorio contiene únicamente el backend. Los contratos públicos mantienen
+sus campos existentes; `market_transfers` amplía el recorrido observado usando
+el mismo tipo. Los nuevos DTO privados están en `app/schemas/operations.py` y en
+`/openapi.json` para coordinar su consumo con el equipo de frontend. No se añade
+un chat propio ni una pantalla financiera pública.
+Si el frontend utiliza una unión cerrada para `current_units.status`, debe admitir
+también `recall_pending`, `quarantined` y `expired` para representar el stock físico
+bloqueado sin mostrarlo como vendible.

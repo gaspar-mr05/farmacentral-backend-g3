@@ -53,7 +53,9 @@ class TraceabilityService:
         descendants.pop(lot_id, None)
         links = {item.id: item for item in upstream_links + downstream_links}
         traced_lot_ids = {lot_id, *descendants}
-        market_custody = list_market_custody(self._session, traced_lot_ids)
+        market_custody = list_market_custody(
+            self._session, traced_lot_ids | ancestors.keys()
+        )
 
         response = TraceabilityResponse(
             lot=self._to_lot(lot),
@@ -81,6 +83,7 @@ class TraceabilityService:
                 )
                 for event in market_custody
                 if event.market_trade.role == MarketRole.SELLER
+                and event.unit.lot_id in traced_lot_ids
             ],
             current_units=[
                 TraceabilityUnitResponse(
@@ -93,7 +96,15 @@ class TraceabilityService:
                     ),
                 )
                 for unit in sorted(lot.units, key=lambda item: item.external_unit_id)
-                if unit.status in {"available", "reserved", "trade_reserved"}
+                if unit.status
+                in {
+                    "available",
+                    "reserved",
+                    "trade_reserved",
+                    "recall_pending",
+                    "quarantined",
+                    "expired",
+                }
             ],
             ancestors=self._sorted_lots(ancestors.values()),
             descendants=self._sorted_lots(descendants.values()),

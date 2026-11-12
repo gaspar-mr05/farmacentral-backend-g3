@@ -1,7 +1,8 @@
 from collections.abc import AsyncGenerator
+from secrets import compare_digest
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.clients.checkout import CheckoutClient
@@ -16,6 +17,32 @@ from app.core.oidc import (
 )
 
 oidc_bearer = HTTPBearer(auto_error=False)
+operations_bearer = HTTPBearer(auto_error=False, scheme_name="OperationsBearer")
+
+
+def require_operations_key(
+    response: Response,
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(operations_bearer)
+    ],
+) -> None:
+    key = get_settings().operations_api_key
+    if key is None:
+        raise HTTPException(
+            503, "Operations API is disabled", headers={"Cache-Control": "no-store"}
+        )
+    if credentials is None or not compare_digest(
+        credentials.credentials.encode(), key.get_secret_value().encode()
+    ):
+        raise HTTPException(
+            401,
+            "Invalid operations authentication",
+            headers={
+                "WWW-Authenticate": "Bearer",
+                "Cache-Control": "no-store",
+            },
+        )
+    response.headers["Cache-Control"] = "no-store"
 
 
 def get_oidc_verifier(request: Request) -> GoogleOIDCVerifier:

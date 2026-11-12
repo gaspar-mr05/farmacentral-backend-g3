@@ -4,6 +4,7 @@ from app.api.routes.catalog import router as catalog_router
 from app.api.routes.health import router as health_router
 from app.api.routes.inventory import router as inventory_router
 from app.api.routes.messaging import router as messaging_router
+from app.api.routes.operations import router as operations_router
 from app.api.routes.orders import router as orders_router
 from app.api.routes.payments import router as payments_router
 from app.api.routes.products import router as products_router
@@ -22,3 +23,4 @@ api_router.include_router(supply_router)
 api_router.include_router(traceability_router)
 api_router.include_router(messaging_router)
 api_router.include_router(recalls_router)
+api_router.include_router(operations_router)
