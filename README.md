@@ -154,10 +154,9 @@ confirmó entrega y ese `404` no permite distinguir entre una ruta no habilitada
 y una referencia rechazada por el servicio. La evidencia sin datos del cliente
 está en `docs/e3/contracts/2026-11-12/messaging-outbound-probe.json`.
 
-La integración de ambas acciones en el worker, sus fases durables y la
-recuperación entre clasificación y envío corresponden al paso 18. Hasta esa
-integración, la rama de consultas del worker conserva su respuesta E2 mediante
-`discarded`; no constituye una respuesta de consulta completa de E3.
+El paso 18 conecta ambas operaciones al worker con las fases durables descritas
+más abajo. La validación real del contrato y de la recepción en el chat continúa
+pendiente; las pruebas locales no sustituyen esa comprobación.
 
 Pruebas locales, con servicios simulados y PostgreSQL de pruebas:
 
@@ -188,6 +187,74 @@ recepción del webhook/OIDC y el marcador de prueba; no prueba el envío de text
 Para verificar la entrega real debe estar habilitado el chat. Ante un resultado incierto,
 no repitas el comando a ciegas: el contrato todavía no garantiza deduplicación.
 El JSON del webhook es un archivo local con datos del cliente y no se versiona.
+
+### Consultas durables y cuota compartida — paso 18
+
+El webhook sigue confirmando únicamente la recepción durable; la interpretación
+y los envíos ocurren en el worker. Para una consulta, éste guarda la decisión,
+la OC resuelta, su snapshot y el texto antes de enviar. Después confirma primero
+la clasificación (`inquiry` y su OC) y luego el texto al teléfono y mensaje
+originales. Una referencia ajena o ambigua se clasifica como `discarded` y recibe
+una solicitud de aclaración, sin inventar una OC.
+
+Las fases quedan en `InboundEvent.resolution_evidence.delivery`, reutilizando
+el modelo existente, sin migraciones nuevas. Cada acción conserva estado,
+intentos, fecha de intento, confirmación, latencia desde `receivedAt` y causa de
+fallo. El historial saliente se agrega al confirmar el POST del texto;
+`responded_at` requiere ambas confirmaciones antes de `receivedAt + 30 minutos`.
+Un reinicio después de clasificar retoma sólo el texto guardado, sin consultar
+otra vez la OC ni usar el LLM. También puede finalizar el estado local después
+del plazo si ambas confirmaciones ya estaban guardadas a tiempo.
+
+Un rechazo explícito recuperable, como `429`, conserva la acción pendiente y
+su próxima fecha de intento. Un timeout, desconexión, confirmación inválida,
+`409`, `5xx` o caída durante un POST deja un resultado incierto y exige revisión:
+no se repite automáticamente. El contrato disponible no permite resolver esos
+casos por consulta o deduplicación; una tabla local no garantiza envío exactamente
+una vez. Al vencer el plazo no se inicia otro envío.
+
+La cola atiende primero los mensajes con plazo más próximo según su fecha
+original, con preferencia por consultas a igual fecha. Los nuevos valores por
+defecto son `MESSAGING_POLL_INTERVAL_SECONDS=5` y `MESSAGING_BATCH_SIZE=10`.
+La espera del LLM aplaza ese evento, sin detener respuestas ya interpretadas.
+Los valores explícitos que ya existan en `.env` siguen teniendo prioridad.
+
+Todos los procesos y herramientas que usen `LLMGatewayClient` comparten una
+reserva en archivo, protegida con bloqueo entre procesos. La ruta por defecto
+incluye grupo y gateway, independientemente de la key, modelo o período de
+negocio. En los workers systemd usa `/var/lib/farmacentral`; en local recurre
+a un directorio del usuario en `/tmp`. `LLM_GATEWAY_RATE_LIMIT_FILE` permite
+fijar la misma ruta para todos los consumidores del host. Otros servidores o
+llamadas directas que omitan el cliente deben coordinarse aparte; el gateway
+aplica la cuota global del grupo.
+
+Se conserva `max_tokens=256`, el catálogo reducido y el contexto de un solo
+mensaje. Ante los límites comunicados de 5 requests/minuto y 1000 tokens/minuto,
+el cliente reserva conservadoramente una ventana completa por llamada, incluido
+su timeout, y espera al menos 60 segundos desde su finalización. Esto evita
+estimar tokens con otro tokenizer; el gateway sigue validando el tamaño de cada
+petición. `LLM_GATEWAY_MIN_INTERVAL_SECONDS` permite espaciar más las llamadas.
+El archivo registra requests, tokens reales de entrada/salida/total informados
+por el gateway y uso desconocido cuando falta esa información, sin guardar keys
+ni prompts. El payload completo de cada interpretación conserva su `usage` en
+`llm_output`.
+
+El presupuesto de USD 2 por treinta días sigue siendo responsabilidad del
+gateway: no se supone una renovación con E3 ni se calcula un costo sin tarifas.
+Al recibir un error de presupuesto, el bloqueo se conserva tras reinicios. Sólo
+debe reinicializarse su archivo cuando se confirme la renovación real, con los
+consumidores detenidos. El 12 de noviembre se consultó el endpoint documentado
+de metadatos `GET /key/info`, sin generar texto: devolvió `403`, por lo que no
+se pudo confirmar saldo ni cuotas vigentes con esta credencial.
+
+Las pruebas simuladas cubren reinicios entre confirmaciones, resultados inciertos,
+plazos, destinatario original, uso compartido entre procesos y auditoría de tokens:
+
+```bash
+.venv/bin/python -m pytest -q tests/services/test_messaging_inquiry_flow.py \
+  tests/services/test_messaging_processing.py tests/clients/test_llm_rate_limit.py \
+  tests/clients/test_llm_gateway.py
+```
 
 ### Esperar stock antes de rechazar una OC
 

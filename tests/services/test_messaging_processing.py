@@ -45,6 +45,10 @@ class FakeMessaging:
         self.discards = []
         self.error = None
         self.test = test
+        self.inquiries = []
+        self.replies = []
+        self.inquiry_error = None
+        self.reply_error = None
 
     async def respond_order(self, message_id, **interpretation):
         self.orders.append((message_id, interpretation))
@@ -56,6 +60,18 @@ class FakeMessaging:
         self.discards.append((message_id, reason))
         if self.error:
             raise self.error
+
+    async def respond_inquiry(self, message_id, *, order_id):
+        self.inquiries.append((message_id, order_id))
+        if self.inquiry_error or self.error:
+            raise self.inquiry_error or self.error
+        return {"status": "inquiry", "orderId": order_id}
+
+    async def send_reply(self, message, *, text):
+        self.replies.append((message.message_id, message.sender.phone, text))
+        if self.reply_error or self.error:
+            raise self.reply_error or self.error
+        return {"messageId": "outbound-" + message.message_id}
 
 
 class FakeInterpreter:
@@ -336,8 +352,10 @@ async def test_inquiry_is_classified_without_being_sent_as_an_order(db_session):
     assert incoming.order_status_snapshot["estado"] == "creada"
     assert interpreter.calls == 0
     assert messaging.orders == []
-    assert messaging.discards[0][0] == "msg-inquiry"
-    assert "0 de 2" in messaging.discards[0][1]
+    assert messaging.discards == []
+    assert messaging.inquiries == [("msg-inquiry", EXTERNAL_ORDER_ID)]
+    assert messaging.replies[0][:2] == ("msg-inquiry", "+56911111111")
+    assert "0 de 2" in messaging.replies[0][2]
     assert orders.requested == [EXTERNAL_ORDER_ID]
     outbound = db_session.scalars(
         select(MessagingMessage).where(
@@ -345,7 +363,10 @@ async def test_inquiry_is_classified_without_being_sent_as_an_order(db_session):
             MessagingMessage.direction == MessageDirection.OUTBOUND,
         )
     ).one()
-    assert outbound.text == messaging.discards[0][1]
+    assert outbound.text == messaging.replies[0][2]
+    delivery = incoming.resolution_evidence["delivery"]
+    assert delivery["classification"]["state"] == "confirmed"
+    assert delivery["reply"]["state"] == "confirmed"
 
 
 @pytest.mark.anyio
@@ -371,6 +392,8 @@ async def test_ambiguous_inquiry_is_answered_without_guessing_an_order(db_sessio
     ]
     assert interpreter.calls == 0
     assert orders.requested == []
+    assert messaging.inquiries == []
+    assert messaging.replies[0][2] == incoming.resolution_evidence["responseText"]
 
 
 @pytest.mark.anyio

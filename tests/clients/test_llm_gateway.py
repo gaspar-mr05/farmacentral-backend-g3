@@ -28,6 +28,11 @@ CATALOG = [
 TEXT = "Necesito dos kits respiratorios para adulto, hoy antes de las 7 pm."
 
 
+@pytest.fixture(autouse=True)
+def isolated_quota_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_GATEWAY_RATE_LIMIT_FILE", str(tmp_path / "llm.rate"))
+
+
 def settings(**overrides):
     return make_settings(
         **{
@@ -340,20 +345,18 @@ async def test_invalid_proposals_preserve_raw_output_for_audit(raw):
 
 
 @pytest.mark.anyio
-async def test_non_json_and_unexpected_status_are_controlled():
-    for status in (200, 204, 302):
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(
-                lambda _, code=status: httpx.Response(
-                    code, text="<html>unavailable</html>"
-                )
-            )
-        ) as http_client:
-            client = LLMGatewayClient(settings=settings(), http_client=http_client)
-            with pytest.raises(LLMGatewayInvalidResponseError) as error:
-                await propose(client)
-        if status == 200:
-            assert error.value.raw_output == "<html>unavailable</html>"
+@pytest.mark.parametrize("status", [200, 204, 302])
+async def test_non_json_and_unexpected_status_are_controlled(status):
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(status, text="<html>unavailable</html>")
+        )
+    ) as http_client:
+        client = LLMGatewayClient(settings=settings(), http_client=http_client)
+        with pytest.raises(LLMGatewayInvalidResponseError) as error:
+            await propose(client)
+    if status == 200:
+        assert error.value.raw_output == "<html>unavailable</html>"
 
 
 @pytest.mark.anyio

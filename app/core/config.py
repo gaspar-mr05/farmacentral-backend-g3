@@ -1,3 +1,4 @@
+import hashlib
 import os
 import tempfile
 from decimal import Decimal
@@ -84,8 +85,8 @@ class Settings(BaseSettings):
     )
     messaging_base_url: AnyHttpUrl | None = None
     messaging_timeout_seconds: float = Field(default=10, gt=0)
-    messaging_poll_interval_seconds: float = Field(default=75, gt=0)
-    messaging_batch_size: int = Field(default=1, ge=1)
+    messaging_poll_interval_seconds: float = Field(default=5, gt=0)
+    messaging_batch_size: int = Field(default=10, ge=1)
     recall_oidc_audience: AnyHttpUrl | None = None
     recall_oidc_service_account: str = Field(
         default="mensajeria@taller-integracion-310700.iam.gserviceaccount.com",
@@ -99,6 +100,10 @@ class Settings(BaseSettings):
     llm_gateway_model: str | None = Field(default=None, min_length=1, pattern=r"\S")
     llm_gateway_timeout_seconds: float = Field(default=20, gt=0)
     llm_gateway_max_tokens: int = Field(default=256, gt=0)
+    llm_gateway_rate_limit_file: Path | None = None
+    llm_gateway_min_interval_seconds: float = Field(
+        default=60, ge=60, allow_inf_nan=False
+    )
     market_price_cache_ttl_seconds: float = Field(default=30, ge=0)
     market_price_max_retry_wait_seconds: float = Field(default=2, ge=0)
     checkout_base_url: AnyHttpUrl = AnyHttpUrl(
@@ -149,6 +154,17 @@ class Settings(BaseSettings):
         if shared.is_dir():
             return shared / "billing.rate"
         return Path(tempfile.gettempdir()) / f"farmacentral-billing-{os.getuid()}.rate"
+
+    @property
+    def effective_llm_gateway_rate_limit_file(self) -> Path:
+        if self.llm_gateway_rate_limit_file is not None:
+            return self.llm_gateway_rate_limit_file
+        host = self.llm_gateway_base_url.host if self.llm_gateway_base_url else "unset"
+        scope = hashlib.sha256(host.encode()).hexdigest()[:12]
+        directory = Path("/var/lib/farmacentral")
+        if not directory.is_dir():
+            directory = Path(tempfile.gettempdir()) / f"farmacentral-{os.getuid()}"
+        return directory / f"llm-{self.farma_central_group}-{scope}.rate"
 
     @property
     def effective_messaging_oidc_audience(self) -> str:

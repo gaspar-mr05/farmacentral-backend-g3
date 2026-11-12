@@ -308,6 +308,8 @@ def test_llm_gateway_is_optional_and_key_is_redacted():
         {"llm_gateway_model": "  "},
         {"llm_gateway_timeout_seconds": 0},
         {"llm_gateway_max_tokens": 0},
+        {"llm_gateway_min_interval_seconds": 59},
+        {"llm_gateway_min_interval_seconds": float("inf")},
     ],
 )
 def test_invalid_llm_gateway_configuration_is_rejected(overrides):

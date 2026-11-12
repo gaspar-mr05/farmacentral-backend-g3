@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from pydantic import ValidationError
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.clients.farma_central import (
@@ -39,7 +39,9 @@ from app.models import (
     InboundEvent,
     InboundEventSource,
     InboundEventStatus,
+    MessageDirection,
     MessagingDecision,
+    MessagingMessage,
     OrderSource,
 )
 from app.schemas.messaging import MessagingResponse, MessagingWebhookPayload
@@ -50,6 +52,7 @@ from app.services.orders import (
 )
 
 from .inquiry import InquiryResolutionService
+from .inquiry_flow import InquiryDeliveryError, InquiryFlowService
 from .interpretation import MessageInterpretationService
 
 logger = logging.getLogger(__name__)
@@ -86,10 +89,12 @@ class MessagingProcessingService:
         self._order_processing = OrderProcessingService(
             orders, session, settings=self._settings
         )
-        self._inquiry_resolution = InquiryResolutionService(
-            orders,
+        self._inquiry_flow = InquiryFlowService(
+            messaging,
+            InquiryResolutionService(
+                orders, session, group_id=self._settings.farma_central_group
+            ),
             session,
-            group_id=self._settings.farma_central_group,
         )
 
     async def process_pending(self) -> MessagingProcessingResult:
@@ -98,8 +103,19 @@ class MessagingProcessingService:
         self._expire_old_messages(result, now)
         events = self._session.execute(
             select(InboundEvent.id, InboundEvent.external_event_id)
+            .outerjoin(
+                MessagingMessage,
+                and_(
+                    MessagingMessage.inbound_event_id == InboundEvent.id,
+                    MessagingMessage.direction == MessageDirection.INBOUND,
+                ),
+            )
             .where(self._ready(now))
-            .order_by(InboundEvent.received_at)
+            .order_by(
+                func.coalesce(MessagingMessage.occurred_at, InboundEvent.received_at),
+                case((InboundEvent.decision == MessagingDecision.INQUIRY, 0), else_=1),
+                InboundEvent.id,
+            )
             .limit(self._settings.messaging_batch_size)
         ).all()
 
@@ -209,27 +225,7 @@ class MessagingProcessingService:
                 self._session.commit()
 
             if event.decision is MessagingDecision.INQUIRY:
-                response = await self._inquiry_resolution.resolve(event)
-                self._session.commit()
-                if self._response_window_expired(event, datetime.now(UTC)):
-                    self._fail(
-                        event, "Message response window expired during resolution"
-                    )
-                    self._session.commit()
-                    result.failed += 1
-                    return
-                await self._messaging.discard(
-                    event.external_event_id,
-                    reason=response,
-                )
-                add_outbound_message(
-                    self._session,
-                    event,
-                    payload={"status": "discarded", "reason": response},
-                    text=response,
-                    occurred_at=datetime.now(UTC),
-                )
-                event.responded_at = datetime.now(UTC)
+                await self._inquiry_flow.process(event)
                 event.status = InboundEventStatus.PROCESSED
                 event.processed_at = datetime.now(UTC)
                 self._session.commit()
@@ -306,11 +302,18 @@ class MessagingProcessingService:
             self._fail(event, str(exc), retry_after=retry_after)
             self._session.commit()
             result.failed += 1
-            result.retry_after_seconds = max(
-                result.retry_after_seconds, retry_after or 0
-            )
+            # The shared LLM limiter defers interpretations, not replies that
+            # already have a saved decision. Keep polling those independently.
+            if not isinstance(exc, LLMGatewayError):
+                result.retry_after_seconds = max(
+                    result.retry_after_seconds, retry_after or 0
+                )
             return
-        except (InvalidExternalOrderError, InvalidExternalOrderStateError) as exc:
+        except (
+            InvalidExternalOrderError,
+            InvalidExternalOrderStateError,
+            InquiryDeliveryError,
+        ) as exc:
             self._session.rollback()
             event = self._session.get(InboundEvent, event.id)
             self._fail(event, str(exc))

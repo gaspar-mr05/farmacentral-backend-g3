@@ -5,6 +5,7 @@ from .exceptions import (
     LLMGatewayError,
     LLMGatewayHTTPError,
     LLMGatewayInvalidResponseError,
+    LLMGatewayRateLimitError,
     LLMGatewayTimeoutError,
 )
 
@@ -15,6 +16,7 @@ __all__ = [
     "LLMGatewayError",
     "LLMGatewayHTTPError",
     "LLMGatewayInvalidResponseError",
+    "LLMGatewayRateLimitError",
     "LLMGatewayResult",
     "LLMGatewayTimeoutError",
 ]

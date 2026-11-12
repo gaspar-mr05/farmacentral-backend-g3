@@ -26,6 +26,12 @@ class LLMGatewayBudgetExceededError(LLMGatewayHTTPError):
     pass
 
 
+class LLMGatewayRateLimitError(LLMGatewayHTTPError):
+    def __init__(self, retry_after_seconds: float) -> None:
+        super().__init__(429, retry_after_seconds=retry_after_seconds)
+        self.args = ("Shared LLM quota unavailable; no request sent",)
+
+
 class LLMGatewayInvalidResponseError(LLMGatewayError):
     def __init__(self, message: str, *, raw_output: Any = None) -> None:
         self.raw_output = raw_output

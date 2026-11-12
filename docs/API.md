@@ -753,12 +753,20 @@ anterior del mismo teléfono, grupo, ambiente y período. Sólo entonces se cons
 el estado oficial y se verifica el proveedor. Se guarda el snapshot usado; una
 referencia ajena o ambigua no permite revelar el estado de una OC.
 
-El cliente de integración incorpora la clasificación `inquiry` y el envío de
-texto de E3. `send_reply` deriva `to` y `replyTo` del mensaje original. Estas
-operaciones todavía no se conectan a las fases del worker: hasta el paso 18,
-éste conserva la respuesta E2 mediante `discarded`, que no completa el flujo de
-consulta de E3. La documentación pública consultada el 12 de noviembre aún no
-incluye el contrato nuevo; ver la captura y las limitaciones en el README.
+El worker confirma la clasificación `inquiry` con la OC resuelta y luego envía
+el texto de E3. `send_reply` deriva `to` y `replyTo` del mensaje original. Guarda
+previamente el texto y las fases en `resolution_evidence.delivery`; tras un
+reinicio retoma el envío pendiente sin reinterpretar ni clasificar otra vez.
+Una referencia sin resolución segura se clasifica como `discarded` y recibe
+una aclaración. Ambas confirmaciones deben llegar antes de `receivedAt + 30
+minutos`; sólo entonces se registra `responded_at`.
+
+Cada fase guarda intentos, fechas, latencia y errores. Si el POST tiene resultado
+incierto, queda para revisión sin repetirse automáticamente. La cuota del LLM
+se coordina entre procesos que comparten su archivo de reserva y no detiene
+las respuestas ya interpretadas. La documentación pública consultada el 12 de
+noviembre aún no incluye el contrato remoto nuevo; ver la captura, configuración
+y límites de la validación en el README.
 
 Las respuestas de prueba con `test=true` y sin `orderId` se registran sin intentar
 crear o importar una OC. Un `409` por sí solo no confirma una respuesta anterior
