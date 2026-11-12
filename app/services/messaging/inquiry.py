@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.clients.purchase_orders import PurchaseOrdersClient
+from app.clients.purchase_orders import PurchaseOrdersClient, PurchaseOrdersHTTPError
 from app.models import (
     InboundEvent,
     MessageDirection,
@@ -34,8 +34,8 @@ NUMBER_WORDS = {
     "doce": 12,
 }
 UNRESOLVED_RESPONSE = (
-    "No pude identificar una única OC previa en esta conversación. "
-    "Indica el ID de la OC o describe el pedido con más detalle."
+    "No pude identificar una única OC válida para esta consulta. "
+    "Revisa el ID de la OC o describe el pedido con más detalle."
 )
 
 
@@ -48,7 +48,7 @@ class OrderCandidate:
 
 
 class InquiryResolutionService:
-    """Resolve an inquiry only against prior orders in the same conversation."""
+    """Resolve explicit IDs or natural references to prior conversation orders."""
 
     def __init__(
         self,
@@ -69,20 +69,46 @@ class InquiryResolutionService:
         if current is None:
             return self._unresolved(event, "missing_conversation", [])
 
-        candidates = self._candidates(current)
-        selected, method, criteria = _select_candidate(
-            str(event.payload.get("text", "")), current.occurred_at, candidates
-        )
-        if selected is None:
-            status = "ambiguous" if len(candidates) > 1 else "unresolved"
+        text = str(event.payload.get("text", ""))
+        cited_ids = _cited_order_ids(text)
+        candidates: list[OrderCandidate] = []
+        if cited_ids:
+            if len(cited_ids) != 1:
+                return self._unresolved(
+                    event,
+                    "ambiguous",
+                    candidates,
+                    criteria=["order_id"],
+                )
+            selected_order_id = cited_ids.pop()
+            method = "cited_order_id"
+            criteria = ["order_id"]
+        else:
+            candidates = self._candidates(current)
+            selected, method, criteria = _select_candidate(
+                text, current.occurred_at, candidates
+            )
+            if selected is None:
+                status = "ambiguous" if len(candidates) > 1 else "unresolved"
+                return self._unresolved(
+                    event,
+                    status,
+                    candidates,
+                    criteria=criteria,
+                )
+            selected_order_id = selected.order_id
+
+        try:
+            order = await self._client.get_order(selected_order_id)
+        except PurchaseOrdersHTTPError as exc:
+            if exc.status_code != 404:
+                raise
             return self._unresolved(
                 event,
-                status,
+                "order_not_found",
                 candidates,
                 criteria=criteria,
             )
-
-        order = await self._client.get_order(selected.order_id)
         if order.supplier_id != str(self._group_id):
             return self._unresolved(
                 event,
@@ -102,7 +128,7 @@ class InquiryResolutionService:
             "method": method,
             "criteria": criteria,
             "candidateOrderIds": [candidate.order_id for candidate in candidates],
-            "selectedOrderId": selected.order_id,
+            "selectedOrderId": selected_order_id,
             "responseText": _response_text(order),
         }
         self._session.flush()
@@ -179,14 +205,6 @@ def _select_candidate(
     candidates: list[OrderCandidate],
 ) -> tuple[OrderCandidate | None, str | None, list[str]]:
     normalized = _normalize(text)
-    cited_ids = {value.lower() for value in ORDER_ID.findall(normalized)}
-    if cited_ids:
-        matches = [
-            candidate for candidate in candidates if candidate.order_id in cited_ids
-        ]
-        selected = matches[0] if len(matches) == 1 and len(cited_ids) == 1 else None
-        return selected, "cited_order_id" if selected else None, ["order_id"]
-
     remaining = list(candidates)
     criteria: list[str] = []
 
@@ -213,6 +231,10 @@ def _select_candidate(
         method = "single_candidate" if len(candidates) == 1 else "description"
         return remaining[0], method, criteria
     return None, None, criteria
+
+
+def _cited_order_ids(text: str) -> set[str]:
+    return {value.lower() for value in ORDER_ID.findall(text)}
 
 
 def _normalize(value: str) -> str:

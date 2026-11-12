@@ -101,9 +101,11 @@ El paso 14 persiste el historial de mensajería por teléfono normalizado. Cada
 mensaje conserva remitente y payload originales, dirección, fecha, grupo,
 ambiente y período; las respuestas exitosas quedan vinculadas al evento que las
 originó y, mediante éste, a su OC. La migración `91c4e7a2d5f0` añade el historial.
-Los pasos 15 y 16 clasifican consultas y las resuelven sólo contra OCs previas de
-la misma conversación. Una referencia ambigua no selecciona una OC por defecto.
-La respuesta conserva la evidencia usada y un snapshot del estado oficial.
+Los pasos 15 y 16 clasifican consultas y resuelven los IDs explícitos contra el
+servicio oficial, verificando que la OC pertenezca al grupo. Las referencias
+naturales sólo consideran OCs previas de la misma conversación y una referencia
+ambigua no selecciona una OC por defecto. La respuesta conserva la evidencia
+usada y un snapshot del estado oficial.
 
 ### Esperar stock antes de rechazar una OC
 

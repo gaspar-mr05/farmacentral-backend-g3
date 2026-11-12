@@ -311,8 +311,8 @@ async def test_ambiguous_inquiry_is_answered_without_guessing_an_order(db_sessio
     assert messaging.discards == [
         (
             "msg-worker",
-            "No pude identificar una única OC previa en esta conversación. "
-            "Indica el ID de la OC o describe el pedido con más detalle.",
+            "No pude identificar una única OC válida para esta consulta. "
+            "Revisa el ID de la OC o describe el pedido con más detalle.",
         )
     ]
     assert interpreter.calls == 0

@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.clients.purchase_orders import PurchaseOrdersHTTPError
 from app.db.messaging_messages import add_inbound_message
 from app.models import InboundEvent, InboundEventSource, MessagingDecision
 from app.schemas.messaging import MessagingWebhookPayload
@@ -17,14 +18,18 @@ QUERY_TIME = datetime(2026, 11, 12, 20, tzinfo=UTC)
 
 
 class FakeOrders:
-    def __init__(self):
+    def __init__(self, *, supplier_id="3", error=None):
         self.requested = []
+        self.supplier_id = supplier_id
+        self.error = error
 
     async def get_order(self, order_id):
         self.requested.append(order_id)
+        if self.error:
+            raise self.error
         return make_purchase_order(
             id=order_id,
-            proveedor="3",
+            proveedor=self.supplier_id,
             sku="KIT-CURACION",
             cantidad=2,
             despachado=1,
@@ -119,7 +124,7 @@ async def test_natural_reference_selects_the_correct_prior_order_and_snapshots_i
 
 
 @pytest.mark.anyio
-async def test_cited_order_must_belong_to_the_same_phone_history(db_session):
+async def test_cited_order_is_looked_up_without_prior_phone_history(db_session):
     add_message(
         db_session,
         message_id="own-order",
@@ -155,11 +160,42 @@ async def test_cited_order_must_belong_to_the_same_phone_history(db_session):
 
     response = await service.resolve(inquiry)
 
+    assert "1 de 2" in response
+    assert orders.requested == [SECOND_ORDER_ID]
+    assert inquiry.consulted_external_order_id == SECOND_ORDER_ID
+    assert inquiry.resolution_evidence["status"] == "resolved"
+    assert inquiry.resolution_evidence["method"] == "cited_order_id"
+    assert inquiry.resolution_evidence["criteria"] == ["order_id"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("orders", "expected_status"),
+    [
+        (FakeOrders(supplier_id="7"), "supplier_mismatch"),
+        (FakeOrders(error=PurchaseOrdersHTTPError(404)), "order_not_found"),
+    ],
+)
+async def test_cited_order_must_exist_and_belong_to_the_group(
+    db_session, orders, expected_status
+):
+    inquiry = add_message(
+        db_session,
+        message_id=f"inquiry-{expected_status}",
+        phone="+56955550123",
+        text=f"¿Cómo va la OC {SECOND_ORDER_ID}?",
+        occurred_at=QUERY_TIME,
+        decision=MessagingDecision.INQUIRY,
+    )
+    service = InquiryResolutionService(orders, db_session, group_id=3)
+
+    response = await service.resolve(inquiry)
+
     assert "No pude identificar" in response
-    assert orders.requested == []
+    assert orders.requested == [SECOND_ORDER_ID]
     assert inquiry.consulted_external_order_id is None
-    assert inquiry.resolution_evidence["status"] == "unresolved"
-    assert inquiry.resolution_evidence["candidateOrderIds"] == [FIRST_ORDER_ID]
+    assert inquiry.order_status_snapshot is None
+    assert inquiry.resolution_evidence["status"] == expected_status
 
 
 @pytest.mark.anyio

@@ -747,12 +747,14 @@ evento `messaging`, pendiente de interpretación. Un duplicado por `messageId`
 devuelve también `204`, conservando el payload original y su estado. No se llama
 al LLM ni se crea una OC en esta operación.
 
-El worker posterior distingue pedidos, consultas y mensajes descartables. Las
-consultas buscan una única OC previa del mismo teléfono, grupo, ambiente y
-período, consultan su estado oficial y guardan el snapshot usado. Como la
-plataforma sólo admite respuestas `order` o `discarded`, la consulta se responde
-como `discarded` con el estado de la OC, sin crear otra orden. Si la referencia
-es ambigua, solicita el ID o más detalles y no adivina una OC.
+El worker posterior distingue pedidos, consultas y mensajes descartables. Un ID
+de OC explícito se consulta directamente y sólo se responde si el proveedor es
+el grupo configurado. Las referencias naturales buscan una única OC previa del
+mismo teléfono, grupo, ambiente y período. En ambos casos se guarda el snapshot
+usado. Como la plataforma sólo admite respuestas `order` o `discarded`, la
+consulta se responde como `discarded` con el estado de la OC, sin crear otra
+orden. Si la referencia es ambigua, solicita el ID o más detalles y no adivina
+una OC.
 
 Errores: `401` para Bearer ausente o token inválido, `422` para payload inválido
 y `503` si no se pueden verificar certificados o confirmar la persistencia.
