@@ -100,9 +100,10 @@ snapshots.
 El paso 14 persiste el historial de mensajería por teléfono normalizado. Cada
 mensaje conserva remitente y payload originales, dirección, fecha, grupo,
 ambiente y período; las respuestas exitosas quedan vinculadas al evento que las
-originó y, mediante éste, a su OC. La migración `91c4e7a2d5f0` añade el historial
-y prepara decisiones `inquiry`, evidencia de resolución y snapshots de estado
-sin implementar todavía la clasificación ni resolución de los pasos 15 y 16.
+originó y, mediante éste, a su OC. La migración `91c4e7a2d5f0` añade el historial.
+Los pasos 15 y 16 clasifican consultas y las resuelven sólo contra OCs previas de
+la misma conversación. Una referencia ambigua no selecciona una OC por defecto.
+La respuesta conserva la evidencia usada y un snapshot del estado oficial.
 
 ### Esperar stock antes de rechazar una OC
 

@@ -255,6 +255,47 @@ async def test_pending_message_is_interpreted_before_responding(db_session):
 
 @pytest.mark.anyio
 async def test_inquiry_is_classified_without_being_sent_as_an_order(db_session):
+    prior = add_event(
+        db_session,
+        decision=MessagingDecision.ORDER,
+        received_at=NOW - timedelta(minutes=10),
+        message_id="msg-prior-order",
+    )
+    prior.external_order_id = EXTERNAL_ORDER_ID
+    prior.status = InboundEventStatus.PROCESSED
+    prior.processed_at = NOW - timedelta(minutes=9)
+    db_session.commit()
+    incoming = add_event(
+        db_session,
+        decision=MessagingDecision.INQUIRY,
+        message_id="msg-inquiry",
+    )
+    service, messaging, interpreter, orders = make_service(db_session)
+
+    result = await service.process_pending()
+    db_session.refresh(incoming)
+
+    assert (result.processed, result.failed) == (1, 0)
+    assert incoming.status is InboundEventStatus.PROCESSED
+    assert incoming.responded_at is not None
+    assert incoming.consulted_external_order_id == EXTERNAL_ORDER_ID
+    assert incoming.order_status_snapshot["estado"] == "creada"
+    assert interpreter.calls == 0
+    assert messaging.orders == []
+    assert messaging.discards[0][0] == "msg-inquiry"
+    assert "0 de 2" in messaging.discards[0][1]
+    assert orders.requested == [EXTERNAL_ORDER_ID]
+    outbound = db_session.scalars(
+        select(MessagingMessage).where(
+            MessagingMessage.inbound_event_id == incoming.id,
+            MessagingMessage.direction == MessageDirection.OUTBOUND,
+        )
+    ).one()
+    assert outbound.text == messaging.discards[0][1]
+
+
+@pytest.mark.anyio
+async def test_ambiguous_inquiry_is_answered_without_guessing_an_order(db_session):
     incoming = add_event(db_session, decision=MessagingDecision.INQUIRY)
     service, messaging, interpreter, orders = make_service(db_session)
 
@@ -263,9 +304,18 @@ async def test_inquiry_is_classified_without_being_sent_as_an_order(db_session):
 
     assert (result.processed, result.failed) == (1, 0)
     assert incoming.status is InboundEventStatus.PROCESSED
-    assert incoming.responded_at is None
+    assert incoming.responded_at is not None
+    assert incoming.consulted_external_order_id is None
+    assert incoming.resolution_evidence["status"] == "unresolved"
+    assert messaging.orders == []
+    assert messaging.discards == [
+        (
+            "msg-worker",
+            "No pude identificar una única OC previa en esta conversación. "
+            "Indica el ID de la OC o describe el pedido con más detalle.",
+        )
+    ]
     assert interpreter.calls == 0
-    assert messaging.orders == [] and messaging.discards == []
     assert orders.requested == []
 
 
@@ -431,6 +481,7 @@ async def test_response_is_not_repeated_when_order_import_temporarily_fails(db_s
     ("decision", "expected_status"),
     [
         (MessagingDecision.DISCARDED, InboundEventStatus.PROCESSED),
+        (MessagingDecision.INQUIRY, InboundEventStatus.PROCESSED),
         (MessagingDecision.ORDER, InboundEventStatus.FAILED),
     ],
 )

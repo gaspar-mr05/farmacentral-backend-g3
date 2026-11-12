@@ -68,6 +68,57 @@ async def test_discarded_message_is_read_only_and_does_not_need_llm(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("problem", [None, "response", "linked", "snapshot"])
+async def test_inquiry_checks_resolution_evidence_without_creating_an_order(
+    db_session, problem
+):
+    event = message(db_session, decision=MessagingDecision.INQUIRY)
+    event.consulted_external_order_id = "a" * 24
+    event.resolution_evidence = {
+        "status": "resolved",
+        "selectedOrderId": event.consulted_external_order_id,
+        "responseText": "La OC está aceptada.",
+    }
+    event.order_status_snapshot = {
+        "id": event.consulted_external_order_id,
+        "proveedor": "3",
+        "estado": "aceptada",
+    }
+    if problem == "response":
+        event.resolution_evidence["responseText"] = ""
+    elif problem == "linked":
+        event.external_order_id = "b" * 24
+    elif problem == "snapshot":
+        event.order_status_snapshot["proveedor"] = "7"
+    db_session.flush()
+    client = AsyncMock()
+
+    result = await module.check_message(db_session, event.external_event_id, client, 3)
+
+    assert result["status"] == ("passed" if problem is None else "failed")
+    assert not db_session.dirty
+    client.get_order.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_ambiguous_inquiry_passes_only_without_a_selected_order(db_session):
+    event = message(db_session, decision=MessagingDecision.INQUIRY)
+    event.resolution_evidence = {
+        "status": "ambiguous",
+        "candidateOrderIds": ["a" * 24, "b" * 24],
+        "responseText": "Indica el ID de la OC.",
+    }
+    db_session.flush()
+
+    result = await module.check_message(
+        db_session, event.external_event_id, AsyncMock(), 3
+    )
+
+    assert result["status"] == "passed"
+    assert not db_session.dirty
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "problem", [None, "interpretation", "official", "decision", "official_rejection"]
 )

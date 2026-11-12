@@ -49,6 +49,7 @@ from app.services.orders import (
     OrderProcessingService,
 )
 
+from .inquiry import InquiryResolutionService
 from .interpretation import MessageInterpretationService
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,11 @@ class MessagingProcessingService:
         )
         self._order_processing = OrderProcessingService(
             orders, session, settings=self._settings
+        )
+        self._inquiry_resolution = InquiryResolutionService(
+            orders,
+            session,
+            group_id=self._settings.farma_central_group,
         )
 
     async def process_pending(self) -> MessagingProcessingResult:
@@ -201,6 +207,27 @@ class MessagingProcessingService:
                 self._session.commit()
 
             if event.decision is MessagingDecision.INQUIRY:
+                response = await self._inquiry_resolution.resolve(event)
+                self._session.commit()
+                if self._response_window_expired(event, datetime.now(UTC)):
+                    self._fail(
+                        event, "Message response window expired during resolution"
+                    )
+                    self._session.commit()
+                    result.failed += 1
+                    return
+                await self._messaging.discard(
+                    event.external_event_id,
+                    reason=response,
+                )
+                add_outbound_message(
+                    self._session,
+                    event,
+                    payload={"status": "discarded", "reason": response},
+                    text=response,
+                    occurred_at=datetime.now(UTC),
+                )
+                event.responded_at = datetime.now(UTC)
                 event.status = InboundEventStatus.PROCESSED
                 event.processed_at = datetime.now(UTC)
                 self._session.commit()
@@ -237,7 +264,19 @@ class MessagingProcessingService:
             self._session.rollback()
             event = self._session.get(InboundEvent, event.id)
             event.responded_at = datetime.now(UTC)
-            if event.decision is MessagingDecision.DISCARDED:
+            if event.decision in (
+                MessagingDecision.DISCARDED,
+                MessagingDecision.INQUIRY,
+            ):
+                if event.decision is MessagingDecision.INQUIRY:
+                    response = event.resolution_evidence["responseText"]
+                    add_outbound_message(
+                        self._session,
+                        event,
+                        payload={"status": "discarded", "reason": response},
+                        text=response,
+                        occurred_at=event.responded_at,
+                    )
                 event.status = InboundEventStatus.PROCESSED
                 event.processed_at = event.responded_at
                 result.processed += 1

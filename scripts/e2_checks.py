@@ -89,6 +89,28 @@ async def check_message(session: Session, message_id: str, client, group: int) -
                 "failed", "El descarte carece de razón o está vinculado a una OC"
             )
         return result("passed", "Descarte auditado dentro del plazo", **evidence)
+    if event.decision == MessagingDecision.INQUIRY:
+        resolution = event.resolution_evidence or {}
+        response = resolution.get("responseText")
+        if not isinstance(response, str) or not response.strip():
+            return result("failed", "La consulta no conserva su respuesta")
+        if event.external_order_id or event.order_id:
+            return result("failed", "La consulta creó o vinculó una OC nueva")
+        if resolution.get("status") == "resolved":
+            snapshot = event.order_status_snapshot or {}
+            if (
+                not event.consulted_external_order_id
+                or resolution.get("selectedOrderId")
+                != event.consulted_external_order_id
+                or str(snapshot.get("id", "")).lower()
+                != event.consulted_external_order_id
+                or snapshot.get("proveedor") != str(group)
+            ):
+                return result("failed", "La consulta no conserva una OC verificada")
+            evidence["consulted_order_id"] = event.consulted_external_order_id
+        elif event.consulted_external_order_id or event.order_status_snapshot:
+            return result("failed", "La consulta ambigua conserva una OC seleccionada")
+        return result("passed", "Consulta auditada dentro del plazo", **evidence)
     if event.decision != MessagingDecision.ORDER:
         return result("failed", "Falta una decisión persistida")
     interpretation = MessagingOrderInterpretation(
