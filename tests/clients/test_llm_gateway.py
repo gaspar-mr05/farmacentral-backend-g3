@@ -43,7 +43,8 @@ def settings(**overrides):
 
 def proposal(**overrides):
     return {
-        "is_order": True,
+        "intent": "order",
+        "order_reference": None,
         "sku": "KIT-RESP-ADULTO",
         "quantity": 2,
         "delivery_date": "2026-10-27T19:00:00-03:00",
@@ -159,12 +160,12 @@ async def test_empty_component_lists_do_not_increase_the_request_context():
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("is_order", [True, False])
-async def test_model_can_express_ambiguity_or_non_order(is_order):
+@pytest.mark.parametrize("intent", ["order", "inquiry", "discarded"])
+async def test_model_can_express_all_supported_intents(intent):
     raw = completion(
         json.dumps(
             proposal(
-                is_order=is_order,
+                intent=intent,
                 sku=None,
                 quantity=None,
                 delivery_date=None,
@@ -179,7 +180,7 @@ async def test_model_can_express_ambiguity_or_non_order(is_order):
     ) as http_client:
         client = LLMGatewayClient(settings=settings(), http_client=http_client)
         result = await propose(client)
-    assert result.proposal.is_order is is_order
+    assert result.proposal.intent == intent
     assert result.proposal.is_ambiguous
     assert result.proposal.sku is None
 
@@ -308,13 +309,13 @@ async def test_http_and_budget_errors_do_not_retry_or_leak_response(
         completion(message={"role": "user", "content": json.dumps(proposal())}),
         completion("not json"),
         completion("```json\n" + json.dumps(proposal()) + "\n```"),
-        completion(json.dumps({"is_order": True})),
+        completion(json.dumps({"intent": "order"})),
         completion(json.dumps(proposal(quantity="2"))),
         completion(json.dumps(proposal(quantity=True))),
         completion(json.dumps(proposal(quantity=1.5))),
         completion(json.dumps(proposal(quantity=0))),
         completion(json.dumps(proposal(quantity=-1))),
-        completion(json.dumps(proposal(is_order="true"))),
+        completion(json.dumps(proposal(intent=True))),
         completion(json.dumps(proposal(is_ambiguous="false"))),
         completion(json.dumps(proposal(confidence=1.1))),
         completion(json.dumps(proposal(confidence=-0.1))),

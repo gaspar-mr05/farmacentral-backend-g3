@@ -12,6 +12,12 @@ from app.clients.farma_central import (
     FarmaCentralError,
     FarmaCentralHTTPError,
 )
+from app.clients.llm_gateway import (
+    LLMGatewayBudgetExceededError,
+    LLMGatewayError,
+    LLMGatewayHTTPError,
+    LLMGatewayInvalidResponseError,
+)
 from app.clients.messaging import (
     MessagingAlreadyRespondedError,
     MessagingAuthenticationError,
@@ -194,6 +200,13 @@ class MessagingProcessingService:
                 await self._interpreter.interpret(event)
                 self._session.commit()
 
+            if event.decision is MessagingDecision.INQUIRY:
+                event.status = InboundEventStatus.PROCESSED
+                event.processed_at = datetime.now(UTC)
+                self._session.commit()
+                result.processed += 1
+                return
+
             if event.responded_at is None:
                 if self._response_window_expired(event, datetime.now(UTC)):
                     self._fail(
@@ -238,9 +251,21 @@ class MessagingProcessingService:
                 result.failed += 1
             self._session.commit()
             return
-        except (MessagingError, PurchaseOrdersError, FarmaCentralError) as exc:
+        except (
+            MessagingError,
+            PurchaseOrdersError,
+            FarmaCentralError,
+            LLMGatewayError,
+        ) as exc:
             self._session.rollback()
             event = self._session.get(InboundEvent, event.id)
+            if isinstance(exc, LLMGatewayInvalidResponseError):
+                event.llm_output = exc.raw_output
+            elif isinstance(exc, LLMGatewayError):
+                event.llm_output = {
+                    "error": type(exc).__name__,
+                    "status_code": getattr(exc, "status_code", None),
+                }
             retry_after = self._retry_delay(exc)
             self._fail(event, str(exc), retry_after=retry_after)
             self._session.commit()
@@ -318,11 +343,23 @@ class MessagingProcessingService:
         return message.received_at + MESSAGE_RESPONSE_WINDOW <= now
 
     def _retry_delay(
-        self, error: MessagingError | PurchaseOrdersError | FarmaCentralError
+        self,
+        error: MessagingError
+        | PurchaseOrdersError
+        | FarmaCentralError
+        | LLMGatewayError,
     ) -> float | None:
         delay = self._settings.messaging_poll_interval_seconds
+        if isinstance(error, LLMGatewayBudgetExceededError):
+            return None
         if isinstance(
-            error, (MessagingHTTPError, PurchaseOrdersHTTPError, FarmaCentralHTTPError)
+            error,
+            (
+                MessagingHTTPError,
+                PurchaseOrdersHTTPError,
+                FarmaCentralHTTPError,
+                LLMGatewayHTTPError,
+            ),
         ):
             if (
                 not isinstance(

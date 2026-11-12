@@ -48,7 +48,8 @@ async def test_uses_current_clinical_catalog_without_creating_orders_or_decision
     db_session.flush()
     original_payload = dict(event.payload)
     proposal = LLMOrderProposal(
-        is_order=True,
+        intent="order",
+        order_reference=None,
         sku="KIT-RESP-ADULTO",
         quantity=2,
         delivery_date=None,

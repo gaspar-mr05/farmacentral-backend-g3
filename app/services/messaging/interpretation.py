@@ -9,12 +9,10 @@ from sqlalchemy.orm import Session
 
 from app.clients.farma_central import FarmaCentralClient
 from app.clients.llm_gateway import (
-    LLMGatewayBudgetExceededError,
     LLMGatewayClient,
     LLMGatewayError,
     LLMGatewayInvalidResponseError,
     LLMGatewayResult,
-    LLMGatewayTimeoutError,
 )
 from app.models import (
     InboundEvent,
@@ -104,14 +102,8 @@ class MessageInterpretationService:
                         "status_code": getattr(exc, "status_code", None),
                     }
                 )
-                if isinstance(exc, LLMGatewayBudgetExceededError):
-                    reason = "Presupuesto del gateway agotado."
-                elif isinstance(exc, LLMGatewayTimeoutError):
-                    reason = "El modelo no respondió dentro del plazo."
-                elif isinstance(exc, LLMGatewayInvalidResponseError):
-                    reason = "La salida del modelo no tiene un formato válido."
-                else:
-                    reason = "No fue posible interpretar el mensaje con el gateway."
+                self._session.flush()
+                raise
             else:
                 event.llm_output = result.raw_output
                 proposal = result.proposal
@@ -126,15 +118,19 @@ class MessageInterpretationService:
                     message, proposal, kit_skus, now=now or datetime.now(UTC)
                 )
 
-        event.decision = (
-            MessagingDecision.DISCARDED if reason else MessagingDecision.ORDER
-        )
+        if reason:
+            event.decision = MessagingDecision.DISCARDED
+        elif proposal and proposal.intent == "inquiry":
+            event.decision = MessagingDecision.INQUIRY
+        else:
+            event.decision = MessagingDecision.ORDER
         event.classified_at = datetime.now(UTC)
         event.reason = reason
-        event.interpreted_sku = proposal.sku if not reason else None
-        event.interpreted_quantity = proposal.quantity if not reason else None
+        is_order = event.decision is MessagingDecision.ORDER
+        event.interpreted_sku = proposal.sku if is_order else None
+        event.interpreted_quantity = proposal.quantity if is_order else None
         event.interpreted_delivery_date = (
-            proposal.delivery_date.astimezone(UTC) if not reason else None
+            proposal.delivery_date.astimezone(UTC) if is_order else None
         )
         self._session.flush()
         return event
@@ -160,17 +156,20 @@ def _discard_reason(
     now: datetime,
 ) -> str | None:
     text = _normalize(message.text)
-    other_request = re.search(
-        r"\b(ayuda|cancelar|cancela|cancelacion|despacharon)\b|"
-        r"\bestado (?:de|del)\b|"
+    negated_or_cancelled = re.search(
+        r"\b(cancelar|cancela|cancelacion)\b|"
         r"\bno\s+(?:quiero|queremos|necesito|necesitamos|requiero|requerimos|"
         r"solicito|solicitamos|(?:nos|me)\s+(?:faltan?|hacen?\s+falta)|"
         r"(?:(?:nos|me)\s+)?(?:envies|envien|mandes|manden|"
         r"despaches|despachen|traigas|traigan))\b",
         text,
     )
-    # Intent is classified by the model; a verb allowlist rejects valid paraphrases.
-    if not proposal.is_order or other_request:
+    if proposal.intent == "discarded":
+        return "El mensaje no identifica un pedido nuevo."
+    if proposal.intent == "inquiry":
+        return None
+    # Only explicit negation or cancellation overrides the model's intent.
+    if negated_or_cancelled:
         return "El mensaje no identifica un pedido nuevo."
     if proposal.is_ambiguous or proposal.confidence < MIN_CONFIDENCE:
         return "La interpretación es ambigua o no tiene suficiente confianza."

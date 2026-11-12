@@ -75,7 +75,8 @@ def service(db_session, catalog_client):
 def proposal(**overrides):
     return LLMOrderProposal(
         **{
-            "is_order": True,
+            "intent": "order",
+            "order_reference": None,
             "sku": "KIT-RESP-ADULTO",
             "quantity": 2,
             "delivery_date": DEADLINE,
@@ -338,7 +339,7 @@ async def test_negated_request_is_discarded_even_if_model_proposes_an_order(
 async def test_non_order_classification_is_preserved(db_session, service, text):
     interpreter, client = service
     incoming = event(db_session, text)
-    gateway_returns(client, proposal(is_order=False))
+    gateway_returns(client, proposal(intent="discarded"))
 
     await interpreter.interpret(incoming, now=NOW)
 
@@ -527,9 +528,12 @@ async def test_real_component_description_is_sent_with_official_recipe_and_audit
 @pytest.mark.parametrize(
     ("text", "overrides", "reason"),
     [
-        (TEXT, {"is_order": False}, "pedido nuevo"),
-        ("Hola, ¿me confirman si ya despacharon lo que pedí ayer?", {}, "pedido nuevo"),
-        ("Necesito ayuda con dos kits para hoy a las 19:00", {}, "pedido nuevo"),
+        (TEXT, {"intent": "discarded"}, "pedido nuevo"),
+        (
+            "Necesito ayuda con dos kits para hoy a las 19:00",
+            {"intent": "discarded"},
+            "pedido nuevo",
+        ),
         ("No quiero dos kits para hoy a las 19:00", {}, "pedido nuevo"),
         ("Quiero cancelar dos kits para hoy a las 19:00", {}, "pedido nuevo"),
         (TEXT, {"is_ambiguous": True, "reason": "Adulto o pediátrico"}, "ambigua"),
@@ -686,29 +690,28 @@ async def test_nonexistent_or_ambiguous_local_times_are_discarded(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("failure", "reason"),
+    "failure",
     [
-        (LLMGatewayTimeoutError("sensitive detail"), "no respondió"),
-        (LLMGatewayConnectionError("sensitive detail"), "gateway"),
-        (LLMGatewayHTTPError(429), "gateway"),
-        (LLMGatewayBudgetExceededError(429), "presupuesto"),
-        (LLMGatewayInvalidResponseError("bad JSON", raw_output="{not json"), "formato"),
-        (LLMGatewayError("missing configuration"), "gateway"),
+        LLMGatewayTimeoutError("sensitive detail"),
+        LLMGatewayConnectionError("sensitive detail"),
+        LLMGatewayHTTPError(429),
+        LLMGatewayBudgetExceededError(429),
+        LLMGatewayInvalidResponseError("bad JSON", raw_output="{not json"),
+        LLMGatewayError("missing configuration"),
     ],
 )
-async def test_gateway_failure_discards_safely_without_retrying(
+async def test_gateway_failure_is_not_misclassified_as_a_discard(
     db_session,
     service,
     failure,
-    reason,
 ):
     interpreter, client = service
     incoming = event(db_session)
     client.propose_order.side_effect = failure
-    await interpreter.interpret(incoming, now=NOW)
-    assert incoming.decision is MessagingDecision.DISCARDED
-    assert reason in incoming.reason.casefold()
-    assert "sensitive detail" not in incoming.reason
+    with pytest.raises(type(failure)):
+        await interpreter.interpret(incoming, now=NOW)
+    assert incoming.decision is None
+    assert incoming.reason is None
     if isinstance(failure, LLMGatewayInvalidResponseError):
         assert incoming.llm_output == failure.raw_output
     else:
@@ -717,6 +720,41 @@ async def test_gateway_failure_discards_safely_without_retrying(
     assert incoming.interpreted_sku is None
     assert incoming.responded_at is None
     assert incoming.order_id is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("text", "reference"),
+    [
+        ("¿Cómo va mi pedido?", None),
+        ("Estado de la OC abc-123", "abc-123"),
+        ("ya despacharon lo que pedí ayer?", None),
+    ],
+)
+async def test_order_status_inquiries_are_classified_without_inventing_an_order(
+    db_session, service, text, reference
+):
+    interpreter, client = service
+    incoming = event(db_session, text)
+    raw = gateway_returns(
+        client,
+        proposal(
+            intent="inquiry",
+            order_reference=reference,
+            sku=None,
+            quantity=None,
+            delivery_date=None,
+        ),
+    )
+
+    await interpreter.interpret(incoming, now=NOW)
+
+    assert incoming.decision is MessagingDecision.INQUIRY
+    assert incoming.reason is None
+    assert incoming.interpreted_sku is None
+    assert incoming.interpreted_quantity is None
+    assert incoming.interpreted_delivery_date is None
+    assert incoming.llm_output == raw
 
 
 @pytest.mark.anyio

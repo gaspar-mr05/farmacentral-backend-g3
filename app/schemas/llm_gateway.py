@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import (
     AwareDatetime,
@@ -24,7 +24,8 @@ class LLMOrderProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    is_order: bool
+    intent: Literal["order", "inquiry", "discarded"]
+    order_reference: NonBlankString | None
     sku: NonBlankString | None
     quantity: Annotated[int, Field(gt=0)] | None
     delivery_date: AwareDatetime | None

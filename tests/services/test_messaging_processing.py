@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import select
 
 from app.clients.farma_central import FarmaCentralClient, FarmaCentralTimeoutError
-from app.clients.llm_gateway import LLMGatewayClient
+from app.clients.llm_gateway import LLMGatewayClient, LLMGatewayTimeoutError
 from app.clients.messaging import (
     MessagingAlreadyRespondedError,
     MessagingHTTPError,
@@ -251,6 +251,39 @@ async def test_pending_message_is_interpreted_before_responding(db_session):
     assert messaging.discards
     assert incoming.decision is MessagingDecision.DISCARDED
     assert incoming.status is InboundEventStatus.PROCESSED
+
+
+@pytest.mark.anyio
+async def test_inquiry_is_classified_without_being_sent_as_an_order(db_session):
+    incoming = add_event(db_session, decision=MessagingDecision.INQUIRY)
+    service, messaging, interpreter, orders = make_service(db_session)
+
+    result = await service.process_pending()
+    db_session.refresh(incoming)
+
+    assert (result.processed, result.failed) == (1, 0)
+    assert incoming.status is InboundEventStatus.PROCESSED
+    assert incoming.responded_at is None
+    assert interpreter.calls == 0
+    assert messaging.orders == [] and messaging.discards == []
+    assert orders.requested == []
+
+
+@pytest.mark.anyio
+async def test_llm_timeout_is_retried_instead_of_discarding_the_message(db_session):
+    incoming = add_event(db_session)
+    interpreter = AsyncMock(spec=MessageInterpretationService)
+    interpreter.interpret.side_effect = LLMGatewayTimeoutError("temporary")
+    service, messaging, _, _ = make_service(db_session, interpreter=interpreter)
+
+    result = await service.process_pending()
+    db_session.refresh(incoming)
+
+    assert (result.processed, result.failed) == (0, 1)
+    assert incoming.status is InboundEventStatus.FAILED
+    assert incoming.next_retry_at is not None
+    assert incoming.decision is None
+    assert messaging.orders == [] and messaging.discards == []
 
 
 @pytest.mark.anyio
