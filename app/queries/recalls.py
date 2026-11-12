@@ -29,16 +29,18 @@ STOCK_STATUSES = (
 
 def blocked_lots():
     """Include outputs linked after an investigation, even after its deadline."""
+    blocking = [RecallStatus.RESPONDING, RecallStatus.FAILED, RecallStatus.COMPLETED]
     affected = (
-        select(RecallLot.lot_id)
-        .join(Recall, Recall.id == RecallLot.recall_id)
+        select(Lot.id.label("lot_id"))
         .where(
-            Recall.status.in_(
-                [
-                    RecallStatus.RESPONDING,
-                    RecallStatus.FAILED,
-                    RecallStatus.COMPLETED,
-                ]
+            exists().where(
+                RecallLot.lot_id == Lot.id,
+                Recall.id == RecallLot.recall_id,
+                Recall.status.in_(blocking),
+            )
+            | exists().where(
+                Recall.batch == Lot.external_lot_id,
+                Recall.status.in_(blocking),
             )
         )
         .cte("blocked_lots", recursive=True)
@@ -132,6 +134,11 @@ def stock_units(session: Session, lot_ids: set[UUID] | Select) -> list[Unit]:
 
 
 def findings_changed(session: Session, recall: Recall) -> bool:
+    from app.queries.traceability import list_market_deliveries
+
+    if recall.origin_lot_id is None:
+        # An unrelated lot can enter later through the market or inventory sync.
+        return get_origin_lot(session, recall.batch) is not None
     affected = {row.lot_id for row in affected_lineage(session, recall.origin_lot_id)}
     recorded = set(
         session.scalars(
@@ -166,4 +173,14 @@ def findings_changed(session: Session, recall: Recall) -> bool:
             )
         )
     )
-    return affected != recorded or stock_changed or deliveries != recorded_deliveries
+    market = {str(event.id) for event in list_market_deliveries(session, affected)}
+    recorded_market = {
+        entry["custody_event_id"]
+        for entry in (recall.investigation_evidence or {}).get("market_deliveries", [])
+    }
+    return (
+        affected != recorded
+        or stock_changed
+        or deliveries != recorded_deliveries
+        or market != recorded_market
+    )

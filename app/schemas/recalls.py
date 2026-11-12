@@ -3,6 +3,8 @@ from typing import Annotated
 
 from pydantic import AwareDatetime, BaseModel, Field, StringConstraints, model_validator
 
+from app.schemas.recall_investigation import RecallMarketDeliveryFinding
+
 NonBlankString = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
 ConnectionTestId = Annotated[
     str, StringConstraints(min_length=6, pattern=r"^test_\S+$")
@@ -94,3 +96,5 @@ class RecalledUnitResponse(BaseModel):
 
 class RecallDetailResponse(RecallSummaryResponse):
     units: list[RecalledUnitResponse]
+    market_deliveries: list[RecallMarketDeliveryFinding] = Field(default_factory=list)
+    ownership: dict | None = None

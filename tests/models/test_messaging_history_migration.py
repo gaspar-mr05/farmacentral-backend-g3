@@ -12,7 +12,7 @@ REVISION = "91c4e7a2d5f0"
 
 def test_messaging_history_migration_matches_models(migration_database):
     engine = migration_database
-    run_migration(engine, "upgrade", REVISION)
+    run_migration(engine, "upgrade", "head")
     with engine.connect() as connection:
         assert "messaging_messages" in inspect(connection).get_table_names()
         assert (

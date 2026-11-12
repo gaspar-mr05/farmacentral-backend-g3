@@ -182,7 +182,11 @@ async def test_public_recall_api_compares_db_and_http(db_session, problem):
     RecallInvestigationService(db_session).investigate(recall.recall_id)
     expected = RecallQueryService(db_session).get_recall(recall.recall_id)
     detail = expected.model_dump(mode="json")
-    listing = [expected.model_dump(mode="json", exclude={"units"})]
+    listing = [
+        expected.model_dump(
+            mode="json", exclude={"units", "market_deliveries", "ownership"}
+        )
+    ]
     if problem == "units":
         detail["units"] = []
     elif problem == "sku":

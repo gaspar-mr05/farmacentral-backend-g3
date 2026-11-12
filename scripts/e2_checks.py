@@ -219,9 +219,16 @@ async def check_recall_api(
             "failed",
             "Las unidades públicas no coinciden con la investigación persistida",
         )
-    if observed.status != expected.status or matches[
-        0
-    ].model_dump() != observed.model_dump(exclude={"units"}):
+    if (
+        observed.market_deliveries != expected.market_deliveries
+        or observed.ownership != expected.ownership
+    ):
+        return result("failed", "La evidencia pública no coincide con la investigación")
+    if (
+        observed.status != expected.status
+        or matches[0].model_dump()
+        != RecallSummaryResponse.model_validate(observed.model_dump()).model_dump()
+    ):
         return result(
             "pending", "El estado público cambió durante la consulta; volver a observar"
         )

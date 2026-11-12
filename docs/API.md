@@ -789,5 +789,13 @@ procesamiento y `failed` si ocurrió un error.
 `original_location`, `current_location` y `quarantined_at`. Antes de identificar
 el lote, `units` puede estar vacío, incluido en un retiro fallido; no demuestra
 que el retiro carezca de productos afectados. Devuelve `404` si no existe el ID.
+También incluye `ownership` con la evidencia de pertenencia y
+`market_deliveries` con las entregas de mercado investigadas: `trade_id`,
+`custody_event_id`, `external_order_id`, `external_offer_id`, `counterparty_id`,
+`unit_id`, `external_unit_id`, `batch`, `sku` y `dispatched_at`.
+Las reventas se reportan con su OC oficial, sin notificar a la distribuidora
+compradora. Un reporte vacío confirmado conserva `ownership.kind=unaffected`
+y la fecha de verificación del inventario y del historial; un retiro aún sin
+investigar devuelve `ownership=null`.
 La sincronización bloquea también los derivados tardíos. Si queda plazo, el
 worker actualiza la investigación y el reporte para incorporarlos.

@@ -49,11 +49,25 @@ class RecallOrderFinding(BaseModel):
     deliveries: list[RecallDeliveryFinding]
 
 
+class RecallMarketDeliveryFinding(BaseModel):
+    custody_event_id: UUID
+    trade_id: UUID
+    external_order_id: str
+    external_offer_id: str
+    counterparty_id: str
+    unit_id: UUID
+    external_unit_id: str
+    batch: str
+    sku: str
+    dispatched_at: datetime
+
+
 class RecallInvestigation(BaseModel):
     recall_id: str
-    origin_lot_id: UUID
+    origin_lot_id: UUID | None
     lots: list[RecallLotFinding]
     production_links: list[RecallLineageLink]
     stock_units: list[RecallStockFinding]
     orders: list[RecallOrderFinding]
+    market_deliveries: list[RecallMarketDeliveryFinding] = Field(default_factory=list)
     elapsed_ms: float = Field(default=0, ge=0)

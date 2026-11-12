@@ -13,6 +13,8 @@ from app.clients.farma_central import (
     FarmaCentralError,
     FarmaCentralHTTPError,
 )
+from app.clients.purchase_orders import PurchaseOrdersHTTPError
+from app.clients.trades import TradesHTTPError
 from app.core.config import Settings, get_settings
 from app.db.inbound_events import record_recall
 from app.db.operation_locks import operation_lock
@@ -167,7 +169,7 @@ class RecallWorkerService:
             return
 
         now = datetime.now(UTC)
-        if recall.deadline <= now:
+        if min(recall.deadline, recall.issued_at + timedelta(minutes=30)) <= now:
             self._fail(event, "Recall deadline expired before processing")
             self._session.commit()
             result.failed += 1
@@ -186,9 +188,9 @@ class RecallWorkerService:
         )
 
         try:
-            await RecallResponseService(self._client, self._session).respond(
-                recall.recall_id
-            )
+            await RecallResponseService(
+                self._client, self._session, settings=self._settings
+            ).respond(recall.recall_id)
         except SQLAlchemyError:
             self._session.rollback()
             raise
@@ -208,7 +210,9 @@ class RecallWorkerService:
             event = self._session.get(InboundEvent, event.id)
             delay = self._settings.recall_poll_interval_seconds
             retry_at = datetime.now(UTC) + timedelta(seconds=delay)
-            if isinstance(exc, FarmaCentralHTTPError):
+            if isinstance(
+                exc, (FarmaCentralHTTPError, TradesHTTPError, PurchaseOrdersHTTPError)
+            ):
                 if 400 <= exc.status_code < 500 and exc.status_code not in {
                     401,
                     403,

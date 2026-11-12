@@ -70,7 +70,13 @@ class RecallQueryService:
             for snapshot in snapshots
         ]
         units.sort(key=lambda unit: unit.product_id)
-        return RecallDetailResponse(**self._summary(recall).model_dump(), units=units)
+        evidence = recall.investigation_evidence or {}
+        return RecallDetailResponse(
+            **self._summary(recall).model_dump(),
+            units=units,
+            market_deliveries=evidence.get("market_deliveries", []),
+            ownership=evidence.get("ownership"),
+        )
 
     @staticmethod
     def _summary(recall: Recall) -> RecallSummaryResponse:

@@ -15,12 +15,13 @@ from app.queries.recalls import (
     get_origin_lot,
     stock_units,
 )
-from app.queries.traceability import list_deliveries
+from app.queries.traceability import list_deliveries, list_market_deliveries
 from app.schemas.recall_investigation import (
     RecallDeliveryFinding,
     RecallInvestigation,
     RecallLineageLink,
     RecallLotFinding,
+    RecallMarketDeliveryFinding,
     RecallOrderFinding,
     RecallStockFinding,
 )
@@ -38,7 +39,7 @@ class RecallInvestigationService:
         self._session = session
 
     def investigate(
-        self, recall_id: str, *, block_stock: bool = False
+        self, recall_id: str, *, block_stock: bool = False, absence_evidence=None
     ) -> RecallInvestigation:
         started = perf_counter()
         try:
@@ -49,6 +50,31 @@ class RecallInvestigationService:
             recall = self._load_recall(recall_id)
             origin = get_origin_lot(self._session, recall.batch)
             if origin is None:
+                if absence_evidence is not None:
+                    if recall.origin_lot_id is not None or recall.lots:
+                        raise RecallInvestigationError(
+                            "Previously affected lot is missing"
+                        )
+                    findings = RecallInvestigation(
+                        recall_id=recall_id,
+                        origin_lot_id=None,
+                        lots=[],
+                        production_links=[],
+                        stock_units=[],
+                        orders=[],
+                    )
+                    recall.investigation_evidence = {
+                        "ownership": absence_evidence,
+                        "market_deliveries": [],
+                    }
+                    recall.status = (
+                        RecallStatus.RESPONDING
+                        if block_stock
+                        else RecallStatus.INVESTIGATING
+                    )
+                    self._session.commit()
+                    findings.elapsed_ms = (perf_counter() - started) * 1000
+                    return findings
                 raise RecallInvestigationError(
                     f"Origin batch {recall.batch} is not synchronized. "
                     f"Run scripts.audit_lot_identities --sku {recall.sku}; "
@@ -62,7 +88,6 @@ class RecallInvestigationService:
                 raise RecallInvestigationError(
                     "The stored recall references a different origin lot"
                 )
-            recall.origin_lot_id = origin.id
             rows = affected_lineage(self._session, origin.id)
             lot_ids = {row.lot_id for row in rows}
             lots = {lot.id: lot for lot in affected_lots(self._session, lot_ids)}
@@ -113,6 +138,21 @@ class RecallInvestigationService:
                     for unit in units
                 ],
                 orders=self._orders(lot_ids, lots),
+                market_deliveries=[
+                    RecallMarketDeliveryFinding(
+                        custody_event_id=event.id,
+                        trade_id=event.market_trade_id,
+                        external_order_id=event.market_trade.external_order_id,
+                        external_offer_id=event.market_trade.external_offer_id,
+                        counterparty_id=event.market_trade.counterparty_id,
+                        unit_id=event.unit_id,
+                        external_unit_id=event.unit.external_unit_id,
+                        batch=lots[event.unit.lot_id].external_lot_id,
+                        sku=lots[event.unit.lot_id].product.sku,
+                        dispatched_at=event.occurred_at,
+                    )
+                    for event in list_market_deliveries(self._session, lot_ids)
+                ],
             )
             snapshots = store_investigation(self._session, recall, findings, units)
             for unit in findings.stock_units:
@@ -128,6 +168,14 @@ class RecallInvestigationService:
                 recall.status = RecallStatus.RESPONDING
             elif recall.status in {RecallStatus.RECEIVED, RecallStatus.FAILED}:
                 recall.status = RecallStatus.INVESTIGATING
+            recall.origin_lot_id = origin.id
+            recall.investigation_evidence = {
+                "ownership": {"kind": "affected", "batch": recall.batch},
+                "market_deliveries": [
+                    delivery.model_dump(mode="json")
+                    for delivery in findings.market_deliveries
+                ],
+            }
             self._session.commit()
         except Exception:
             self._session.rollback()

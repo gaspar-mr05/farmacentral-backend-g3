@@ -292,9 +292,17 @@ class TradeCustodyService:
                 .limit(1)
             )
             blocked = set(self._session.scalars(select(blocked_lots().c.lot_id)))
+            reserved_here = {
+                reservation.unit_id
+                for reservation in offer.reservations
+                if reservation.released_at is None
+            }
             if other_reservation or any(
-                unit.status in {"reserved", "consumed", "quarantined", "recall_pending"}
-                or unit.lot_id in blocked
+                unit.status in {"reserved", "consumed", "quarantined"}
+                or (
+                    (unit.status == "recall_pending" or unit.lot_id in blocked)
+                    and unit.id not in reserved_here
+                )
                 for unit in units
             ):
                 raise InvalidTradeStateError(

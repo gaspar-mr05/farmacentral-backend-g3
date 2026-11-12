@@ -31,6 +31,8 @@ def is_step_2_object(obj, name, object_type, *_args):
     if name in LATER_MIGRATION_TABLES:
         return False
     table = getattr(obj, "table", None)
+    if table is not None and table.name == "recalls":
+        return name != "investigation_evidence"
     if table is not None and table.name == "inbound_events":
         return name not in {
             "classified_at",

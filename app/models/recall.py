@@ -98,6 +98,9 @@ class Recall(Base, TimestampMixin):
     last_report: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB(none_as_null=True), nullable=True
     )
+    investigation_evidence: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
 
     inbound_event: Mapped["InboundEvent | None"] = relationship()
     origin_lot: Mapped["Lot | None"] = relationship()

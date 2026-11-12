@@ -256,6 +256,55 @@ plazos, destinatario original, uso compartido entre procesos y auditoría de tok
   tests/clients/test_llm_gateway.py
 ```
 
+### Retiros de lote y mercado — paso 19
+
+Los retiros incluyen las unidades adquiridas en mercado, su transformación y las
+entregas posteriores. El reporte agrega las reventas a otras distribuidoras con
+la OC oficial y los IDs de unidad de `CustodyEvent`, conservando el historial
+aunque ya no haya stock. Esas ventas no generan notificaciones de cliente final;
+las entregas a clientes finales mantienen su notificación habitual.
+
+Si falta el lote origen, el worker consulta y sincroniza el inventario oficial
+completo antes de considerar un reporte vacío. Revisa también el historial
+retenido: identidades de lote, recepción/producción de cada unidad, producción
+pendiente y evidencia de unidades de las operaciones de mercado. Un listado
+truncado, un lote provisional o una transferencia sin resolver impiden declarar
+que el lote es ajeno. El resultado negativo depende de conservar ese historial;
+una base borrada o incompleta no se reconstruye consultando sólo stock actual.
+Cuando se comprueba ausencia, se envía un reporte vacío y no se realizan
+movimientos ni notificaciones. El plazo se limita a treinta minutos desde
+`issuedAt`, incluso si el payload declara una fecha posterior.
+
+Las unidades afectadas quedan bloqueadas localmente antes de consultar ofertas.
+Una oferta de venta abierta debe cancelarse y su estado terminal confirmarse
+por GET antes de liberar la reserva y mover las unidades. Tras un timeout se
+vuelve a consultar el estado. Si gana un cierre concurrente, se concilia la OC;
+sin evidencia oficial de las unidades transferidas, el retiro queda pendiente
+y no se mueve ese stock. La selección FEFO original no prueba qué unidades
+transfirió el mercado. `TradeCustodyService.record_trade_units` permite registrar
+esa evidencia confirmada aunque el retiro ya haya bloqueado sus reservas.
+
+La migración `b8c2d19f460a` añade una columna JSON de evidencia a `recalls` para
+guardar la comprobación de pertenencia y las entregas de mercado investigadas.
+Antes de ejecutar la versión nueva:
+
+```bash
+.venv/bin/alembic upgrade head
+```
+
+`GET /api/recalls/{recall_id}` agrega `ownership` y `market_deliveries`, con OC,
+oferta, contraparte e IDs de las unidades. Los retiros vacíos pueden reabrirse
+si posteriormente se identifica el lote en el grupo; la sincronización bloquea
+ese lote y sus derivados antes de que el worker actualice el reporte.
+
+Las pruebas usan servicios simulados y PostgreSQL de pruebas:
+
+```bash
+.venv/bin/python -m pytest -q tests/services/test_market_recalls.py \
+  tests/services/test_recall_response.py tests/services/test_recall_worker.py \
+  tests/models/test_market_recall_migration.py tests/api/test_recalls.py
+```
+
 ### Esperar stock antes de rechazar una OC
 
 Para activar la espera en el `.env` del ambiente correspondiente:

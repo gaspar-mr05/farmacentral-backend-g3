@@ -1,15 +1,23 @@
 import logging
+from collections import defaultdict
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.clients.farma_central import FarmaCentralClient, FarmaCentralHTTPError
+from app.clients.purchase_orders import PurchaseOrdersClient
+from app.clients.trades import TradesClient
 from app.db.operation_locks import operation_lock
 from app.models import (
     Location,
+    MarketOfferReservation,
+    MarketRole,
+    MarketTrade,
+    OrderSource,
     OrderUnit,
     ProductionInputUnit,
     Recall,
@@ -20,6 +28,7 @@ from app.models import (
     RecallUnit,
     Unit,
 )
+from app.queries.recalls import get_origin_lot
 from app.schemas.farma_central import FarmaCentralSpace
 from app.schemas.recall_investigation import RecallInvestigation
 from app.schemas.recalls import (
@@ -32,6 +41,8 @@ from app.schemas.recalls import (
 from app.services.custody.events import record_move
 
 from .investigation import RecallInvestigationService
+from .market import affected_offers, release_market_custody
+from .ownership import verify_absence
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +69,21 @@ class RecallResponseResult:
 
 
 class RecallResponseService:
-    def __init__(self, client: FarmaCentralClient, session: Session) -> None:
+    def __init__(
+        self,
+        client: FarmaCentralClient,
+        session: Session,
+        *,
+        trades=None,
+        purchase_orders=None,
+        settings=None,
+    ) -> None:
         self._client = client
         self._session = session
         self._resume_quarantine = False
+        self._trades = trades
+        self._purchase_orders = purchase_orders
+        self._settings = settings
 
     async def respond(self, recall_id: str) -> RecallResponseResult:
         with operation_lock(self._session, f"recall:{recall_id}") as acquired:
@@ -77,24 +99,57 @@ class RecallResponseService:
             return await self._respond(recall_id)
 
     async def _respond(self, recall_id: str) -> RecallResponseResult:
+        investigator = RecallInvestigationService(self._session)
+        recall = investigator._load_recall(recall_id)
+        self._session.commit()
+        self._check_deadline(recall)
+        absence_evidence = None
+        if get_origin_lot(self._session, recall.batch) is None:
+            absence_evidence = await verify_absence(
+                self._client, self._session, recall.batch
+            )
         investigation = RecallInvestigationService(self._session).investigate(
-            recall_id, block_stock=True
+            recall_id, block_stock=True, absence_evidence=absence_evidence
         )
         recall = self._get_recall(recall_id)
         self._session.commit()
 
         try:
             self._check_deadline(recall)
-            quarantine = await self._get_quarantine()
+            offers = affected_offers(
+                self._session, [lot.lot_id for lot in investigation.lots]
+            )
+            if offers:
+                async with AsyncExitStack() as stack:
+                    trades = self._trades or await stack.enter_async_context(
+                        TradesClient(settings=self._settings)
+                    )
+                    orders = self._purchase_orders or await stack.enter_async_context(
+                        PurchaseOrdersClient(settings=self._settings)
+                    )
+                    await release_market_custody(
+                        self._session,
+                        self._client,
+                        trades,
+                        orders,
+                        offers,
+                        lambda: self._check_deadline(recall),
+                    )
+                investigation = investigator.investigate(
+                    recall_id, block_stock=True, absence_evidence=absence_evidence
+                )
+            quarantine = None
             quarantined = 0
             while True:
+                if investigation.stock_units and quarantine is None:
+                    quarantine = await self._get_quarantine()
                 quarantined += await self._quarantine_units(
                     recall, investigation, quarantine
                 )
                 # Deliveries and production can finish while the initial stock
                 # locks are acquired. Use current findings for the final report.
                 investigation = RecallInvestigationService(self._session).investigate(
-                    recall_id, block_stock=True
+                    recall_id, block_stock=True, absence_evidence=absence_evidence
                 )
                 if all(
                     unit.status == "quarantined" for unit in investigation.stock_units
@@ -104,6 +159,7 @@ class RecallResponseService:
             report = self._build_report(investigation)
             self._check_deadline(recall)
             await self._client.report_recall(recall_id, report)
+            self._check_deadline(recall)
 
             recall = self._get_recall(recall_id)
             recall.status = RecallStatus.COMPLETED
@@ -167,6 +223,20 @@ class RecallResponseService:
                 raise RecallResponseError("Recall stock changed during response")
             if snapshot.quarantined_at is not None:
                 continue
+            if (
+                self._session.scalar(
+                    select(MarketOfferReservation.id)
+                    .where(
+                        MarketOfferReservation.unit_id == unit.id,
+                        MarketOfferReservation.released_at.is_(None),
+                    )
+                    .limit(1)
+                )
+                is not None
+            ):
+                raise RecallResponseError(
+                    "Release official market custody before quarantine"
+                )
 
             assignment = self._session.scalar(
                 select(OrderUnit)
@@ -240,6 +310,23 @@ class RecallResponseService:
         )
         sent = 0
         for affected in orders:
+            if (
+                affected.order.source == OrderSource.MARKET
+                or self._session.scalar(
+                    select(MarketTrade.id)
+                    .where(
+                        MarketTrade.role == MarketRole.SELLER,
+                        or_(
+                            MarketTrade.sale_order_id == affected.order_id,
+                            MarketTrade.external_order_id
+                            == affected.order.external_order_id,
+                        ),
+                    )
+                    .limit(1)
+                )
+                is not None
+            ):
+                continue
             self._check_deadline(recall)
             request = RecallNotificationRequest(
                 orderId=affected.order.external_order_id or str(affected.order.id),
@@ -327,6 +414,29 @@ class RecallResponseService:
     @staticmethod
     def _build_report(investigation: RecallInvestigation) -> RecallReportRequest:
         lots = {lot.lot_id: lot for lot in investigation.lots}
+        market_deliveries = defaultdict(set)
+        for delivery in investigation.market_deliveries:
+            market_deliveries[
+                (delivery.external_order_id, delivery.counterparty_id)
+            ].add(delivery.external_unit_id)
+        deliveries = {
+            order.external_order_id or str(order.order_id): RecallDeliveryReport(
+                orderId=order.external_order_id or str(order.order_id),
+                customerName=order.buyer_name,
+                productIds=sorted(
+                    delivery.external_unit_id for delivery in order.deliveries
+                ),
+            )
+            for order in investigation.orders
+        }
+        for (order_id, counterparty), unit_ids in market_deliveries.items():
+            if order_id in deliveries:
+                unit_ids.update(deliveries[order_id].product_ids)
+            deliveries[order_id] = RecallDeliveryReport(
+                orderId=order_id,
+                customerName=f"Distribuidora {counterparty}",
+                productIds=sorted(unit_ids),
+            )
         return RecallReportRequest(
             inStock=[
                 RecallStockReport(
@@ -345,16 +455,7 @@ class RecallResponseService:
                 for lot in investigation.lots
                 if lot.parent_lot_id is not None
             ],
-            deliveries=[
-                RecallDeliveryReport(
-                    orderId=order.external_order_id or str(order.order_id),
-                    customerName=order.buyer_name,
-                    productIds=[
-                        delivery.external_unit_id for delivery in order.deliveries
-                    ],
-                )
-                for order in investigation.orders
-            ],
+            deliveries=list(deliveries.values()),
         )
 
     def _get_recall(self, recall_id: str) -> Recall:
@@ -367,7 +468,9 @@ class RecallResponseService:
 
     @staticmethod
     def _check_deadline(recall: Recall) -> None:
-        if recall.deadline <= datetime.now(UTC):
+        if min(
+            recall.deadline, recall.issued_at + timedelta(minutes=30)
+        ) <= datetime.now(UTC):
             raise RecallResponseError("Recall deadline has expired")
 
     def _mark_failed(self, recall_id: str) -> None:

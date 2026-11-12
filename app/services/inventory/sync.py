@@ -34,6 +34,7 @@ class InventorySyncResult:
     locations: EntityChanges
     lots: EntityChanges
     units: EntityChanges
+    inventory_complete: bool = False
 
 
 class InventorySyncService:
@@ -124,6 +125,9 @@ def sync_inventory(
         locations=EntityChanges(locations.created, locations.updated),
         lots=EntityChanges(lots.created, lots.updated),
         units=EntityChanges(units.created, units.updated),
+        inventory_complete=bool(
+            data.products and data.locations and not incomplete_groups
+        ),
     )
 
 
