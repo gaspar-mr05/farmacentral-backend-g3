@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models import (
     Location,
     Lot,
+    MarketOfferReservation,
     Order,
     OrderItem,
     OrderStatus,
@@ -14,6 +15,7 @@ from app.models import (
     Product,
     Unit,
 )
+from app.queries.recalls import blocked_lots
 
 from .service import OrderNotFoundError
 
@@ -78,6 +80,10 @@ class OrderFulfillmentService:
                     Unit.effective_expires_at > datetime.now(UTC),
                     Location.is_sellable.is_(True),
                     ~exists().where(OrderUnit.unit_id == Unit.id),
+                    ~Unit.market_reservations.any(
+                        MarketOfferReservation.released_at.is_(None)
+                    ),
+                    Unit.lot_id.not_in(select(blocked_lots().c.lot_id)),
                 )
                 .order_by(Unit.effective_expires_at, Unit.id)
                 .limit(units_needed)

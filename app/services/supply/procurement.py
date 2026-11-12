@@ -24,6 +24,7 @@ from app.models import (
     ProcurementRequest,
     Product,
     ProductionRun,
+    ReplenishmentState,
     Unit,
 )
 from app.queries.recalls import blocked_lots
@@ -31,7 +32,9 @@ from app.schemas.farma_central import FarmaCentralProduct, FarmaCentralSpace
 from app.schemas.procurement import ProcurementDemand, ProcurementPlan
 from app.schemas.trades import TradeOfferCreate
 from app.services.inventory.sync import InventorySyncService
+from app.services.production.lineage import has_official_lineage
 from app.services.trades.custody import TradeCustodyService
+from app.services.trades.surplus_planning import protected_stock, replacement_cost
 
 from .planning import ProcurementPlanner
 
@@ -66,7 +69,18 @@ def procurement_lock(session, period_id):
 
 
 class ScarcityProcurementService:
-    def __init__(self, inventory, trades, orders, prices, session, period):
+    def __init__(
+        self,
+        inventory,
+        trades,
+        orders,
+        prices,
+        session,
+        period,
+        *,
+        tolerant_inventory=False,
+    ):
+        self.tolerant_inventory = tolerant_inventory
         self.inventory, self.trades, self.prices = inventory, trades, prices
         self.session, self.period = session, period
         self.custody = TradeCustodyService(
@@ -78,32 +92,42 @@ class ScarcityProcurementService:
         )
 
     async def preview(
-        self, demand: ProcurementDemand, *, replacing_offer_id=None
+        self, demand: ProcurementDemand, *, replacing_offer_id=None, snapshot=None
     ) -> ProcurementPlan:
-        await InventorySyncService(self.inventory, self.session).synchronize()
-        catalog_payload, spaces_payload, price_payload = await asyncio.gather(
-            self.inventory.get_available_products(),
-            self.inventory.get_spaces(),
-            self.prices.get_current_prices(use_cache=False),
-        )
-        catalog = {
-            p.sku: p
-            for p in TypeAdapter(list[FarmaCentralProduct]).validate_python(
-                catalog_payload
+        if snapshot is not None:
+            catalog, spaces, prices = snapshot
+        else:
+            sync = InventorySyncService(self.inventory, self.session)
+            if self.tolerant_inventory:
+                await sync.synchronize(tolerate_changes=True)
+            else:
+                await sync.synchronize()
+            catalog_payload, spaces_payload, price_payload = await asyncio.gather(
+                self.inventory.get_available_products(),
+                self.inventory.get_spaces(),
+                self.prices.get_current_prices(use_cache=False),
             )
-        }
-        spaces = TypeAdapter(list[FarmaCentralSpace]).validate_python(spaces_payload)
-        # Malformed or missing prices cannot authorize a bid.
-        prices = {}
-        for row in price_payload:
-            value = Decimal(str(row.get("price", 0)))
-            if value.is_finite() and value > 0:
-                prices[row["sku"]] = value
+            catalog = {
+                p.sku: p
+                for p in TypeAdapter(list[FarmaCentralProduct]).validate_python(
+                    catalog_payload
+                )
+            }
+            spaces = TypeAdapter(list[FarmaCentralSpace]).validate_python(
+                spaces_payload
+            )
+            # Malformed or missing prices cannot authorize a bid.
+            prices = {}
+            for row in price_payload:
+                value = Decimal(str(row.get("price", 0)))
+                if value.is_finite() and value > 0:
+                    prices[row["sku"]] = value
         now = datetime.now(UTC)
         eligible_locations = {
             s.external_id for s in spaces if not s.quarantine and not s.check_out
         }
         stock = defaultdict(int)
+        own_stock = set()
         for unit in self.session.scalars(
             select(Unit)
             .join(Lot)
@@ -111,7 +135,10 @@ class ScarcityProcurementService:
             .join(Location)
             .where(
                 Unit.status == "available",
-                Unit.effective_expires_at > demand.deadline,
+                ~Lot.external_lot_id.startswith("unreported:"),
+                ~Lot.external_lot_id.startswith("production:"),
+                Unit.effective_expires_at
+                > (now if self.tolerant_inventory else demand.deadline),
                 ~Unit.order_assignment.has(),
                 Unit.lot_id.not_in(select(blocked_lots().c.lot_id)),
                 Location.code.in_(eligible_locations),
@@ -121,21 +148,90 @@ class ScarcityProcurementService:
             )
         ):
             if (
+                self.tolerant_inventory
+                and unit.lot.product.sku == demand.sku
+                and unit.effective_expires_at <= demand.deadline
+            ):
+                continue
+            if not has_official_lineage(unit.lot, allow_external=True):
+                continue
+            if (
                 not catalog[unit.lot.product.sku].storage.cold
                 or unit.current_location.is_refrigerated
             ):
                 stock[unit.lot.product.sku] += 1
-        # Unassigned portions of accepted orders also commit free physical stock.
-        for item in self.session.scalars(
-            select(OrderItem)
-            .join(Order)
-            .where(
-                Order.status.in_([OrderStatus.ACCEPTED, OrderStatus.PAID]),
+                if unit.lot.produced_by:
+                    own_stock.add(unit.lot.product.sku)
+        protected = {}
+        if self.tolerant_inventory and demand.includes_committed:
+            commitments = defaultdict(int)
+
+            def ahead(priority, deadline):
+                return priority < demand.priority or (
+                    priority == demand.priority and deadline < demand.deadline
+                )
+
+            for item in self.session.scalars(
+                select(OrderItem)
+                .join(Order)
+                .where(
+                    Order.status.in_(
+                        [OrderStatus.RECEIVED, OrderStatus.ACCEPTED, OrderStatus.PAID]
+                    ),
+                )
+            ):
+                deadline = item.order.delivery_deadline
+                priority = (
+                    0
+                    if item.order.status in {OrderStatus.ACCEPTED, OrderStatus.PAID}
+                    else 1
+                )
+                if (
+                    item.sku != demand.sku
+                    and (deadline is None or deadline > now)
+                    and ahead(priority, deadline or demand.deadline)
+                ):
+                    commitments[item.sku] += max(
+                        0, item.quantity - len(item.assigned_units)
+                    )
+            for state in self.session.scalars(
+                select(ReplenishmentState).where(
+                    ReplenishmentState.period_id == self.period.id,
+                    ReplenishmentState.goal.is_not(None),
+                )
+            ):
+                goal = state.goal
+                if not goal:
+                    continue
+                deadline = datetime.fromisoformat(goal["deadline"])
+                if (
+                    state.sku != demand.sku
+                    and deadline > now
+                    and ahead(goal.get("priority", 2), deadline)
+                ):
+                    commitments[state.sku] = max(
+                        commitments[state.sku], goal["quantity"]
+                    )
+            protected = protected_stock(
+                catalog, stock, commitments, raw_buffer_batches=0
             )
-        ):
-            stock[item.sku] = max(
-                0, stock[item.sku] - max(0, item.quantity - len(item.assigned_units))
-            )
+            for sku, quantity in protected.items():
+                stock[sku] = max(0, stock[sku] - quantity)
+        else:
+            # Legacy callers provide a new demand in addition to existing commitments.
+            for item in self.session.scalars(
+                select(OrderItem)
+                .join(Order)
+                .where(
+                    Order.status.in_([OrderStatus.ACCEPTED, OrderStatus.PAID]),
+                )
+            ):
+                if demand.includes_committed and item.sku == demand.sku:
+                    continue
+                stock[item.sku] = max(
+                    0,
+                    stock[item.sku] - max(0, item.quantity - len(item.assigned_units)),
+                )
         incoming = {}
         for run in self.session.scalars(
             select(ProductionRun).where(
@@ -149,6 +245,17 @@ class ScarcityProcurementService:
                 qty + run.expected_quantity,
                 max(seconds, (run.available_at - now).total_seconds(), 0),
             )
+        pending_supplies = set()
+        for state in self.session.scalars(
+            select(ReplenishmentState).where(
+                ReplenishmentState.period_id == self.period.id,
+                ReplenishmentState.pending_operation.is_not(None),
+            )
+        ):
+            op = state.pending_operation or {}
+            if op.get("kind") == "supply":
+                pending_supplies.add(op["sku"])
+        # Pending raw receipts prevent another kit buying the same missing material.
         incoming_role = or_(
             and_(
                 MarketOffer.side == MarketOfferSide.BUY,
@@ -210,7 +317,33 @@ class ScarcityProcurementService:
                 sku=sku, side="sell", state="open"
             )
         self.session.commit()
-        return ProcurementPlanner(
+        # Estimates for already received stock; these never replace invoices.
+        # Known purchases are a reference estimate, not an inferred unit-to-trade
+        # price link. Retain the highest observed price when the stock is mixed.
+        stock_unit_costs = {}
+        if demand.max_outlay is not None:
+            for request in self.session.scalars(
+                select(ProcurementRequest)
+                .where(
+                    ProcurementRequest.period_id == self.period.id,
+                    ProcurementRequest.status == "acquired",
+                )
+                .order_by(ProcurementRequest.created_at)
+            ):
+                acquisition = (request.decision or {}).get("acquisition")
+                if acquisition:
+                    sku = acquisition["sku"]
+                    stock_unit_costs[sku] = max(
+                        stock_unit_costs.get(sku, Decimal(0)),
+                        Decimal(acquisition["cost"]) / acquisition["quantity"],
+                    )
+            for sku in own_stock & stock_unit_costs.keys():
+                # Mixed stock has no exact purchase-to-unit price evidence.
+                # Do not revalue own manufactured units at a cheaper trade price.
+                estimated = replacement_cost(catalog, sku)
+                if estimated is not None:
+                    stock_unit_costs[sku] = max(stock_unit_costs[sku], estimated)
+        plan = ProcurementPlanner(
             catalog,
             prices,
             offers,
@@ -220,8 +353,11 @@ class ScarcityProcurementService:
             now=now,
             free_space=free_space,
             cold_space=cold_space,
-            pending_skus={o.sku for o in active if o.status != "open"},
+            pending_skus={o.sku for o in active if o.status != "open"}
+            | pending_supplies,
+            stock_unit_costs=stock_unit_costs,
         ).plan(demand)
+        return plan.model_copy(update={"protected_stock": protected})
 
     async def ensure(
         self, request_key: str, demand: ProcurementDemand
@@ -247,13 +383,28 @@ class ScarcityProcurementService:
                 )
                 self.session.add(row)
                 self.session.commit()
-            elif row.demand != payload:
+            elif (
+                ProcurementDemand.model_validate(row.demand).model_dump(mode="json")
+                != payload
+            ):
                 raise ValueError("Request key already belongs to a different demand")
             now = datetime.now(UTC)
             if row.status in {"acquired", "ready"}:
                 return row
             if row.next_retry_at and row.next_retry_at > now:
                 return row
+            cooldown = self.session.scalar(
+                select(func.max(ProcurementRequest.next_retry_at)).where(
+                    ProcurementRequest.period_id == self.period.id,
+                    ProcurementRequest.http_status.in_([401, 403, 429]),
+                )
+            )
+            if cooldown and cooldown > now:
+                row.next_retry_at = cooldown
+                row.last_error = "Market authentication/rate cooldown"
+                self.session.commit()
+                return row
+            row.http_status = None
             row.next_retry_at = now + timedelta(seconds=60)
             self.session.commit()
             try:
@@ -329,12 +480,40 @@ class ScarcityProcurementService:
                         > demand.deadline
                     ):
                         raise ValueError("Insufficient time after refreshing the offer")
+                    if self.session.scalar(
+                        select(ProductionRun.id)
+                        .where(
+                            ProductionRun.expected_sku == official.sku,
+                            ProductionRun.completed_at.is_(None),
+                        )
+                        .limit(1)
+                    ):
+                        row.status, row.last_error = (
+                            "waiting",
+                            "Own production of this SKU is still pending",
+                        )
+                        self.session.commit()
+                        return row
                     local = self.custody._store_offer(official, status="accepting")
                     row.market_offer_id = local.id
                     row.status = "acceptance_pending"
                     self.session.commit()
                     await self.custody.accept_sell(official)
                 else:
+                    if self.session.scalar(
+                        select(ProductionRun.id)
+                        .where(
+                            ProductionRun.expected_sku == action.sku,
+                            ProductionRun.completed_at.is_(None),
+                        )
+                        .limit(1)
+                    ):
+                        row.status, row.last_error = (
+                            "waiting",
+                            "Own production of this SKU is still pending",
+                        )
+                        self.session.commit()
+                        return row
                     count = self.session.scalar(
                         select(func.count())
                         .select_from(MarketOffer)
@@ -342,7 +521,7 @@ class ScarcityProcurementService:
                             MarketOffer.period_id == self.period.id,
                             MarketOffer.publisher_group_id == self.period.group_id,
                             MarketOffer.status.not_in(
-                                ["cancelled", "expired", "failed"]
+                                ["cancelled", "expired", "closed", "failed"]
                             ),
                         )
                     )
@@ -392,6 +571,7 @@ class ScarcityProcurementService:
                     if local.external_offer_id is None:
                         local.status = "failed"
                         row.market_offer_id = None
+                row.http_status = getattr(exc, "status_code", None)
                 row.last_error = type(exc).__name__
                 row.status = "uncertain" if row.market_offer_id else "waiting"
                 row.next_retry_at = now + timedelta(
@@ -412,7 +592,11 @@ class ScarcityProcurementService:
         official = await self.trades.get_offer(local.external_offer_id)
         trade = await self.custody.reconcile_offer(official)
         if trade:
-            await InventorySyncService(self.inventory, self.session).synchronize()
+            sync = InventorySyncService(self.inventory, self.session)
+            if self.tolerant_inventory:
+                await sync.synchronize(tolerate_changes=True)
+            else:
+                await sync.synchronize()
             local.reconciled_at = datetime.now(UTC)
             row.status, row.last_error = "acquired", None
             row.decision = (row.decision or {}) | {
@@ -446,7 +630,7 @@ class ScarcityProcurementService:
                     else await self.preview(demand, replacing_offer_id=local.id)
                 )
                 better_route = plan is not None and (
-                    plan.status == "ready"
+                    plan.status in {"ready", "produce", "direct"}
                     or any(a.kind == "accept" for a in plan.actions)
                 )
                 if expired or better_route:

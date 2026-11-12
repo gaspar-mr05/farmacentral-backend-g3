@@ -53,6 +53,7 @@ from app.models.recall import (
     RecallStatus,
     RecallUnit,
 )
+from app.models.replenishment import ReplenishmentState
 from app.models.unit import Unit
 
 __all__ = [
@@ -73,6 +74,7 @@ __all__ = [
     "MarketOfferReservation",
     "MarketOfferSide",
     "ProcurementRequest",
+    "ReplenishmentState",
     "Product",
     "ProductCategory",
     "Location",

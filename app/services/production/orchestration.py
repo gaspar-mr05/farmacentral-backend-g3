@@ -13,7 +13,15 @@ from app.clients.farma_central import (
     FarmaCentralInvalidResponseError,
     solve_challenge,
 )
-from app.models import Location, Lot, Product, ProductionRun, Unit
+from app.models import (
+    Location,
+    Lot,
+    MarketOfferReservation,
+    Product,
+    ProductionRun,
+    Unit,
+)
+from app.queries.recalls import blocked_lots
 from app.schemas.farma_central import (
     FarmaCentralChallengeResponse,
     FarmaCentralProduct,
@@ -59,6 +67,7 @@ async def produce(
     client: FarmaCentralClient,
     sku: str,
     quantity: int,
+    operation_key: UUID | None = None,
 ) -> tuple[ProductionRun, FarmaCentralSupplyResponse]:
     """Produce any packaging SKU and persist the exact consumed units."""
     with production_lock(session):
@@ -73,7 +82,13 @@ async def produce(
             raise ProductionBusyError(
                 "Recover pending production before starting another run"
             )
-        return await _produce(session, client=client, sku=sku, quantity=quantity)
+        return await _produce(
+            session,
+            client=client,
+            sku=sku,
+            quantity=quantity,
+            operation_key=operation_key,
+        )
 
 
 async def _produce(
@@ -82,6 +97,7 @@ async def _produce(
     client: FarmaCentralClient,
     sku: str,
     quantity: int,
+    operation_key: UUID | None = None,
 ) -> tuple[ProductionRun, FarmaCentralSupplyResponse]:
     recipe = await _get_recipe(client, sku)
     _validate_quantity(recipe, quantity)
@@ -103,6 +119,7 @@ async def _produce(
             expected_quantity=quantity,
             available_at=supply.available_at,
         )
+        run.operation_key = operation_key
         consume_units_for_run(
             session,
             production_run_id=run.id,
@@ -215,6 +232,11 @@ async def _resolve_input_units(
                     Product.sku == component.sku,
                     Unit.current_location_id == packaging_location.id,
                     Unit.status == "available",
+                    ~Unit.order_assignment.has(),
+                    ~Unit.market_reservations.any(
+                        MarketOfferReservation.released_at.is_(None)
+                    ),
+                    Unit.lot_id.not_in(select(blocked_lots().c.lot_id)),
                     Unit.effective_expires_at > now,
                 )
                 .order_by(Unit.effective_expires_at, Unit.id)

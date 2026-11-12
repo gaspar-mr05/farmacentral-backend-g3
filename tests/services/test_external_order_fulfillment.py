@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.clients.purchase_orders import PurchaseOrdersHTTPError
 from app.core.config import Settings
 from app.models import ExternalOrderStatus, Location, OrderItem, OrderStatus
 from app.services.orders import ExternalOrderFulfillmentService
@@ -25,6 +26,24 @@ class FakePurchaseOrders:
             cantidad=1,
             despachado=1,
         )
+
+
+@pytest.mark.anyio
+async def test_rate_limit_stops_batch_and_returns_server_cooldown(db_session):
+    now = datetime.now(UTC)
+    for index in range(2):
+        order = add_accepted_order(
+            db_session, "KIT-A", f"{index:024x}", now + timedelta(hours=index + 1)
+        )
+        order.status = OrderStatus.RECEIVED
+    db_session.commit()
+    orders = AsyncMock()
+    orders.get_order.side_effect = PurchaseOrdersHTTPError(429, retry_after_seconds=90)
+    result = await ExternalOrderFulfillmentService(
+        AsyncMock(), orders, db_session, settings=make_settings()
+    ).process_pending()
+    assert result.failed == 1 and result.retry_after_seconds == 90
+    orders.get_order.assert_awaited_once()
 
 
 def add_accepted_order(

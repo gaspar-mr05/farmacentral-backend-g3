@@ -64,6 +64,11 @@ def main():
     )
     parser.add_argument("--expected-revenue", type=Decimal, required=True)
     parser.add_argument("--other-costs", type=Decimal, default=Decimal(0))
+    parser.add_argument(
+        "--max-outlay",
+        type=Decimal,
+        help="Maximum full outlay including --other-costs; separate from consumption",
+    )
     parser.add_argument("--minimum-margin", type=Decimal, default=Decimal("0.10"))
     parser.add_argument("--execute", action="store_true")
     parser.add_argument(
@@ -80,6 +85,7 @@ def main():
             deadline=args.deadline,
             expected_revenue=args.expected_revenue,
             other_costs=args.other_costs,
+            max_outlay=args.max_outlay,
             minimum_margin=args.minimum_margin,
         )
     except ValidationError as exc:

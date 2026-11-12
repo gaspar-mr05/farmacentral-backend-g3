@@ -1,5 +1,6 @@
 import os
 import tempfile
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urljoin
@@ -71,6 +72,11 @@ class Settings(BaseSettings):
     replenishment_minimum_stock: int = Field(default=2, ge=1)
     replenishment_target_stock: int = Field(default=6, ge=1)
     replenishment_minimum_lifetime_seconds: float = Field(default=14400, ge=0)
+    # Optional initial spending envelope per E3 period; defaults to one target
+    # basket at current prices. Confirmed positive invoiced margin extends it.
+    replenishment_spending_limit: Decimal | None = Field(
+        default=None, gt=0, allow_inf_nan=False
+    )
     messaging_oidc_audience: AnyHttpUrl | None = None
     messaging_oidc_service_account: str = Field(
         default="mensajeria@taller-integracion-310700.iam.gserviceaccount.com",

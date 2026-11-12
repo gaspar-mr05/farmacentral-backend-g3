@@ -24,6 +24,7 @@ async def run(*, once: bool = False) -> None:
     ):
         while True:
             failed = False
+            retry_delay = settings.external_order_poll_interval_seconds
             try:
                 with SessionLocal() as session:
                     result = await ExternalOrderFulfillmentService(
@@ -39,6 +40,7 @@ async def run(*, once: bool = False) -> None:
                     result.failed,
                 )
                 failed = result.failed > 0
+                retry_delay = max(retry_delay, result.retry_after_seconds)
             except SQLAlchemyError:
                 logger.error(
                     "External order fulfillment failed: database error",
@@ -50,7 +52,7 @@ async def run(*, once: bool = False) -> None:
                 if failed:
                     raise SystemExit(1)
                 return
-            await asyncio.sleep(settings.external_order_poll_interval_seconds)
+            await asyncio.sleep(retry_delay)
 
 
 def main() -> None:

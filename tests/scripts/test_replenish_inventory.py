@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock, MagicMock, Mock
+from uuid import uuid4
 
 import pytest
 
@@ -99,3 +100,36 @@ async def test_worker_logs_local_diagnostics_and_cycle_metrics(
     assert "private external body" not in caplog.text
     if detail:
         assert detail in caplog.text
+
+
+@pytest.mark.anyio
+async def test_e3_worker_reuses_clients_and_runs_cooperative_policy(monkeypatch):
+    clients = [AsyncMock() for _ in range(4)]
+    for name, client in zip(
+        (
+            "FarmaCentralClient",
+            "TradesClient",
+            "PurchaseOrdersClient",
+            "MarketPriceClient",
+        ),
+        clients,
+        strict=True,
+    ):
+        client.__aenter__.return_value = client
+        monkeypatch.setattr(module, name, Mock(return_value=client))
+    settings = make_settings(billing_period_id=str(uuid4()))
+    monkeypatch.setattr(module, "get_settings", lambda: settings)
+    monkeypatch.setattr(module, "SessionLocal", MagicMock())
+    period = Mock()
+    monkeypatch.setattr(module, "market_period", Mock(return_value=period))
+    service = Mock(poll=AsyncMock(return_value={"failed": 0}))
+    cooperative = Mock(return_value=service)
+    legacy = Mock()
+    monkeypatch.setattr(module, "E3ReplenishmentService", cooperative)
+    monkeypatch.setattr(module, "KitProductionService", legacy)
+    await module.run(once=True)
+    service.poll.assert_awaited_once()
+    legacy.assert_not_called()
+    assert cooperative.call_args.args[:4] == tuple(clients)
+    for client in clients:
+        client.__aexit__.assert_awaited_once()

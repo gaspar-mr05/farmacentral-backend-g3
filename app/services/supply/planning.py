@@ -1,5 +1,6 @@
-"""Compare complete acquisition costs; recipes are substitutes, never disassembly."""
+"""Compare acquisition routes without confusing useful consumption with outlay."""
 
+from decimal import ROUND_DOWN, Decimal
 from math import ceil
 
 from app.core.scarcity import GROUP3_DIRECT, GROUP3_MARKET
@@ -8,6 +9,7 @@ from app.schemas.procurement import (
     ProcurementDemand,
     ProcurementPlan,
 )
+from app.services.trades.surplus_planning import replacement_cost
 
 
 def direct_allowed(product, group_id):
@@ -37,15 +39,20 @@ class ProcurementPlanner:
         cold_space,
         max_lot=200,
         pending_skus=frozenset(),
+        stock_unit_costs=None,
     ):
         self.pending_skus = pending_skus
         self.catalog, self.prices, self.offers = catalog, prices, offers
         self.stock, self.incoming = stock, incoming
         self.group_id, self.now = group_id, now
         self.free_space, self.cold_space, self.max_lot = free_space, cold_space, max_lot
+        self.stock_unit_costs = stock_unit_costs or {}
 
     def plan(self, demand: ProcurementDemand) -> ProcurementPlan:
         self.budget = demand.budget
+        self.outlay_budget = demand.outlay_budget
+        self.allocate_costs = demand.max_outlay is not None
+        self.blockers = []
         available = dict(self.stock)
         available.update(
             {("incoming", sku): qty for sku, (qty, _) in self.incoming.items()}
@@ -60,40 +67,66 @@ class ProcurementPlanner:
         if plan is None:
             return ProcurementPlan(
                 status="waiting",
-                reason="No route with known cost, capacity and deadline",
-            )
-        if plan.cost > demand.budget:
-            return ProcurementPlan(
-                status="waiting",
-                reason="Expected margin does not cover the complete acquisition cost",
-            )
-        if plan.seconds > (demand.deadline - self.now).total_seconds():
-            return ProcurementPlan(
-                status="waiting",
-                reason="Insufficient time for acquisition and remaining fabrication",
+                reason="; ".join(dict.fromkeys(self.blockers))
+                or f"{demand.sku}: no route with known cost, capacity and deadline",
             )
         return plan
 
+    def _unit_cost(self, sku):
+        if sku in self.stock_unit_costs:
+            return self.stock_unit_costs[sku]
+        return replacement_cost(self.catalog, sku)
+
+    def _economic_cost(self, plan):
+        return plan.consumed_cost if self.allocate_costs else plan.cost
+
     def _node(self, sku, quantity, stock, path, deadline):
         if sku in path or sku not in self.catalog:
+            self.blockers.append(f"{sku}: missing or cyclic recipe")
             return None, stock
         product = self.catalog[sku]
         free = min(quantity, stock.get(sku, 0))
         stock[sku] = stock.get(sku, 0) - free
+        free_cost = Decimal(0)
+        if self.allocate_costs and free:
+            unit_cost = stock.get(("unit_cost", sku))
+            if unit_cost is None:
+                unit_cost = self._unit_cost(sku)
+            if unit_cost is None:
+                self.blockers.append(f"{sku}: unknown unit cost for usable stock")
+                return None, stock
+            free_cost = unit_cost * free
         missing = quantity - free
         if not missing:
-            return ProcurementPlan(status="ready"), stock
+            return ProcurementPlan(status="ready", consumed_cost=free_cost), stock
         if sku in self.pending_skus:
+            pending_cost = self._unit_cost(sku) if self.allocate_costs else Decimal(0)
+            if pending_cost is None:
+                self.blockers.append(
+                    f"{sku}: pending acquisition has unknown unit cost"
+                )
+                return None, stock
             return ProcurementPlan(
-                status="waiting", reason="Market purchase awaiting confirmation/receipt"
+                status="waiting",
+                consumed_cost=free_cost + missing * pending_cost,
+                reason="Market purchase awaiting confirmation/receipt",
             ), stock
         incoming = min(missing, stock.get(("incoming", sku), 0))
         stock[("incoming", sku)] = stock.get(("incoming", sku), 0) - incoming
         missing -= incoming
+        if self.allocate_costs and incoming:
+            unit_cost = self._unit_cost(sku)
+            if unit_cost is None:
+                self.blockers.append(
+                    f"{sku}: confirmed production has unknown unit cost"
+                )
+                return None, stock
+            free_cost += unit_cost * incoming
         incoming_seconds = self.incoming.get(sku, (0, 0))[1]
         if not missing:
             return ProcurementPlan(
                 status="waiting",
+                consumed_cost=free_cost,
                 seconds=incoming_seconds,
                 reason="Confirmed supply/production pending",
             ), stock
@@ -117,6 +150,7 @@ class ProcurementPlanner:
                     status="market",
                     seconds=60,
                     cost=offer.unit_price * offer.quantity,
+                    consumed_cost=free_cost + offer.unit_price * missing,
                     actions=[
                         ProcurementAction(
                             kind="accept",
@@ -142,6 +176,7 @@ class ProcurementPlanner:
                 ProcurementPlan(
                     status="direct",
                     cost=product.cost * batch_quantity,
+                    consumed_cost=free_cost + product.cost * missing,
                     seconds=60 * product.production.time,
                     actions=[
                         ProcurementAction(
@@ -179,6 +214,13 @@ class ProcurementPlanner:
                 make = ProcurementPlan(
                     status="waiting" if pending else "produce",
                     cost=product.cost * batch_quantity + sum(c.cost for c in children),
+                    consumed_cost=free_cost
+                    + (
+                        product.cost * batch_quantity
+                        + sum(c.consumed_cost or Decimal(0) for c in children)
+                    )
+                    * Decimal(missing)
+                    / batch_quantity,
                     seconds=60 * product.production.time
                     + sum(c.seconds for c in children),
                     actions=[a for c in children for a in c.actions],
@@ -186,11 +228,28 @@ class ProcurementPlanner:
                 options.append(make)
         # A bid is a fallback, not confirmed stock or a faster viable route.
         price = self.prices.get(sku)
+        if price and self.allocate_costs:
+            # Bid no more than the useful demand can afford, while respecting
+            # the market's reference-price band and paying the whole lot.
+            proposed = min(
+                price,
+                (self.budget - free_cost) / missing,
+                self.outlay_budget / batch_quantity,
+            ).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+            if proposed < price * Decimal("0.5"):
+                self.blockers.append(
+                    f"{sku}: affordable bid {proposed} below market floor "
+                    f"{price * Decimal('0.5')}"
+                )
+                price = None
+            else:
+                price = proposed
         if price and batch_quantity <= self.max_lot:
             options.append(
                 ProcurementPlan(
                     status="waiting",
                     cost=price * batch_quantity,
+                    consumed_cost=free_cost + price * missing,
                     seconds=3600,
                     actions=[
                         ProcurementAction(
@@ -211,19 +270,60 @@ class ProcurementPlanner:
                 option.reason = (
                     "Partial confirmed supply pending; acquire only the remainder"
                 )
-        feasible = [
-            p
-            for p in options
-            if p.cost <= self.budget
-            and self._fits(p)
-            and p.seconds <= (deadline - self.now).total_seconds()
-        ]
+        feasible = []
+        for option in options:
+            causes = []
+            if self._economic_cost(option) > self.budget:
+                causes.append(
+                    f"consumption cost {self._economic_cost(option)} "
+                    f"exceeds {self.budget}"
+                )
+            if option.cost > self.outlay_budget:
+                causes.append(f"full outlay {option.cost} exceeds {self.outlay_budget}")
+            if not self._fits(option):
+                causes.append(
+                    f"capacity/offer conflict (free={self.free_space}, "
+                    f"cold={self.cold_space})"
+                )
+            if option.seconds > (deadline - self.now).total_seconds():
+                causes.append(
+                    f"{option.seconds:g}s acquisition/production misses deadline"
+                )
+            if causes:
+                self.blockers.append(f"{sku} ({option.status}): {', '.join(causes)}")
+            else:
+                feasible.append(option)
         if not feasible:
+            if not options:
+                self.blockers.append(
+                    f"{sku}: no usable offer/recipe; cost={product.cost}, "
+                    f"time={product.production.time}, batch={batch_quantity}, "
+                    f"cold_space={self.cold_space}"
+                )
             return None, stock
-        chosen = min(feasible, key=lambda p: (p.status == "waiting", p.cost, p.seconds))
-        if chosen is make:
-            return chosen, branch_stock
-        return chosen, stock
+        chosen = min(
+            feasible,
+            key=lambda p: (
+                p.status == "waiting",
+                self._economic_cost(p),
+                p.cost,
+                p.seconds,
+            ),
+        )
+        remaining = branch_stock if chosen is make else stock
+        if self.allocate_costs:
+            acquired = (
+                batch_quantity
+                if chosen is make
+                else chosen.actions[0].quantity
+                if chosen.actions
+                else missing
+            )
+            # Only virtual planning stock; bids and future manufacture never
+            # become physical stock or confirmed customer capacity here.
+            remaining[sku] = remaining.get(sku, 0) + acquired - missing
+            remaining[("unit_cost", sku)] = (chosen.consumed_cost - free_cost) / missing
+        return chosen, remaining
 
     def _fits(self, plan):
         ids = [a.offer_id for a in plan.actions if a.offer_id]

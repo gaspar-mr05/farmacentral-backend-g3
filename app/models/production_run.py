@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,10 +16,14 @@ if TYPE_CHECKING:
 
 class ProductionRun(Base, TimestampMixin):
     __tablename__ = "production_runs"
+    __table_args__ = (
+        UniqueConstraint("operation_key", name="uq_production_operation_key"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    operation_key: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     output_lot_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("lots.id"), unique=True, nullable=True
     )

@@ -28,6 +28,7 @@ class ExternalOrderFulfillmentResult:
     completed: int = 0
     pending: int = 0
     failed: int = 0
+    retry_after_seconds: float = 0
 
 
 class ExternalOrderFulfillmentService:
@@ -165,11 +166,17 @@ class ExternalOrderFulfillmentService:
                 result.failed += 1
                 logger.warning(
                     "External order fulfillment failed: order_id=%s "
-                    "local_order_id=%s error_type=%s",
+                    "local_order_id=%s error_type=%s http_status=%s",
                     external_order_id,
                     order_id,
                     type(exc).__name__,
+                    getattr(exc, "status_code", None),
                 )
+                if getattr(exc, "status_code", None) == 429:
+                    result.retry_after_seconds = max(
+                        60, getattr(exc, "retry_after_seconds", None) or 0
+                    )
+                    break
         return result
 
     async def _refresh_official_state(self, order: Order) -> None:

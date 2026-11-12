@@ -40,11 +40,17 @@ class InventorySyncService:
     """Coordinates collection, normalization, and atomic local persistence."""
 
     def __init__(self, client: FarmaCentralClient, session: Session) -> None:
+        self._client = client
         self._collector = InventoryCollector(client)
         self._session = session
 
-    async def synchronize(self) -> InventorySyncResult:
-        catalog, spaces, units, incomplete_groups = await self._collector.collect()
+    async def synchronize(self, *, tolerate_changes=False) -> InventorySyncResult:
+        collector = (
+            InventoryCollector(self._client, tolerate_changes=True)
+            if tolerate_changes
+            else self._collector
+        )
+        catalog, spaces, units, incomplete_groups = await collector.collect()
         recently_produced_at = datetime.now(UTC) - timedelta(minutes=10)
         production_skus = set(
             self._session.scalars(
@@ -54,7 +60,7 @@ class InventorySyncService:
                 )
             )
         )
-        if production_skus:
+        if production_skus and not tolerate_changes:
             production_units = await self._collector.collect_units_for_skus(
                 spaces, production_skus
             )
@@ -70,6 +76,7 @@ class InventorySyncService:
                 self._session,
                 data,
                 incomplete_groups=incomplete_groups,
+                uncertain_missing=tolerate_changes,
             )
             self._session.commit()
             return result
@@ -83,6 +90,7 @@ def sync_inventory(
     data: InventoryData,
     *,
     incomplete_groups: set[tuple[str, str]] | None = None,
+    uncertain_missing: bool = False,
 ) -> InventorySyncResult:
     products = upsert_products(session, data.products)
     locations = upsert_locations(session, data.locations)
@@ -102,6 +110,7 @@ def sync_inventory(
         lots.by_external_id,
         locations.by_code,
         incomplete_groups=incomplete_groups,
+        uncertain_missing=uncertain_missing,
     )
     _link_new_production_outputs(session, units.created_units)
     session.flush()

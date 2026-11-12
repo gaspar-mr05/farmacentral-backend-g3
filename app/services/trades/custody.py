@@ -22,6 +22,7 @@ from app.models import (
     MarketRole,
     MarketTrade,
     Product,
+    ProductionRun,
     Unit,
 )
 from app.queries.recalls import blocked_lots
@@ -160,6 +161,17 @@ class TradeCustodyService:
     async def accept_sell(self, official: TradeOffer) -> tuple[TradeOffer, MarketTrade]:
         """Accept a sell offer; receipt is recorded after inventory sync."""
         self._validate_counterparty_offer(official, side=MarketOfferSide.SELL)
+        if self._session.scalar(
+            select(ProductionRun.id)
+            .where(
+                ProductionRun.expected_sku == official.sku,
+                ProductionRun.completed_at.is_(None),
+            )
+            .limit(1)
+        ):
+            raise InvalidTradeStateError(
+                "Recover own production before buying this SKU"
+            )
         offer = self._store_offer(official, status="accepting")
         try:
             accepted = await self._trades.accept_offer(official.id)

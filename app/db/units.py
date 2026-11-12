@@ -53,6 +53,7 @@ def upsert_units(
     locations_by_code: dict[str, Location],
     *,
     incomplete_groups: set[tuple[str, str]] | None = None,
+    uncertain_missing: bool = False,
 ) -> UnitUpsertResult:
     records = tuple(records)
     units = {
@@ -141,13 +142,16 @@ def upsert_units(
     incomplete_groups = incomplete_groups or set()
     for external_id, unit in units.items():
         group = (unit.current_location.code, unit.lot.product.sku)
-        if (
-            external_id not in visible_ids
-            and group not in incomplete_groups
-            and unit.status == "available"
-        ):
-            unit.status = "unavailable"
-            updated += 1
+        if external_id not in visible_ids and unit.status in {
+            "available",
+            "inventory_uncertain",
+        }:
+            if group not in incomplete_groups:
+                unit.status = "unavailable"
+                updated += 1
+            elif uncertain_missing and unit.status == "available":
+                unit.status = "inventory_uncertain"
+                updated += 1
 
     return UnitUpsertResult(
         created,

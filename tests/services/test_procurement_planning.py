@@ -192,3 +192,153 @@ def test_partial_confirmed_supply_only_buys_the_net_remainder():
     assert result.actions[0].useful_quantity == 3
     assert result.cost == 3
     assert result.seconds == 120
+
+
+def test_useful_consumption_and_full_lot_outlay_are_separate():
+    products = {OTHER: product(OTHER, batch=10, cost=2)}
+    result = planner(catalog=products).plan(
+        demand(
+            sku=OTHER,
+            quantity=1,
+            expected_revenue=5,
+            max_outlay=20,
+        )
+    )
+    assert result.status == "direct"
+    assert result.cost == 20 and result.consumed_cost == 2
+    assert result.actions[0].quantity == 10
+    denied = planner(catalog=products).plan(
+        demand(
+            sku=OTHER,
+            quantity=1,
+            expected_revenue=5,
+            max_outlay=19,
+        )
+    )
+    assert not denied.actions
+    assert OTHER in denied.reason and "full outlay 20 exceeds 19" in denied.reason
+
+
+def test_production_allocation_includes_all_stages_and_keeps_full_outlay():
+    products = {
+        OTHER: product(OTHER, batch=10, cost=2),
+        MID: product(MID, components=[(OTHER, 1)], batch=4, cost=1),
+        KIT: product(KIT, components=[(MID, 1)], cost=1),
+    }
+    result = planner(catalog=products).plan(
+        demand(
+            quantity=1,
+            expected_revenue=10,
+            max_outlay=30,
+        )
+    )
+    # Buy 10 raw (20), manufacture 4 intermediate (4), finish 1 kit (1).
+    # Consumption is raw 2 + intermediate manufacture 1 + kit manufacture 1.
+    assert result.status == "produce"
+    assert result.cost == 25 and result.consumed_cost == 4
+
+
+def test_shared_recipe_branches_reuse_lot_surplus_without_double_purchase():
+    products = {
+        OTHER: product(OTHER, batch=10, cost=2),
+        MID: product(MID, components=[(OTHER, 1)], cost=1),
+        KIT: product(KIT, components=[(MID, 1), (OTHER, 1)], cost=1),
+    }
+    result = planner(catalog=products).plan(
+        demand(
+            quantity=1,
+            expected_revenue=10,
+            max_outlay=25,
+        )
+    )
+    assert result.cost == 22 and result.consumed_cost == 6
+    assert len(result.actions) == 1 and result.actions[0].quantity == 10
+
+
+def test_expensive_usable_stock_is_not_treated_as_free_in_new_cost_policy():
+    products = {
+        OTHER: product(OTHER, cost=8),
+        KIT: product(KIT, components=[(OTHER, 1)], cost=3),
+    }
+    result = planner(catalog=products, stock={OTHER: 1}).plan(
+        demand(
+            quantity=1,
+            expected_revenue=10,
+            max_outlay=100,
+        )
+    )
+    assert not result.actions
+    assert "consumption cost 11" in result.reason
+
+
+def test_cheaper_known_market_stock_cost_can_replace_catalog_estimate():
+    products = {
+        OTHER: product(OTHER, cost=8),
+        KIT: product(KIT, components=[(OTHER, 1)], cost=3),
+    }
+    result = planner(
+        catalog=products,
+        stock={OTHER: 1},
+        stock_unit_costs={OTHER: Decimal(1)},
+    ).plan(demand(quantity=1, expected_revenue=10, max_outlay=100))
+    assert result.status == "produce"
+    assert result.cost == 3 and result.consumed_cost == 4
+
+
+def test_spending_full_budget_does_not_erase_cost_of_stock_or_allow_more_outlay():
+    products = {
+        OTHER: product(OTHER, cost=2),
+        KIT: product(KIT, components=[(OTHER, 1)], cost=1),
+    }
+    result = planner(catalog=products, stock={OTHER: 1}).plan(
+        demand(
+            quantity=1,
+            expected_revenue=10,
+            other_costs=20,
+            max_outlay=21,
+        )
+    )
+    assert result.cost == 1 and result.consumed_cost == 3
+    denied = planner(catalog=products, stock={OTHER: 1}).plan(
+        demand(
+            quantity=1,
+            expected_revenue=10,
+            other_costs=21,
+            max_outlay=21,
+        )
+    )
+    assert not denied.actions and "full outlay" in denied.reason
+
+
+def test_buy_bid_uses_affordable_price_inside_market_band():
+    result = planner(catalog={RAW: product(RAW)}).plan(
+        demand(
+            sku=RAW,
+            quantity=1,
+            expected_revenue=Decimal("1.50"),
+            max_outlay=10,
+        )
+    )
+    assert result.actions[0].kind == "bid"
+    assert result.cost == result.consumed_cost == Decimal("1.35")
+    denied = planner(catalog={RAW: product(RAW)}).plan(
+        demand(
+            sku=RAW,
+            quantity=1,
+            expected_revenue=Decimal("0.50"),
+            max_outlay=10,
+        )
+    )
+    assert not denied.actions and "below market floor" in denied.reason
+
+
+def test_waiting_offers_still_do_not_become_stock_in_allocated_policy():
+    result = planner(pending_skus={RAW}).plan(
+        demand(
+            sku=RAW,
+            quantity=1,
+            expected_revenue=10,
+            max_outlay=20,
+        )
+    )
+    assert result.status == "waiting" and result.actions == []

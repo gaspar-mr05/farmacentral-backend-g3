@@ -15,8 +15,17 @@ from app.clients.farma_central import (
     FarmaCentralInvalidResponseError,
     FarmaCentralTimeoutError,
 )
+from app.core.config import get_settings
 from app.db.production_runs import find_pending_runs_for_sku
-from app.models import Location, Lot, Product, ProductionRun, Unit
+from app.models import (
+    Location,
+    Lot,
+    MarketOfferReservation,
+    Product,
+    ProductionRun,
+    Unit,
+)
+from app.queries.recalls import blocked_lots
 from app.schemas.farma_central import FarmaCentralProduct
 from app.services.inventory.collection import InventorySnapshotChangedError
 from app.services.inventory.movements import ProductMovementService
@@ -28,6 +37,7 @@ from app.services.production.orchestration import (
     ProductionInputsUnavailableError,
     produce,
 )
+from app.services.supply.planning import direct_allowed
 from app.services.supply.requests import SupplyRequestService
 
 RawMaterialSource = Literal["supply", "sandbox"]
@@ -58,7 +68,9 @@ class KitProductionService:
         *,
         raw_material_source: RawMaterialSource,
         require_official_batches: bool = False,
+        allow_external_batches: bool = False,
     ) -> None:
+        self._allow_external_batches = allow_external_batches
         self._client = client
         self._session = session
         self._raw_material_source = raw_material_source
@@ -378,6 +390,10 @@ class KitProductionService:
                 self._sandbox_requests += 1
             return
 
+        if not direct_allowed(product, get_settings().farma_central_group):
+            raise ProductionCatalogError(
+                f"{product.sku} requires market sourcing; configure an E3 period"
+            )
         batch_size = product.production.batch
         requested_quantity = ceil(missing / batch_size) * batch_size
         logger.info(
@@ -473,16 +489,30 @@ class KitProductionService:
                 Product.sku == sku,
                 Unit.status == "available",
                 ~Unit.order_assignment.has(),
+                ~Unit.market_reservations.any(
+                    MarketOfferReservation.released_at.is_(None)
+                ),
+                Unit.lot_id.not_in(select(blocked_lots().c.lot_id)),
                 Unit.effective_expires_at > datetime.now(UTC),
             )
             .order_by(Unit.effective_expires_at, Unit.id)
         )
         catalog_product = self._catalog.get(sku)
-        if catalog_product is not None and catalog_product.production.at == "packaging":
+        if (
+            catalog_product is not None
+            and catalog_product.production.at == "packaging"
+            and not self._allow_external_batches
+        ):
             statement = statement.where(Lot.produced_by.has())
         units = list(self._session.scalars(statement))
         if self._require_official_batches:
-            units = [unit for unit in units if has_official_lineage(unit.lot)]
+            units = [
+                unit
+                for unit in units
+                if has_official_lineage(
+                    unit.lot, allow_external=self._allow_external_batches
+                )
+            ]
         return units
 
     def _location(self, code: str) -> Location:

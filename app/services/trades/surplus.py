@@ -157,7 +157,9 @@ class SurplusSalesService:
         for request in self.session.scalars(
             select(ProcurementRequest).where(
                 ProcurementRequest.period_id == self.period.id,
-                ProcurementRequest.status.not_in(["acquired", "ready", "expired"]),
+                ProcurementRequest.status.not_in(
+                    ["acquired", "ready", "expired", "superseded"]
+                ),
             )
         ):
             # Pending sourcing is additional protection, never stock capacity.

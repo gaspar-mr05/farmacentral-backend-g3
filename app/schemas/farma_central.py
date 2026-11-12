@@ -28,6 +28,7 @@ class FarmaCentralProduct(BaseModel):
     sellable: bool
     storage: FarmaCentralStorage = Field(default_factory=FarmaCentralStorage)
     components: tuple[FarmaCentralComponent, ...] = ()
+    obsolescence: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     cost: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 

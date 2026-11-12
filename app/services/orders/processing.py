@@ -12,6 +12,7 @@ from app.models import (
     ExternalOrderStatus,
     Location,
     Lot,
+    MarketOfferReservation,
     Order,
     OrderItem,
     OrderStatus,
@@ -20,6 +21,7 @@ from app.models import (
     ProductionRun,
     Unit,
 )
+from app.queries.recalls import blocked_lots
 
 from .service import OrderNotFoundError
 from .state import apply_official_state
@@ -177,6 +179,10 @@ class OrderProcessingService:
                 Unit.effective_expires_at > deadline,
                 Location.is_sellable.is_(True),
                 ~Unit.order_assignment.has(),
+                ~Unit.market_reservations.any(
+                    MarketOfferReservation.released_at.is_(None)
+                ),
+                Unit.lot_id.not_in(select(blocked_lots().c.lot_id)),
             )
         )
         return int(quantity or 0)

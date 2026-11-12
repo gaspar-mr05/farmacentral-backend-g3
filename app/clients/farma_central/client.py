@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import Any
 
 import httpx
@@ -19,6 +20,7 @@ from .exceptions import (
 )
 
 JSONResponse = dict[str, Any] | list[Any]
+logger = logging.getLogger(__name__)
 
 
 class FarmaCentralClient:
@@ -175,6 +177,13 @@ class FarmaCentralClient:
                 break
             await asyncio.sleep(self._retry_after_seconds(response))
 
+        if response.is_error:
+            logger.warning(
+                "Farma Central request failed: %s %s HTTP %s",
+                method,
+                path,
+                response.status_code,
+            )
         self._raise_for_status(response)
         if allow_empty and not response.content:
             return None
