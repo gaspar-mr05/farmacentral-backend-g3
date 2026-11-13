@@ -160,6 +160,7 @@ async def check_invoice(session, billing, period, order_id, side, cache):
         order_id=order_id,
         side=side.value,
         official_status=official.status.value,
+        description=official.description,
         observed_at=datetime.now(UTC).isoformat(),
         principal=str(official.principal),
         interest=str(official.interest),

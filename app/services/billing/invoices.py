@@ -1,11 +1,76 @@
+import re
+
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.clients.billing import BillingInvalidResponseError
-from app.models import Invoice, InvoiceSide, InvoiceStatus
+from app.models import Invoice, InvoiceSide, InvoiceStatus, MarketRole, MarketTrade
 
 from .queue import enqueue_payment
+
+
+def _link_explicit_market_order(session, period, row, invoice, side):
+    """Use a unique official description reference; never infer by amount alone."""
+    if invoice.channel.lower() not in {
+        "market",
+        "mercado",
+    } or row.channel.lower() not in {"market", "mercado"}:
+        return
+    references = {
+        value.lower()
+        for value in re.findall(
+            r"\border\s+([0-9a-f]{24})(?![0-9a-f])", invoice.description, re.IGNORECASE
+        )
+    }
+    if len(references) != 1:
+        return
+    identity = references.pop()
+    trade = session.scalar(
+        select(MarketTrade).where(
+            MarketTrade.period_id == period.id,
+            MarketTrade.external_order_id == identity,
+        )
+    )
+    if trade is None:
+        return
+    role = MarketRole.BUYER if side == InvoiceSide.CLIENT else MarketRole.SELLER
+    supplier = (
+        trade.counterparty_id if role == MarketRole.BUYER else str(period.group_id)
+    )
+    client = str(period.group_id) if role == MarketRole.BUYER else trade.counterparty_id
+    expected = trade.quantity * trade.unit_price
+    if (
+        trade.role != role
+        or invoice.supplier_id != supplier
+        or invoice.client_id != client
+        or invoice.principal != expected
+        or row.principal != expected
+        or invoice.issued_at < trade.closed_at
+    ):
+        raise BillingInvalidResponseError(
+            "Explicit market invoice reference conflicts with trade"
+        )
+    if row.external_order_id not in {None, identity} or row.market_trade_id not in {
+        None,
+        trade.id,
+    }:
+        raise BillingInvalidResponseError(
+            "Invoice already has a different verified association"
+        )
+    other = session.scalar(
+        select(Invoice.id).where(
+            Invoice.period_id == period.id,
+            Invoice.external_order_id == identity,
+            Invoice.id != row.id,
+        )
+    )
+    if other is not None:
+        raise BillingInvalidResponseError(
+            "Another invoice already references this market order"
+        )
+    row.external_order_id = identity
+    row.market_trade_id = trade.id
 
 
 def upsert_invoice(session: Session, period, invoice, side, now) -> Invoice:
@@ -75,6 +140,7 @@ def upsert_invoice(session: Session, period, invoice, side, now) -> Invoice:
         )
         .execution_options(populate_existing=True)
     ).one()
+    _link_explicit_market_order(session, period, row, invoice, side)
     if row.side == InvoiceSide.CLIENT and row.status == InvoiceStatus.PENDING:
         enqueue_payment(session, row)
     return row

@@ -613,3 +613,14 @@ validación oficial con resultados simulados ni elimina la protección de E2.
 En esta sesión se verificaron readiness, lectura SOAP y una única consulta
 sintética autorizada al gateway (465 tokens). Los recorridos completos siguen
 pendientes de acceso a la DB del servidor y de evidencia oficial por flujo.
+
+La conciliación de facturas de mercado puede recuperar el vínculo con la OC
+cuando la descripción oficial contiene una única referencia explícita
+`order <ID de 24 caracteres hexadecimales>`. Antes de guardarlo verifica período,
+rol comprador/vendedor, grupo, contraparte, principal exacto y fecha de cierre.
+No infiere asociaciones por coincidencia de monto ni suma intereses al principal
+para compararlo con la OC. Una descripción ausente, desconocida o ambigua deja
+el vínculo pendiente; una contradicción se reporta como error. El vínculo se
+recupera al volver a observar la factura, incluso si ya está pagada, sin crear
+otra tarea de pago para una factura `paid`. El observador E3 conserva también
+la descripción oficial en su evidencia privada.
