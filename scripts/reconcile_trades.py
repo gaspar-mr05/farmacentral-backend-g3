@@ -99,7 +99,11 @@ async def run(*, period_id: UUID, once=False, interval=60, batch_size=50):
                                 raise SystemExit(1) from None
                         else:
                             queue = trades_queue_snapshot(session, period.id)
-                            incomplete = result["failed"] or result["blocked"]
+                            incomplete = (
+                                result["failed"]
+                                or result["blocked"]
+                                or result["custody_pending"]
+                            )
                             if incomplete:
                                 mark_failure(
                                     session,
@@ -109,11 +113,9 @@ async def run(*, period_id: UUID, once=False, interval=60, batch_size=50):
                                     queue,
                                 )
                             else:
-                                mark_success(
-                                    session, period.id, WORKER_NAME, queue
-                                )
+                                mark_success(session, period.id, WORKER_NAME, queue)
                             if once:
-                                if result["failed"] or result["blocked"]:
+                                if incomplete:
                                     raise SystemExit(1)
                                 return
                         await asyncio.sleep(interval)

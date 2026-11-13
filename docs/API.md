@@ -907,3 +907,15 @@ un chat propio ni una pantalla financiera pública.
 Si el frontend utiliza una unión cerrada para `current_units.status`, debe admitir
 también `recall_pending`, `quarantined` y `expired` para representar el stock físico
 bloqueado sin mostrarlo como vendible.
+
+### Recuperación e incertidumbre de E3 — paso 22
+
+Las rutas operativas siguen siendo exclusivamente de lectura. Un estado
+`acceptance_uncertain` se conserva aunque la observación remota aún sea `open`:
+no autoriza a repetir una aceptación. `creation_uncertain` exige asociar un ID
+oficial verificado antes de conciliar; no se deduce por SKU/precio/fecha.
+Los heartbeats de mercado cuentan los cierres sin evidencia completa de unidades
+como trabajo pendiente; ese ciclo no actualiza `last_success_at` como exitoso.
+Las tareas financieras usan bloqueos por tarea entre procesos, además del bloqueo
+global del worker. Los procedimientos por operación y sus límites están en la
+sección del paso 22 del README; no hay un endpoint que fuerce pagos o reenvíos.

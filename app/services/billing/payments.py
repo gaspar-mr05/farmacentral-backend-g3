@@ -9,6 +9,7 @@ from sqlalchemy import exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.clients.billing import BillingError, BillingInvalidResponseError
+from app.db.operation_locks import operation_lock
 from app.models import (
     BillingAttempt,
     BillingTask,
@@ -208,6 +209,15 @@ class InvoicePaymentService:
         return None
 
     async def _process(self, task):
+        with operation_lock(self.session, f"billing-task:{task.id}") as acquired:
+            if not acquired:
+                return False
+            self.session.refresh(task)
+            if task.status == Status.CONFIRMED:
+                return False
+            return await self._process_locked(task)
+
+    async def _process_locked(self, task):
         now = self._clock()
         row = self.session.get(Invoice, task.invoice_id)
         if (

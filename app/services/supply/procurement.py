@@ -494,7 +494,7 @@ class ScarcityProcurementService:
                         )
                         self.session.commit()
                         return row
-                    local = self.custody._store_offer(official, status="accepting")
+                    local = self.custody._store_offer(official, status="prepared")
                     row.market_offer_id = local.id
                     row.status = "acceptance_pending"
                     self.session.commit()

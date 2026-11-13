@@ -340,6 +340,18 @@ async def test_inquiry_is_classified_without_being_sent_as_an_order(db_session):
         decision=MessagingDecision.INQUIRY,
         message_id="msg-inquiry",
     )
+    incoming.payload = {
+        **incoming.payload,
+        "text": "¿Cómo va mi último pedido?",
+    }
+    history = db_session.scalar(
+        select(MessagingMessage).where(
+            MessagingMessage.inbound_event_id == incoming.id,
+            MessagingMessage.direction == MessageDirection.INBOUND,
+        )
+    )
+    history.text = incoming.payload["text"]
+    db_session.commit()
     service, messaging, interpreter, orders = make_service(db_session)
 
     result = await service.process_pending()

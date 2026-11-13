@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 from app.models import (
     BillingOperationStatus,
     BillingTask,
+    CustodyEvent,
     MarketOffer,
+    MarketTrade,
     WorkerHeartbeat,
 )
 
@@ -37,7 +39,25 @@ def trades_queue_snapshot(session: Session, period_id: UUID) -> QueueSnapshot:
             MarketOffer.status != "failed",
         )
     ).one()
-    return QueueSnapshot(depth=depth, oldest_at=oldest)
+    evidence = (
+        select(func.count(CustodyEvent.id))
+        .where(CustodyEvent.market_trade_id == MarketTrade.id)
+        .correlate(MarketTrade)
+        .scalar_subquery()
+    )
+    missing, closed = session.execute(
+        select(func.count(), func.min(MarketTrade.closed_at)).where(
+            MarketTrade.period_id == period_id,
+            evidence != MarketTrade.quantity,
+        )
+    ).one()
+    return QueueSnapshot(
+        depth=depth + missing,
+        oldest_at=min(
+            (value for value in (oldest, closed) if value is not None),
+            default=None,
+        ),
+    )
 
 
 def _row(

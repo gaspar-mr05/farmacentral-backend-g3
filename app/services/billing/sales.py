@@ -13,6 +13,7 @@ from app.clients.billing import (
     BillingSOAPFault,
 )
 from app.clients.purchase_orders import PurchaseOrdersError
+from app.db.operation_locks import operation_lock
 from app.models import (
     BillingAttempt,
     BillingTask,
@@ -176,6 +177,15 @@ class SalesInvoicingService:
         return result
 
     async def _process(self, task, now):
+        with operation_lock(self.session, f"billing-task:{task.id}") as acquired:
+            if not acquired:
+                return False
+            self.session.refresh(task)
+            if task.status == Status.CONFIRMED:
+                return False
+            return await self._process_locked(task, now)
+
+    async def _process_locked(self, task, now):
         try:
             TypeAdapter(PurchaseOrderId).validate_python(task.external_order_id)
         except ValidationError:
@@ -289,8 +299,8 @@ class SalesInvoicingService:
                 or attempt.response is not None
                 or http_status == 409
             )
-            attempt.status = Status.UNCERTAIN if uncertain else Status.FAILED
             attempt.finished_at = max(now, attempt.started_at)
+            attempt.status = Status.UNCERTAIN if uncertain else Status.FAILED
             attempt.error_type, attempt.http_status = (
                 type(exc).__name__,
                 http_status,
@@ -386,12 +396,13 @@ class SalesInvoicingService:
         self._finish(task, attempt, row, now)
 
     def _finish(self, task, attempt, invoice, now):
-        task.status = Status.CONFIRMED
-        task.invoice_id = invoice.id
-        task.confirmed_at = now
-        task.last_error = task.next_retry_at = None
-        if attempt:
-            attempt.status = Status.CONFIRMED
-            attempt.finished_at = max(now, attempt.started_at)
-            attempt.error_type = attempt.http_status = None
+        with self.session.no_autoflush:
+            task.status = Status.CONFIRMED
+            task.invoice_id = invoice.id
+            task.confirmed_at = now
+            task.last_error = task.next_retry_at = None
+            if attempt:
+                attempt.finished_at = max(now, attempt.started_at)
+                attempt.status = Status.CONFIRMED
+                attempt.error_type = attempt.http_status = None
         self.session.commit()

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.clients.farma_central import FarmaCentralClient
 from app.clients.purchase_orders import PurchaseOrdersClient
 from app.clients.trades import TradesClient
+from app.db.operation_locks import operation_lock
 from app.models import (
     BusinessPeriod,
     CustodyEvent,
@@ -117,6 +118,38 @@ class TradeCustodyService:
         return official
 
     async def accept_buy(self, official: TradeOffer) -> tuple[TradeOffer, MarketTrade]:
+        return await self._accept_once(official, side=MarketOfferSide.BUY)
+
+    async def accept_sell(self, official: TradeOffer) -> tuple[TradeOffer, MarketTrade]:
+        return await self._accept_once(official, side=MarketOfferSide.SELL)
+
+    async def _accept_once(self, official, *, side):
+        with operation_lock(
+            self._session, f"trade-accept:{self._period.id}:{official.id}"
+        ) as acquired:
+            if not acquired:
+                raise InvalidTradeStateError("Offer acceptance is already in progress")
+            existing = self._session.scalar(
+                select(MarketOffer).where(
+                    MarketOffer.period_id == self._period.id,
+                    MarketOffer.external_offer_id == official.id,
+                )
+            )
+            if existing is not None and existing.status != "prepared":
+                self._session.commit()
+                observed = await self._trades.get_offer(official.id)
+                trade = await self.reconcile_offer(observed)
+                if trade is None:
+                    raise InvalidTradeStateError(
+                        "Previous acceptance has no confirmed closure; "
+                        "POST not repeated"
+                    )
+                return observed, trade
+            if side == MarketOfferSide.BUY:
+                return await self._accept_buy(official)
+            return await self._accept_sell(official)
+
+    async def _accept_buy(self, official: TradeOffer) -> tuple[TradeOffer, MarketTrade]:
         """Accept another group's buy offer as seller."""
         self._validate_counterparty_offer(official, side=MarketOfferSide.BUY)
         offer = self._reserve_offer(
@@ -158,7 +191,9 @@ class TradeCustodyService:
         self._session.commit()
         return accepted, trade
 
-    async def accept_sell(self, official: TradeOffer) -> tuple[TradeOffer, MarketTrade]:
+    async def _accept_sell(
+        self, official: TradeOffer
+    ) -> tuple[TradeOffer, MarketTrade]:
         """Accept a sell offer; receipt is recorded after inventory sync."""
         self._validate_counterparty_offer(official, side=MarketOfferSide.SELL)
         if self._session.scalar(
@@ -173,6 +208,8 @@ class TradeCustodyService:
                 "Recover own production before buying this SKU"
             )
         offer = self._store_offer(official, status="accepting")
+        offer.status = "accepting"
+        self._session.commit()
         try:
             accepted = await self._trades.accept_offer(official.id)
             self._apply_official_offer(offer, accepted)
@@ -190,7 +227,13 @@ class TradeCustodyService:
     async def reconcile_offer(self, official: TradeOffer) -> MarketTrade | None:
         """Observe one known offer; never accept, cancel, or dispatch it again."""
         offer = self._get_offer(official.id)
+        previous_status = offer.status
         self._apply_official_offer(offer, official)
+        if official.status == "open" and previous_status in {
+            "accepting",
+            "acceptance_uncertain",
+        }:
+            offer.status = "acceptance_uncertain"
         if official.status in {"cancelled", "expired"}:
             self._release(offer, status=official.status)
             self._session.commit()

@@ -32,6 +32,4 @@ class WorkerHeartbeat(Base):
     queue_depth: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
-    oldest_queued_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True)
-    )
+    oldest_queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

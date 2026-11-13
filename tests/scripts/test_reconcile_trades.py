@@ -12,6 +12,7 @@ from scripts import reconcile_trades as module
 from tests.models.test_e2_migration import migration_database as migration_database
 from tests.models.test_e2_migration import run_migration
 from tests.services.test_trade_custody import add_market_stock
+from tests.support.billing import make_trade
 from tests.support.farma_central import make_settings
 
 
@@ -21,6 +22,27 @@ def configure(monkeypatch, engine):
     monkeypatch.setattr(module, "get_settings", lambda: settings)
     for name in ("TradesClient", "PurchaseOrdersClient", "FarmaCentralClient"):
         monkeypatch.setattr(module, name, Mock(return_value=AsyncMock()))
+
+
+@pytest.mark.anyio
+async def test_missing_unit_evidence_is_not_reported_as_worker_success(
+    migration_database, monkeypatch
+):
+    engine = migration_database
+    run_migration(engine, "upgrade", "head")
+    with Session(engine) as session:
+        period, _, _, _ = add_market_stock(session)
+        selected = period.id
+        session.add(make_trade(selected))
+        session.commit()
+    configure(monkeypatch, engine)
+    with pytest.raises(SystemExit):
+        await module.run(period_id=selected, once=True)
+    with Session(engine) as session:
+        row = session.get(WorkerHeartbeat, (selected, "process_trades"))
+        assert row.last_success_at is None
+        assert row.last_error_type == "CycleIncomplete"
+        assert row.queue_depth == 1 and row.oldest_queued_at is not None
 
 
 @pytest.mark.anyio

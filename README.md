@@ -513,3 +513,35 @@ sudo journalctl -u farmacentral-backend.service -n 100 --no-pager
 sudo journalctl -u 'farmacentral-worker@*' -n 100 --no-pager
 sudo journalctl -u farmacentral-inventory-sync.service -n 100 --no-pager
 ```
+
+### Idempotencia y recuperación — paso 22
+
+Las tareas financieras se serializan por `BillingTask.id` mediante el bloqueo
+asesor PostgreSQL existente, retenido entre commits y liberado al terminar el
+proceso. Esto protege también llamadas desde herramientas distintas del worker.
+Después de adquirirlo se relee el estado: una tarea confirmada no se vuelve a
+emitir ni pagar. La unicidad local organiza el trabajo; no demuestra por sí sola
+que un efecto remoto ocurrió una única vez.
+
+| Operación | Recuperación después de una caída o respuesta perdida |
+| --- | --- |
+| Emisión | Conservar intento y recibo. Consultar la OC oficial; si figura facturada sin asociación verificable, conservar incertidumbre y conciliar la factura oficial. No reemitir para descubrir su ID. |
+| Pago | Consultar el ID exacto en `paid` y `pending`, usando la ventana de emisión original. Un recibo guardado se verifica antes de aplicarlo. Sólo una observación válida permite avanzar; no suponer que un timeout equivale a rechazo. |
+| Publicación de oferta | Mantener las reservas ante `creation_uncertain`. Asociar únicamente un ID oficial verificado y conciliar por GET; similitud de SKU, precio o fecha no prueba identidad. |
+| Aceptación | Serializar por período/oferta. Si ya existe intención local, usar GET y validar cierre, OC y contraparte antes de retornar. No repetir el POST pendiente o incierto, aunque el GET aún muestre `open`. |
+| Transferencia | La OC comercial no identifica unidades. Registrar sólo IDs oficiales mediante `record_trade_units`; conservar reservas hasta obtener evidencia. Los cierres sin evidencia cuentan como cola pendiente y no como éxito del worker. |
+| Clasificación y texto | Recuperar las fases guardadas por separado. Un POST incierto queda para revisión; no duplicar clasificación ni texto por un `409` o un timeout. |
+
+Para recuperar, detener primero cualquier intervención manual concurrente,
+consultar las fuentes oficiales con los clientes/scripts de lectura existentes
+y conservar IDs y recibos como evidencia. Una vez conciliados, los workers
+retoman desde el estado confirmado. Mensajería sin consulta/deduplicación
+publicada no admite reenvío seguro automático; no borrar la fase `uncertain`.
+Las notificaciones de recall conservan el procedimiento existente
+`scripts.resolve_recall_notification`, que requiere evidencia oficial.
+
+Las pruebas usan servicios simulados y PostgreSQL temporal. Incluyen procesos
+independientes compitiendo por la misma tarea de emisión/pago y la recuperación
+de una aceptación incierta, además de las pruebas existentes de caídas,
+recibos, reserva de unidades y fases de mensajería. No consumen gateway ni
+realizan pagos, compras o transferencias reales.

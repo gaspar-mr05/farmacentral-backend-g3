@@ -163,9 +163,7 @@ async def run(
                                     queue,
                                 )
                             else:
-                                mark_success(
-                                    session, period.id, WORKER_NAME, queue
-                                )
+                                mark_success(session, period.id, WORKER_NAME, queue)
                             if once:
                                 if result["failed"]:
                                     raise SystemExit(1)
