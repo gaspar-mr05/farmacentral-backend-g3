@@ -30,7 +30,7 @@ La API queda disponible en:
 Ejecutar las verificaciones:
 
 ```bash
-python -m scripts.test_e2
+python -m scripts.test_e3
 ruff check app scripts tests
 ruff format --check app scripts tests
 ```
@@ -545,3 +545,58 @@ independientes compitiendo por la misma tarea de emisión/pago y la recuperació
 de una aceptación incierta, además de las pruebas existentes de caídas,
 recibos, reserva de unidades y fases de mensajería. No consumen gateway ni
 realizan pagos, compras o transferencias reales.
+
+### Suite aislada y corpus — paso 23
+
+Ejecutar desde la raíz con dependencias de desarrollo y los binarios de servidor
+PostgreSQL (`initdb`, `pg_ctl`) instalados, como usuario sin privilegios de root:
+
+```bash
+.venv/bin/python -m scripts.test_e3 --report /tmp/farmacentral-e3-results.json
+.venv/bin/python -m scripts.test_e3 --corpus-only --report /tmp/messaging-corpus.json
+.venv/bin/ruff check app scripts tests
+.venv/bin/ruff format --check app scripts tests
+```
+
+El ejecutor crea un cluster PostgreSQL local temporal y sustituye tanto
+`DATABASE_URL` como `TEST_DATABASE_URL` durante pytest. Usa los esquemas aislados
+existentes, incluidos los ensayos de migración de E3. Reutiliza el bloqueo de
+conexiones externas del ejecutor E2; los clientes remotos son simulados. Al
+terminar, incluso si pytest falla, detiene el cluster y elimina sus archivos.
+Si PostgreSQL no puede arrancar, devuelve error sin conectarse a la DB configurada.
+No modifica `.env` ni necesita credenciales del curso. El ejecutor E2 se conserva
+para los comandos heredados `--step20/--step21`, cuya numeración corresponde a E2.
+
+El corpus está en `tests/fixtures/messaging/{development,evaluation}.json`:
+24 mensajes sintéticos con fechas fijas, 12 por partición, textos separados y
+varios teléfonos, grupos, períodos y pedidos previos. Cubre pedidos válidos,
+cantidades ambiguas, fechas vencidas, consultas explícitas/naturales, referencias
+ajenas y consultas ambiguas. Los casos incluyen una propuesta LLM simulada y
+expectativas separadas. Se comprueba la interpretación determinista y la selección
+de OC contra el historial; no se crean OCs ni se llama al gateway.
+
+El informe JSON conserva el código de salida de pytest, casos recolectados y
+casos con métricas, más `correct`, `total` y `accuracy` por partición/categoría
+para intención, OC seleccionada, SKU, cantidad y fecha, cuando corresponden.
+No mezcla desarrollo y evaluación ni contabiliza campos no aplicables como
+aciertos. Las métricas reflejan el comportamiento con propuestas fijas, **no la
+precisión de un LLM real ni el cumplimiento del curso**. Un caso que falla antes
+de medirse no entra en el denominador; hay que comprobar el código de salida y
+que los casos medidos coincidan con los recolectados, no sólo el porcentaje.
+
+Cobertura de regresión reutilizada por el comando completo:
+
+| Escenario | Pruebas |
+| --- | --- |
+| Creación tardía, ventanas solapadas y deuda antigua que cambia de estado | `test_billing_reconciliation.py` |
+| Decimales, intereses antes/después de seis horas y pago incierto | `test_invoice_payments.py`, `test_sales_invoicing.py` |
+| Oferta expirada o ganada por otro, cierres y conciliación | `test_trade_reconciliation.py`, `test_scarcity_procurement.py` |
+| Reservas concurrentes, stock comprometido y escasez | `test_e3_market_concurrency.py`, `test_trade_custody.py`, `test_procurement_planning.py` |
+| Recepción en pulmón y capacidad agotada | `test_e3_buffer_receipt.py`, `test_procurement_planning.py` |
+| Productor recuperable e inventario cambiante | `production/test_e3_replenishment.py`, `inventory/test_resilient_collection.py` |
+| Recall ajeno/mercado y webhooks HTTP autenticados | `test_market_recalls.py`, `tests/api/test_recalls.py`, `tests/api/test_messaging.py` |
+| Reinicios y procesos financieros competidores | `test_e3_idempotency.py`, `test_messaging_inquiry_flow.py` |
+
+Las rutas sin prefijo en la tabla son relativas a `tests/services/`.
+Las pruebas automatizadas no envían pagos, aceptaciones ni mensajes reales.
+La validación oficial de punta a punta sigue correspondiendo al paso 24.

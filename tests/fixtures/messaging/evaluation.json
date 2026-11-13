@@ -1,0 +1,380 @@
+{
+  "history": [
+    {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaa",
+      "phone": "+56900000001",
+      "at": "2026-11-12T13:00:00Z",
+      "sku": "KIT-CURACION",
+      "quantity": 2
+    },
+    {
+      "id": "bbbbbbbbbbbbbbbbbbbbbbbb",
+      "phone": "+56900000001",
+      "at": "2026-11-12T18:00:00Z",
+      "sku": "KIT-DIABETES",
+      "quantity": 3
+    },
+    {
+      "id": "cccccccccccccccccccccccc",
+      "phone": "+56900000002",
+      "at": "2026-11-12T18:30:00Z",
+      "sku": "KIT-CURACION",
+      "quantity": 2
+    },
+    {
+      "id": "dddddddddddddddddddddddd",
+      "phone": "+56900000001",
+      "at": "2026-11-08T18:00:00Z",
+      "sku": "KIT-CURACION",
+      "quantity": 2
+    },
+    {
+      "id": "eeeeeeeeeeeeeeeeeeeeeeee",
+      "phone": "+56900000001",
+      "at": "2026-11-12T18:40:00Z",
+      "sku": "KIT-CURACION",
+      "quantity": 2,
+      "group": 4
+    },
+    {
+      "id": "ffffffffffffffffffffffff",
+      "phone": "+56900000001",
+      "at": "2026-11-12T21:00:00Z",
+      "sku": "KIT-CURACION",
+      "quantity": 2
+    }
+  ],
+  "cases": [
+    {
+      "id": "evaluation-order",
+      "category": "new_order",
+      "message": {
+        "messageId": "evaluation-order",
+        "sender": {
+          "name": "Cliente sintético",
+          "phone": "+56900000001"
+        },
+        "text": "Favor despachar dos kits KIT-CURACION hoy antes de las 21:30.",
+        "receivedAt": "2026-11-12T20:00:00Z"
+      },
+      "mock_proposal": {
+        "intent": "order",
+        "order_reference": null,
+        "sku": "KIT-CURACION",
+        "quantity": 2,
+        "delivery_date": "2026-11-13T00:30:00Z",
+        "confidence": 0.95,
+        "is_ambiguous": false,
+        "reason": ""
+      },
+      "expected": {
+        "intent": "order",
+        "sku": "KIT-CURACION",
+        "quantity": 2,
+        "delivery_date": "2026-11-13T00:30:00Z"
+      }
+    },
+    {
+      "id": "evaluation-tomorrow",
+      "category": "new_order",
+      "message": {
+        "messageId": "evaluation-tomorrow",
+        "sender": {
+          "name": "Cliente sintético",
+          "phone": "+56900000001"
+        },
+        "text": "Envíen tres kits KIT-DIABETES mañana antes de las 09:00.",
+        "receivedAt": "2026-11-12T20:00:00Z"
+      },
+      "mock_proposal": {
+        "intent": "order",
+        "order_reference": null,
+        "sku": "KIT-DIABETES",
+        "quantity": 3,
+        "delivery_date": "2026-11-13T12:00:00Z",
+        "confidence": 0.95,
+        "is_ambiguous": false,
+        "reason": ""
+      },
+      "expected": {
+        "intent": "order",
+        "sku": "KIT-DIABETES",
+        "quantity": 3,
+        "delivery_date": "2026-11-13T12:00:00Z"
+      }
+    },
+    {
+      "id": "evaluation-explicit",
+      "category": "explicit_inquiry",
+      "message": {
+        "messageId": "evaluation-explicit",
+        "sender": {
+          "name": "Cliente sintético",
+          "phone": "+56900000001"
+        },
+        "text": "Confirmen avance del pedido bbbbbbbbbbbbbbbbbbbbbbbb.",
+        "receivedAt": "2026-11-12T20:00:00Z"
+      },
+      "mock_proposal": {
+        "intent": "inquiry",
+        "order_reference": null,
+        "sku": null,
+        "quantity": null,
+        "delivery_date": null,
+        "confidence": 0.95,
+        "is_ambiguous": false,
+        "reason": ""
+      },
+      "expected": {
+        "intent": "inquiry",
+        "selected_order": "bbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "id": "evaluation-natural",
+      "category": "natural_inquiry",
+      "message": {
+        "messageId": "evaluation-natural",
+        "sender": {
+          "name": "Cliente sintético",
+          "phone": "+56900000001"
+        },
+        "text": "¿Qué pasó con mi pedido de la tarde?",
+        "receivedAt": "2026-11-12T20:00:00Z"
+      },
+      "mock_proposal": {
+        "intent": "inquiry",
+        "order_reference": null,
+        "sku": null,
+        "quantity": null,
+        "delivery_date": null,
+        "confidence": 0.95,
+        "is_ambiguous": false,
+        "reason": ""
+      },
+      "expected": {
+        "intent": "inquiry",
+        "selected_order": "bbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "id": "evaluation-sku",
+      "category": "natural_inquiry",
+      "message": {
+        "messageId": "evaluation-sku",
+        "sender": {
+          "name": "Cliente sintético",
+          "phone": "+56900000001"
+        },
+        "text": "¿Despacharon mi pedido de la mañana?",
+        "receivedAt": "2026-11-12T20:00:00Z"
+      },
+      "mock_proposal": {
+        "intent": "inquiry",
+        "order_reference": null,
+        "sku": null,
+        "quantity": null,
+        "delivery_date": null,
+        "confidence": 0.95,
+        "is_ambiguous": false,
+        "reason": ""
+      },
+      "expected": {
+        "intent": "inquiry",
+        "selected_order": "aaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "id": "evaluation-ambiguous",
+      "category": "ambiguous_inquiry",
+      "message": {
+        "messageId": "evaluation-ambiguous",
+        "sender": {
+          "name": "Cliente sintético",
+          "phone": "+56900000001"
+        },
+        "text": "Necesito saber si mi pedido está listo.",
+        "receivedAt": "2026-11-12T20:00:00Z"
+      },
+      "mock_proposal": {
+        "intent": "inquiry",
+        "order_reference": null,
+        "sku": null,
+        "quantity": null,
+        "delivery_date": null,
+        "confidence": 0.95,
+        "is_ambiguous": false,
+        "reason": ""
+      },
+      "expected": {
+        "intent": "inquiry",
+        "selected_order": null
+      }
+    },
+    {
+      "id": "evaluation-foreign",
+      "category": "foreign_reference",
+      "message": {
+        "messageId": "evaluation-foreign",
+        "sender": {
+          "name": "Cliente sintético",
+          "phone": "+56900000001"
+        },
+        "text": "¿Está lista la orden eeeeeeeeeeeeeeeeeeeeeeee?",
+        "receivedAt": "2026-11-12T20:00:00Z"
+      },
+      "mock_proposal": {
+        "intent": "inquiry",
+        "order_reference": null,
+        "sku": null,
+        "quantity": null,
+        "delivery_date": null,
+        "confidence": 0.95,
+        "is_ambiguous": false,
+        "reason": ""
+      },
+      "expected": {
+        "intent": "inquiry",
+        "selected_order": null
+      }
+    },
+    {
+      "id": "evaluation-old",
+      "category": "foreign_reference",
+      "message": {
+        "messageId": "evaluation-old",
+        "sender": {
+          "name": "Cliente sintético",
+          "phone": "+56900000001"
+        },
+        "text": "¿Qué estado tiene ffffffffffffffffffffffff?",
+        "receivedAt": "2026-11-12T20:00:00Z"
+      },
+      "mock_proposal": {
+        "intent": "inquiry",
+        "order_reference": null,
+        "sku": null,
+        "quantity": null,
+        "delivery_date": null,
+        "confidence": 0.95,
+        "is_ambiguous": false,
+        "reason": ""
+      },
+      "expected": {
+        "intent": "inquiry",
+        "selected_order": null
+      }
+    },
+    {
+      "id": "evaluation-second-phone",
+      "category": "natural_inquiry",
+      "message": {
+        "messageId": "evaluation-second-phone",
+        "sender": {
+          "name": "Cliente sintético",
+          "phone": "+56900000002"
+        },
+        "text": "¿Qué pasó con mi KIT-CURACION?",
+        "receivedAt": "2026-11-12T20:00:00Z"
+      },
+      "mock_proposal": {
+        "intent": "inquiry",
+        "order_reference": null,
+        "sku": null,
+        "quantity": null,
+        "delivery_date": null,
+        "confidence": 0.95,
+        "is_ambiguous": false,
+        "reason": ""
+      },
+      "expected": {
+        "intent": "inquiry",
+        "selected_order": "cccccccccccccccccccccccc"
+      }
+    },
+    {
+      "id": "evaluation-uncertain",
+      "category": "invalid_order",
+      "message": {
+        "messageId": "evaluation-uncertain",
+        "sender": {
+          "name": "Cliente sintético",
+          "phone": "+56900000001"
+        },
+        "text": "Necesito entre dos y tres kits KIT-CURACION hoy a las 21:30.",
+        "receivedAt": "2026-11-12T20:00:00Z"
+      },
+      "mock_proposal": {
+        "intent": "order",
+        "order_reference": null,
+        "sku": "KIT-CURACION",
+        "quantity": 2,
+        "delivery_date": "2026-11-13T00:30:00Z",
+        "confidence": 0.95,
+        "is_ambiguous": false,
+        "reason": ""
+      },
+      "expected": {
+        "intent": "discarded",
+        "sku": null,
+        "quantity": null,
+        "delivery_date": null
+      }
+    },
+    {
+      "id": "evaluation-expired",
+      "category": "invalid_order",
+      "message": {
+        "messageId": "evaluation-expired",
+        "sender": {
+          "name": "Cliente sintético",
+          "phone": "+56900000001"
+        },
+        "text": "Manden dos kits KIT-CURACION antes de las 15:00 hoy.",
+        "receivedAt": "2026-11-12T20:00:00Z"
+      },
+      "mock_proposal": {
+        "intent": "order",
+        "order_reference": null,
+        "sku": "KIT-CURACION",
+        "quantity": 2,
+        "delivery_date": "2026-11-12T18:00:00Z",
+        "confidence": 0.95,
+        "is_ambiguous": false,
+        "reason": ""
+      },
+      "expected": {
+        "intent": "discarded",
+        "sku": null,
+        "quantity": null,
+        "delivery_date": null
+      }
+    },
+    {
+      "id": "evaluation-greeting",
+      "category": "discarded",
+      "message": {
+        "messageId": "evaluation-greeting",
+        "sender": {
+          "name": "Cliente sintético",
+          "phone": "+56900000001"
+        },
+        "text": "Que tengan un buen día.",
+        "receivedAt": "2026-11-12T20:00:00Z"
+      },
+      "mock_proposal": {
+        "intent": "discarded",
+        "order_reference": null,
+        "sku": null,
+        "quantity": null,
+        "delivery_date": null,
+        "confidence": 0.95,
+        "is_ambiguous": false,
+        "reason": ""
+      },
+      "expected": {
+        "intent": "discarded"
+      }
+    }
+  ]
+}
