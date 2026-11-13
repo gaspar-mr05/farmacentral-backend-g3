@@ -125,7 +125,7 @@ class Pharmacy:
             "sku": sku,
             "quantity": quantity,
             "group": 3,
-            "availableAt": (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+            "availableAt": (datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
         }
 
 
@@ -417,11 +417,17 @@ async def test_partial_component_stock_is_completed_instead_of_restarting_recipe
             )
         )
         session.commit()
+        totals = []
         for _ in range(5):
             result = await service.poll()
+            totals.append(result)
             assert result["failed"] == 0, result
             next_turn(session)
-        assert pharmacy.posts == [("RAW", 1), ("MID", 1), ("KIT-A", 2)]
+        assert pharmacy.posts == [
+            ("RAW", 1),
+            ("MID", 1),
+            ("KIT-A", 2),
+        ], totals
 
 
 @pytest.mark.anyio

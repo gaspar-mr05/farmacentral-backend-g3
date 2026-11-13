@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.clients.farma_central import FarmaCentralClient
@@ -158,6 +158,7 @@ def _record_custody_changes(
 def _link_new_production_outputs(
     session: Session, created_units: tuple[Unit, ...]
 ) -> None:
+    created_unit_ids = {unit.id for unit in created_units}
     created_skus = {unit.lot.product.sku for unit in created_units}
     pending_skus = set(
         session.scalars(
@@ -178,7 +179,10 @@ def _link_new_production_outputs(
                 .join(Product, Lot.product_id == Product.id)
                 .where(
                     Product.sku == sku,
-                    Unit.created_at >= runs[0].requested_at,
+                    or_(
+                        Unit.id.in_(created_unit_ids),
+                        Unit.created_at >= runs[0].requested_at,
+                    ),
                     ~Lot.produced_by.has(),
                 )
                 .order_by(Unit.created_at, Unit.id)

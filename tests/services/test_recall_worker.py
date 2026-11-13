@@ -85,6 +85,8 @@ async def test_late_production_is_blocked_and_report_updated_only_before_deadlin
         inventory.link(None, origin, consumed_unit=raw)
         run = session.scalars(select(ProductionRun)).one()
         run.expected_sku = output.product.sku
+        # A wall-clock correction must not hide an output first seen by this sync.
+        run.requested_at = inventory.now + timedelta(seconds=10)
         session.commit()
         client = AsyncMock()
         client.get_active_recalls.return_value = [

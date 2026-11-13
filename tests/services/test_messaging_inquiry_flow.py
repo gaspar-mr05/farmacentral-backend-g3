@@ -272,16 +272,17 @@ async def test_deadline_between_classification_and_text_prevents_late_send(
 async def test_earliest_original_message_is_processed_before_a_later_arrival(
     db_session,
 ):
+    now = datetime.now(UTC)
     first = add_event(
         db_session,
         decision=MessagingDecision.DISCARDED,
-        received_at=NOW - timedelta(minutes=1),
+        received_at=now - timedelta(minutes=1),
         message_id="newer-message",
     )
     second = add_event(
         db_session,
         decision=MessagingDecision.DISCARDED,
-        received_at=NOW - timedelta(minutes=20),
+        received_at=now - timedelta(minutes=20),
         message_id="earlier-message",
     )
     assert first.received_at <= second.received_at

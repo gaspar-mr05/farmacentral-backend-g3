@@ -1,6 +1,6 @@
 """Resolve an ambiguous notification only from operator-provided evidence."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import String, cast, or_, select
 from sqlalchemy.orm import Session
@@ -22,6 +22,9 @@ class NotificationResolutionError(ValueError):
     pass
 
 
+MAX_EVIDENCE_CLOCK_SKEW = timedelta(seconds=30)
+
+
 def resolve_notification(
     session: Session,
     recall_id: str,
@@ -38,7 +41,9 @@ def resolve_notification(
         )
     if (outcome == "sent") != (sent_at is not None):
         raise NotificationResolutionError("Only a sent notification requires sent_at")
-    if sent_at is not None and (sent_at.utcoffset() is None or sent_at > now):
+    if sent_at is not None and (
+        sent_at.utcoffset() is None or sent_at > now + MAX_EVIDENCE_CLOCK_SKEW
+    ):
         raise NotificationResolutionError(
             "sent_at must have a timezone and cannot be in the future"
         )
@@ -100,9 +105,10 @@ def resolve_notification(
                 raise NotificationResolutionError(
                     "This notification is not awaiting reconciliation"
                 )
-            if (
-                sent_at is not None
-                and not recall.issued_at <= sent_at <= recall.deadline
+            if sent_at is not None and not (
+                recall.issued_at - MAX_EVIDENCE_CLOCK_SKEW
+                <= sent_at
+                <= recall.deadline + MAX_EVIDENCE_CLOCK_SKEW
             ):
                 raise NotificationResolutionError(
                     "The confirmed notification must be within the recall window"
