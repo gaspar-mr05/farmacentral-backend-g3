@@ -1,0 +1,18 @@
+{
+  "observed_at": "2026-11-13T14:00:26.685858+00:00",
+  "scope": "single_authorized_gateway_probe",
+  "request_limit": 1,
+  "output_token_limit": 128,
+  "business_mutations": 0,
+  "chat_transport_verified": false,
+  "status": "passed",
+  "model": "gemini-flash-lite",
+  "intent": "inquiry",
+  "usage": {
+    "prompt_tokens": 368,
+    "completion_tokens": 97,
+    "total_tokens": 465
+  },
+  "gateway_host": "choripan9.ing.uc.cl",
+  "requests_sent": 1
+}

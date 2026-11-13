@@ -1,0 +1,46 @@
+{
+  "observed_at": "2026-11-13T13:58:05.958576+00:00",
+  "scope": "public_read_only",
+  "business_mutations": 0,
+  "llm_calls": 0,
+  "checks": {
+    "api_ready": {
+      "http_status": 200,
+      "url": "https://choripan3.ing.uc.cl/api/health/ready"
+    },
+    "messaging_schema": {
+      "http_status": 200,
+      "paths": [
+        "/messaging/auth",
+        "/messaging/messages/{messageId}/response"
+      ],
+      "inquiry_in_schema": false,
+      "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/messaging/openapi.json"
+    },
+    "trades_schema": {
+      "http_status": 200,
+      "paths": [
+        "/trades/autenticar",
+        "/trades/offers",
+        "/trades/offers/{offerId}",
+        "/trades/offers/{offerId}/accept",
+        "/trades/offers/{offerId}/cancel"
+      ],
+      "inquiry_in_schema": false,
+      "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/trades/openapi.json"
+    },
+    "billing_read_only": {
+      "status": "passed",
+      "operation": "getBankStatement",
+      "url": "https://dev.proyecto.2026-2.tallerdeintegracion.cl/soap/billing"
+    },
+    "local_database": {
+      "status": "pending",
+      "error_type": "OperationalError"
+    },
+    "ssh": {
+      "status": "pending",
+      "reason": "authentication_denied"
+    }
+  }
+}

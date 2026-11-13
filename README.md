@@ -600,3 +600,16 @@ Cobertura de regresión reutilizada por el comando completo:
 Las rutas sin prefijo en la tabla son relativas a `tests/services/`.
 Las pruebas automatizadas no envían pagos, aceptaciones ni mensajes reales.
 La validación oficial de punta a punta sigue correspondiendo al paso 24.
+
+### Validación real en desarrollo — paso 24
+
+El procedimiento y el estado de la evidencia están en `docs/e3/STEP24.md`.
+El observador `scripts.validate_e3_flow` consulta sólo desarrollo, exige período
+explícito, usa una transacción de lectura y conserva como pendientes las pruebas
+manuales de chat, verdad/diff y reinicios. `--list-ids` permite descubrir períodos
+y objetivos desde la DB del servidor sin iniciar operaciones. No reemplaza la
+validación oficial con resultados simulados ni elimina la protección de E2.
+
+En esta sesión se verificaron readiness, lectura SOAP y una única consulta
+sintética autorizada al gateway (465 tokens). Los recorridos completos siguen
+pendientes de acceso a la DB del servidor y de evidencia oficial por flujo.
