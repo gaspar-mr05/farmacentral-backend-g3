@@ -13,6 +13,7 @@ Group=integracion
 WorkingDirectory=/home/integracion/farmacentral-backend
 EnvironmentFile=/home/integracion/farmacentral-backend/.env
 Environment=PYTHONUNBUFFERED=1
+Environment=APP_ENV_FILE=/home/integracion/farmacentral-backend/.env
 ExecStart=/home/integracion/farmacentral-backend/.venv/bin/python -m scripts.%i
 Restart=on-failure
 RestartSec=30

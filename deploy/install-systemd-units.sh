@@ -5,12 +5,11 @@ set -Eeuo pipefail
 readonly DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SYSTEMD_DIR="/etc/systemd/system"
 
-sudo /usr/bin/install -m 0644 \
-    "$DEPLOY_DIR/farmacentral-worker@.service" \
-    "$SYSTEMD_DIR/farmacentral-worker@.service"
-sudo /usr/bin/install -m 0644 \
-    "$DEPLOY_DIR/farmacentral-workers.target" \
-    "$SYSTEMD_DIR/farmacentral-workers.target"
+for unit in farmacentral-backend.service farmacentral-inventory-sync.service \
+    farmacentral-inventory-sync.timer farmacentral-worker@.service \
+    farmacentral-workers.target; do
+    sudo /usr/bin/install -m 0644 "$DEPLOY_DIR/$unit" "$SYSTEMD_DIR/$unit"
+done
 sudo /usr/bin/systemctl daemon-reload
 
 # A target reload does not necessarily stop instances removed from Wants.
@@ -19,4 +18,4 @@ for legacy in reconcile_billing reconcile_trades; do
     sudo /usr/bin/systemctl stop "farmacentral-worker@${legacy}.service" || true
 done
 
-printf 'Farmacentral worker units installed. Restart the target to activate them.\n'
+printf 'Farmacentral systemd units installed. Restart services to activate them.\n'

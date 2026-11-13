@@ -5,6 +5,7 @@ set -Eeuo pipefail
 readonly APP_DIR="/home/integracion/farmacentral-backend"
 
 cd "$APP_DIR"
+export APP_ENV_FILE="$APP_DIR/.env"
 
 restart_service() {
     local unit="$1"

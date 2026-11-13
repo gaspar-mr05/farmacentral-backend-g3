@@ -12,6 +12,7 @@ Group=integracion
 WorkingDirectory=/home/integracion/farmacentral-backend
 EnvironmentFile=/home/integracion/farmacentral-backend/.env
 Environment=PYTHONUNBUFFERED=1
+Environment=APP_ENV_FILE=/home/integracion/farmacentral-backend/.env
 ExecStart=/home/integracion/farmacentral-backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
 Restart=on-failure
 RestartSec=5

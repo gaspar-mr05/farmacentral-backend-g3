@@ -237,4 +237,5 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    selected = os.environ.get("APP_ENV_FILE")
+    return Settings(_env_file=selected) if selected else Settings()

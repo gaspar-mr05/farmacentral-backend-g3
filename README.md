@@ -624,3 +624,13 @@ el vínculo pendiente; una contradicción se reporta como error. El vínculo se
 recupera al volver a observar la factura, incluso si ya está pagada, sin crear
 otra tarea de pago para una factura `paid`. El observador E3 conserva también
 la descripción oficial en su evidencia privada.
+
+### Preparación de producción y reset — paso 25
+
+El procedimiento está en [docs/e3/STEP25.md](docs/e3/STEP25.md): respaldo y
+restauración, DB nueva por época, instalación de unidades, límites y ensayo en
+desarrollo. `scripts.check_e3_readiness` revisa configuración sin llamadas remotas;
+`scripts.prepare_e3_epoch` verifica una DB migrada vacía y sólo crea el período
+con `--create` y referencia explícita del reset confirmado. No borra historial.
+Systemd y el deploy fijan `APP_ENV_FILE` para excluir `.env.local` del servidor.
+La activación de producción y el ensayo remoto aún requieren comprobación real.
