@@ -13,7 +13,9 @@ import pytest
         (None, None),
         ("farmacentral-backend.service", None),
         ("farmacentral-workers.target", None),
+        (None, "farmacentral-worker@process_messaging.service"),
         (None, "farmacentral-worker@process_billing.service"),
+        (None, "farmacentral-inventory-sync.timer"),
     ],
 )
 def test_deploy_reports_exact_failed_restart_and_checks_health_only_after_both(
@@ -96,6 +98,18 @@ def test_deploy_reports_exact_failed_restart_and_checks_health_only_after_both(
         assert completed.returncode == 0
         assert "Deployment completed successfully" in completed.stdout
         assert "systemctl is-active --quiet" in commands
+        for worker in (
+            "poll_sftp_orders",
+            "poll_pubsub_orders",
+            "process_messaging",
+            "fulfill_external_orders",
+            "process_recalls",
+            "replenish_inventory",
+            "process_billing",
+            "process_trades",
+        ):
+            assert f"farmacentral-worker@{worker}.service" in commands
+        assert "farmacentral-inventory-sync.timer" in commands
         assert not any(
             "sudo" in line and "is-active" in line for line in commands.splitlines()
         )

@@ -16,6 +16,7 @@ from app.models import (
     MessageDirection,
     MessagingMessage,
 )
+from app.services.messaging import webhook as messaging_webhook
 from tests.support.farma_central import make_settings
 from tests.support.oidc import AUDIENCE, TestTokenIssuer
 
@@ -28,14 +29,10 @@ def issuer():
 @pytest.fixture
 def authenticated_client(api_client, issuer, monkeypatch):
     verifier = issuer.verifier()
+    settings = make_settings(messaging_oidc_audience=AUDIENCE)
     app.dependency_overrides[get_oidc_verifier] = lambda: verifier
-    monkeypatch.setattr(
-        dependencies,
-        "get_settings",
-        lambda: make_settings(
-            messaging_oidc_audience=AUDIENCE,
-        ),
-    )
+    monkeypatch.setattr(dependencies, "get_settings", lambda: settings)
+    monkeypatch.setattr(messaging_webhook, "get_settings", lambda: settings)
     try:
         yield api_client, verifier
     finally:

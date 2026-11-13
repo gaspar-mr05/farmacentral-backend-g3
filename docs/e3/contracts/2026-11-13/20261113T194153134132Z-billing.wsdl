@@ -1,0 +1,232 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- <definitions> must be the root of the WSDL document -->
+<wsdl:definitions targetNamespace="http://billing.tallerdeintegracion.cl" 
+  xmlns:s="http://www.w3.org/2001/XMLSchema" 
+  xmlns:http="http://schemas.xmlsoap.org/wsdl/http/" 
+  xmlns:mime="http://schemas.xmlsoap.org/wsdl/mime/" 
+  xmlns:tns="http://billing.tallerdeintegracion.cl" 
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/" 
+  xmlns:soap12="http://schemas.xmlsoap.org/wsdl/soap12/" 
+  xmlns:soapenc="http://schemas.xmlsoap.org/soap/encoding/" 
+  xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <!-- WSDL TYPES: definition of the data types that are used in the web service -->
+  <wsdl:types>
+    <s:schema elementFormDefault="qualified" targetNamespace="http://billing.tallerdeintegracion.cl">
+      <s:element name="BillingDetails">
+        <s:complexType>
+          <s:sequence>
+            <s:element name="id" type="s:string"/>
+            <s:element name="client" type="s:string"/>
+            <s:element name="supplier" type="s:string"/>
+            <s:element name="channel" type="s:string"/>
+            <s:element name="description" type="s:string"/>
+            <s:element name="status" type="s:string"/>
+            <s:element name="price" type="s:float"/>
+            <s:element name="interest" type="s:float"/>
+            <s:element name="totalPrice" type="s:float"/>
+            <s:element name="createdAt" type="s:string"/>
+            <s:element name="updatedAt" type="s:string"/>
+          </s:sequence>
+        </s:complexType>
+      </s:element>
+
+      <s:element name="getInvoicesResponse">
+        <s:complexType>
+          <s:sequence>
+            <s:element minOccurs="0" maxOccurs="unbounded" ref="tns:BillingDetails"/>
+          </s:sequence>
+        </s:complexType>
+      </s:element>
+
+      <s:element name="BankStatement">
+        <s:complexType>
+          <s:sequence>
+            <s:element name="group" type="s:string"/>
+            <s:element name="balance" type="s:float"/>
+          </s:sequence>
+        </s:complexType>
+      </s:element>
+
+      <s:element name="getInvoicesRequest">
+        <s:complexType>
+          <s:sequence>
+            <s:element minOccurs="1" maxOccurs="1" name="status">
+              <s:simpleType>
+                <s:restriction base="s:string">
+                  <s:enumeration value="pending"/>
+                  <s:enumeration value="paid"/>
+                  <!-- Add more values as needed -->
+                </s:restriction>
+              </s:simpleType>
+            </s:element>
+            <s:element minOccurs="1" maxOccurs="1" name="side">
+              <s:simpleType>
+                <s:restriction base="s:string">
+                  <s:enumeration value="client"/>
+                  <s:enumeration value="supplier"/>
+                  <!-- Add more values as needed -->
+                </s:restriction>
+              </s:simpleType>
+            </s:element>
+            <s:element minOccurs="1" maxOccurs="1" name="fromDate" type="s:dateTime"/>
+            <s:element minOccurs="1" maxOccurs="1" name="toDate" type="s:dateTime"/>
+          </s:sequence>
+        </s:complexType>
+      </s:element>
+
+      <s:element name="emitInvoiceResponse">
+        <s:complexType>
+          <s:sequence>
+            <s:element minOccurs="1" maxOccurs="1" ref="tns:BillingDetails"/>
+          </s:sequence>
+        </s:complexType>
+      </s:element>
+
+      <s:element name="emitInvoiceRequest">
+        <s:complexType>
+          <s:sequence>
+            <s:element minOccurs="1" maxOccurs="1" name='order_id' type="s:string">
+              <s:annotation>
+                <s:documentation>
+                  Example: 507f191e810c19729de860ea
+                </s:documentation>
+              </s:annotation>
+            </s:element>
+          </s:sequence>
+        </s:complexType>
+      </s:element>
+
+      <s:element name="payInvoiceRequest">
+        <s:complexType>
+          <s:sequence>
+            <s:element minOccurs="1" maxOccurs="1" name='invoice_id' type="s:string">
+              <s:annotation>
+                <s:documentation>
+                  Example: 507f191e810c19729de860ea
+                </s:documentation>
+              </s:annotation>
+            </s:element>
+          </s:sequence>
+        </s:complexType>
+      </s:element>
+
+      <s:element name="payInvoiceResponse">
+        <s:complexType>
+          <s:sequence>
+            <s:element minOccurs="1" maxOccurs="1" ref="tns:BillingDetails"/>
+          </s:sequence>
+        </s:complexType>
+      </s:element>
+
+      <s:element name="getBankStatementRequest"/>
+
+      <s:element name="getBankStatementResponse">
+        <s:complexType>
+          <s:sequence>
+            <s:element minOccurs="1" maxOccurs="1" ref="tns:BankStatement"/>
+          </s:sequence>
+        </s:complexType>
+      </s:element>
+
+    </s:schema>
+  </wsdl:types>
+
+  <!-- MESSAGES: defines the data being exchanged between the service and client -->
+  <wsdl:message name="getInvoicesSoapIn">
+    <wsdl:part name="parameters" element="tns:getInvoicesRequest"/>
+  </wsdl:message>
+  <wsdl:message name="getInvoicesSoapOut">
+    <wsdl:part name="parameters" element="tns:getInvoicesResponse"/>
+  </wsdl:message>
+
+  <wsdl:message name="emitInvoiceSoapIn">
+    <wsdl:part name="parameters" element="tns:emitInvoiceRequest"/>
+  </wsdl:message>
+  <wsdl:message name="emitInvoiceSoapOut">
+    <wsdl:part name="parameters" element="tns:emitInvoiceResponse"/>
+  </wsdl:message>
+
+  <wsdl:message name="payInvoiceSoapIn">
+    <wsdl:part name="parameters" element="tns:payInvoiceRequest"/>
+  </wsdl:message>
+  <wsdl:message name="payInvoiceSoapOut">
+    <wsdl:part name="parameters" element="tns:payInvoiceResponse"/>
+  </wsdl:message>
+
+  <wsdl:message name="getBankStatementSoapIn">
+    <wsdl:part name="parameters" element="tns:getBankStatementRequest"/>
+  </wsdl:message>
+  <wsdl:message name="getBankStatementSoapOut">
+    <wsdl:part name="parameters" element="tns:getBankStatementResponse"/>
+  </wsdl:message>
+
+  <!-- PORT TYPES: defines the complete communication operation (one way/round trip) -->
+  <wsdl:portType name="BillingSoapPort">
+    <!-- The operation name must be the same as the one specified in the service object -->
+    <wsdl:operation name="getInvoices">
+      <wsdl:input message="tns:getInvoicesSoapIn"/>
+      <wsdl:output message="tns:getInvoicesSoapOut"/>
+    </wsdl:operation>
+    <wsdl:operation name="emitInvoice">
+      <wsdl:input message="tns:emitInvoiceSoapIn"/>
+      <wsdl:output message="tns:emitInvoiceSoapOut"/>
+    </wsdl:operation>
+    <wsdl:operation name="payInvoice">
+      <wsdl:input message="tns:payInvoiceSoapIn"/>
+      <wsdl:output message="tns:payInvoiceSoapOut"/>
+    </wsdl:operation>
+    <wsdl:operation name="getBankStatement">
+      <wsdl:input message="tns:getBankStatementSoapIn"/>
+      <wsdl:output message="tns:getBankStatementSoapOut"/>
+    </wsdl:operation>
+  </wsdl:portType>
+
+  <!-- BINDING: provides details on how a portType operation will actually be transmitted -->
+  <wsdl:binding name="BillingServiceSoapBinding" type="tns:BillingSoapPort">
+    <soap:binding transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="getInvoices">
+      <soap:operation soapAction="getInvoices" style="document"/>
+      <wsdl:input>
+        <soap:body use="literal"/>
+      </wsdl:input>
+      <wsdl:output>
+        <soap:body use="literal"/>
+      </wsdl:output>
+    </wsdl:operation>
+    <wsdl:operation name="emitInvoice">
+      <soap:operation soapAction="emitInvoice" style="document"/>
+      <wsdl:input>
+        <soap:body use="literal"/>
+      </wsdl:input>
+      <wsdl:output>
+        <soap:body use="literal"/>
+      </wsdl:output>
+    </wsdl:operation>
+    <wsdl:operation name="payInvoice">
+      <soap:operation soapAction="payInvoice" style="document"/>
+      <wsdl:input>
+        <soap:body use="literal"/>
+      </wsdl:input>
+      <wsdl:output>
+        <soap:body use="literal"/>
+      </wsdl:output>
+    </wsdl:operation>
+    <wsdl:operation name="getBankStatement">
+      <soap:operation soapAction="getBankStatement" style="document"/>
+      <wsdl:input>
+        <soap:body use="literal"/>
+      </wsdl:input>
+      <wsdl:output>
+        <soap:body use="literal"/>
+      </wsdl:output>
+    </wsdl:operation>
+  </wsdl:binding>
+
+  <!-- SERVICE:  -->
+  <wsdl:service name="BillingService">
+    <wsdl:port name="BillingServiceSoapPort" binding="tns:BillingServiceSoapBinding">
+      <soap:address location="https://dev.proyecto.2026-2.tallerdeintegracion.cl/soap/billing"/>
+    </wsdl:port>
+  </wsdl:service>
+</wsdl:definitions>

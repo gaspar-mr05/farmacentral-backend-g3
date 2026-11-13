@@ -12,7 +12,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend and test dependencies
+        run: python -m pip install -e '.[dev]'
+
+      - name: Check code quality
+        run: |
+          ruff check app scripts tests
+          ruff format --check app scripts tests
+
+      - name: Run isolated E3 regression suite
+        run: python -m scripts.test_e3
+
   deploy:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - name: Configure deployment SSH key

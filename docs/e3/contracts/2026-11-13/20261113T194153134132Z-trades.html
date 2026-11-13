@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mercado - Documentación de integración</title>
+  
+<script src="https://cdn.jsdelivr.net/npm/redoc@2.5.4/bundles/redoc.standalone.js"></script>
+
+<script src="/js/redoc-theme.js"></script>
+
+  <style>
+    :root {
+      --ink: #15211d;
+      --ink-muted: #4b5a54;
+      --paper: #f5f7f4;
+      --line: #d5ddd6;
+      --code-bg: #101a17;
+      --code-ink: #d7e3dc;
+      --accent: #0f766e;
+      --warn-tint: #fbf0da;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 16px/1.6 system-ui, -apple-system, 'Segoe UI', sans-serif;
+    }
+
+    main { max-width: 860px; margin: 0 auto; padding: 32px 16px 80px; }
+    h1 { font-size: 2rem; margin: 0 0 8px; }
+    h2 { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); }
+    h3 { margin-top: 32px; }
+    a { color: var(--accent); }
+    .lead { color: var(--ink-muted); font-size: 1.05rem; }
+    code { font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 0.9em; }
+    :not(pre) > code { background: #e9eee9; padding: 1px 5px; border-radius: 4px; }
+
+    pre {
+      background: var(--code-bg);
+      color: var(--code-ink);
+      padding: 14px 16px;
+      border-radius: 8px;
+      overflow-x: auto;
+      line-height: 1.5;
+    }
+
+    table { border-collapse: collapse; width: 100%; margin: 16px 0; display: block; overflow-x: auto; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #e9eee9; }
+    .note { background: var(--warn-tint); border-left: 4px solid #b7791f; padding: 10px 14px; border-radius: 4px; }
+    nav ul { padding-left: 20px; }
+
+    .tabs { display: flex; gap: 8px; margin: 24px 0 0; }
+    .tabs button {
+      font: inherit; padding: 8px 16px; border: 1px solid var(--line); background: #fff;
+      border-radius: 8px 8px 0 0; cursor: pointer; color: var(--ink);
+    }
+    .tabs button[aria-selected="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+    #api-tab { max-width: none; }
+    body[data-tab="api"] main { max-width: none; padding: 0; }
+    body[data-tab="api"] .page-head { max-width: 860px; margin: 0 auto; padding: 32px 16px 0; }
+  </style>
+</head>
+
+<body data-tab="guide">
+  <main>
+    <div class="page-head">
+      <h1>Mercado entre distribuidoras</h1>
+      <p class="lead">
+        Las distribuidoras compran y venden productos entre ellas a través de Farma Central. Ninguna
+        distribuidora llama al servidor de otra: Farma Central publica las ofertas, custodia las
+        unidades mientras una oferta está abierta y liquida cada operación. Esta guía explica las
+        reglas, los estados y un ejemplo completo.
+      </p>
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" data-tab="guide" aria-selected="true">Guía</button>
+        <button type="button" role="tab" data-tab="api" aria-selected="false">Referencia de la API</button>
+        <button type="button" onclick="location.href='/trades/tester'">Probar en el tester</button>
+      </div>
+    </div>
+
+    <div id="guide-tab">
+      <nav>
+        <ul>
+          <li><a href="#flujo">Cómo funciona</a></li>
+          <li><a href="#acceso">Autenticación</a></li>
+          <li><a href="#publicar">Publicar una oferta</a></li>
+          <li><a href="#consultar">Consultar ofertas</a></li>
+          <li><a href="#aceptar">Aceptar una oferta</a></li>
+          <li><a href="#estados">Estados de una oferta</a></li>
+          <li><a href="#facturar">Facturar y pagar</a></li>
+          <li><a href="#errores">Errores</a></li>
+          <li><a href="#consejos">Buenas prácticas</a></li>
+        </ul>
+      </nav>
+
+      <h2 id="flujo">Cómo funciona</h2>
+      <ol>
+        <li><strong>Publicar.</strong> Una distribuidora publica una oferta de venta (<code>sell</code>) o de compra (<code>buy</code>): producto, cantidad y precio unitario.</li>
+        <li><strong>Custodia.</strong> Una oferta de venta reserva sus unidades del área de despacho. Una de compra no reserva nada.</li>
+        <li><strong>Aceptar.</strong> Otra distribuidora acepta la oferta, por su cantidad completa.</li>
+        <li><strong>Cierre, en un solo paso.</strong> Farma Central mueve las unidades a la recepción de la compradora (o a su bodega externa si la recepción no tiene espacio), cada una con su ID de lote, y crea una orden de compra <code>cumplida</code> con canal <code>mercado</code>. Su id queda en el campo <code>orderId</code> de la oferta.</li>
+        <li><strong>Facturar y pagar.</strong> La vendedora factura esa orden y la compradora paga la factura (ver <a href="#facturar">Facturar y pagar</a>).</li>
+      </ol>
+      <p class="note">
+        El mercado <strong>no avisa por webhook</strong> cuando una oferta se cierra: cada distribuidora
+        consulta el estado de sus ofertas con <code>GET /trades/offers/{offerId}</code>.
+      </p>
+
+      <h2 id="acceso">Autenticación</h2>
+      <p>
+        Obtén un token con las credenciales de tu grupo y envíalo en el header
+        <code>Authorization: Bearer TOKEN</code> de los servicios que lo piden. Listar y consultar
+        ofertas es público.
+      </p>
+      <pre>POST /trades/autenticar
+{ "group": 4, "secret": "SECRETO_DEL_GRUPO" }
+
+&rarr; { "token": "eyJhbGciOi..." }</pre>
+
+      <h2 id="publicar">Publicar una oferta</h2>
+      <pre>POST /trades/offers
+{
+  "side": "sell",
+  "sku": "KIT-RESP-ADULTO",
+  "quantity": 20,
+  "unitPrice": 6
+}</pre>
+      <table>
+        <tr><th>Regla</th><th>Detalle</th></tr>
+        <tr><td>Cualquier producto</td><td>Insumos, productos acondicionados y kits clínicos del catálogo.</td></tr>
+        <tr><td>Precio</td><td>El precio unitario debe estar entre 0,5 y 1,5 veces el precio vigente del producto al publicar. Fuera de ese rango la respuesta es <code>422</code> y el mensaje indica el rango permitido.</td></tr>
+        <tr><td>Cantidad</td><td>Un entero mayor que 0.</td></tr>
+        <tr><td>Custodia</td><td>Una oferta de <strong>venta</strong> reserva <code>quantity</code> unidades de tu área de despacho, disponibles y no vencidas. Si no alcanzan, la respuesta es <code>409</code> y no queda nada reservado. Mientras la oferta está abierta esas unidades no se pueden mover, despachar ni consumir en fabricación: pueden hacerte falta para despachar órdenes.</td></tr>
+        <tr><td>Vigencia</td><td>60 minutos. Al expirar o cancelarse, las unidades reservadas se liberan.</td></tr>
+        <tr><td>Límite</td><td>Cada grupo puede tener a lo más <strong>15</strong> ofertas abiertas a la vez, de venta y de compra juntas. La siguiente recibe <code>409</code>; cancela alguna o espera a que expire.</td></tr>
+        <tr><td>Unidades que cambian</td><td>Si una unidad reservada vence o entra a cuarentena, la oferta se cancela y se libera el resto.</td></tr>
+      </table>
+      <p>Para retirar una oferta propia abierta: <code>POST /trades/offers/{offerId}/cancel</code>. Sólo quien la publicó puede.</p>
+
+      <h2 id="consultar">Consultar ofertas</h2>
+      <pre>GET /trades/offers?sku=KIT-RESP-ADULTO&amp;side=sell
+GET /trades/offers/{offerId}</pre>
+      <p>
+        La lista es pública y entrega, sin <code>state</code>, las ofertas abiertas de todas las
+        distribuidoras, de la más nueva a la más antigua. Se filtra por <code>sku</code>,
+        <code>side</code> y <code>state</code>. Una oferta tiene esta forma:
+      </p>
+      <pre>{
+  "id": "64abc123def456789012abcd",
+  "publisher": "2",
+  "counterparty": null,
+  "side": "sell",
+  "sku": "KIT-RESP-ADULTO",
+  "quantity": 20,
+  "unitPrice": 6,
+  "state": "open",
+  "orderId": null,
+  "history": [{ "name": "open", "createdAt": "2026-11-18T10:05:00.000Z" }],
+  "createdAt": "2026-11-18T10:05:00.000Z",
+  "updatedAt": "2026-11-18T10:05:00.000Z",
+  "expiresAt": "2026-11-18T11:05:00.000Z",
+  "closedAt": null
+}</pre>
+
+      <h2 id="aceptar">Aceptar una oferta</h2>
+      <pre>POST /trades/offers/{offerId}/accept</pre>
+      <ul>
+        <li>Puede aceptarla cualquier distribuidora distinta de la que publicó (aceptar la propia da <code>403</code>).</li>
+        <li>Se acepta la <strong>cantidad completa</strong>: no hay cierres parciales.</li>
+        <li>Quien acepta una oferta de <strong>compra</strong> es la vendedora y debe tener las unidades en su área de despacho en ese momento; si no, <code>409</code> y la oferta sigue abierta.</li>
+        <li>Si dos grupos aceptan a la vez, uno cierra la operación y el otro recibe <code>409</code>.</li>
+      </ul>
+      <p>
+        La respuesta es la oferta ya <code>closed</code>, con el <code>orderId</code> de la orden de
+        compra <code>mercado</code> que dejó el cierre. Las unidades llegan con su ID de lote original.
+      </p>
+      <p>
+        Si una unidad reservada se vence o entra a cuarentena justo mientras se cierra la operación,
+        Farma Central la reemplaza por otra unidad libre del mismo producto del área de despacho de la
+        vendedora; si no hay otra, la orden se crea por las unidades que sí se entregaron. Por eso, ante
+        cualquier duda, <strong>la cantidad de la orden (<code>orderId</code>) es la que manda</strong>.
+        Cada unidad que llega a tu recepción queda enlazada a esa orden en la trazabilidad.
+      </p>
+
+      <h2 id="estados">Estados de una oferta</h2>
+      <table>
+        <tr><th>Estado</th><th>Significado</th></tr>
+        <tr><td><code>open</code></td><td>Publicada y visible. Cualquier otra distribuidora puede aceptarla.</td></tr>
+        <tr><td><code>closing</code></td><td>Alguien la aceptó y se está liquidando. Dura segundos y no aparece entre las abiertas; si algo se interrumpe, Farma Central lo completa solo.</td></tr>
+        <tr><td><code>closed</code></td><td>Liquidada: las unidades se movieron y existe la orden de compra (<code>orderId</code>).</td></tr>
+        <tr><td><code>cancelled</code></td><td>La retiró quien la publicó, o Farma Central la invalidó (unidades vencidas o en cuarentena).</td></tr>
+        <tr><td><code>expired</code></td><td>Llegó a su vencimiento sin que nadie la aceptara.</td></tr>
+      </table>
+
+      <h2 id="facturar">Facturar y pagar</h2>
+      <p>
+        La orden que deja el cierre nace <code>cumplida</code> y <strong>no se factura sola</strong>.
+        La vendedora la factura con <code>emitInvoice(orderId)</code> y la compradora paga la factura
+        con <code>payInvoice</code>, ambos en el servicio de facturación (<a href="/billing/docs">documentación</a>).
+        Una factura se paga sin interés durante las 6 horas siguientes a su emisión; después acumula
+        1% de su monto por hora. Una orden que no se factura no genera ingreso.
+      </p>
+
+      <h2 id="errores">Errores</h2>
+      <table>
+        <tr><th>Código</th><th><code>code</code></th><th>Cuándo</th></tr>
+        <tr><td><code>400</code></td><td><code>INVALID_OFFER</code></td><td>Parámetros incorrectos o un producto que no está en el catálogo.</td></tr>
+        <tr><td><code>401</code></td><td></td><td>Falta el token o no es válido.</td></tr>
+        <tr><td><code>403</code></td><td><code>UNAUTHORIZED_TRADE</code></td><td>Aceptar la propia oferta o cancelar una ajena.</td></tr>
+        <tr><td><code>404</code></td><td><code>OFFER_NOT_FOUND</code></td><td>La oferta no existe.</td></tr>
+        <tr><td><code>409</code></td><td><code>INVALID_OFFER_STATE</code></td><td>La oferta ya no está abierta, o la tomó otro grupo antes.</td></tr>
+        <tr><td><code>409</code></td><td><code>INSUFFICIENT_STOCK</code></td><td>No hay unidades suficientes y disponibles en el área de despacho.</td></tr>
+        <tr><td><code>409</code></td><td><code>OFFER_LIMIT_REACHED</code></td><td>Ya tienes 15 ofertas abiertas.</td></tr>
+        <tr><td><code>422</code></td><td><code>PRICE_OUT_OF_BAND</code></td><td>Precio fuera de la banda; el mensaje trae el rango.</td></tr>
+      </table>
+
+      <h2 id="consejos">Buenas prácticas</h2>
+      <ul>
+        <li>Consulta el estado de tus ofertas: el mercado no avisa por webhook.</li>
+        <li>Una venta abierta retiene unidades de tu despacho; no publiques más de lo que puedes dejar quieto durante 60 minutos.</li>
+        <li>Registra el <code>orderId</code> antes de reintentar una factura: cada orden se factura una sola vez.</li>
+        <li>Lo que llega a tu recepción puede caer a la bodega externa si no cabe, y esa bodega cobra cada hora.</li>
+      </ul>
+    </div>
+
+    <div id="api-tab" hidden>
+      <div id="redoc-container"></div>
+    </div>
+  </main>
+
+  <script>
+    let redocInitialized = false;
+
+    function showTab(tab) {
+      document.getElementById('guide-tab').hidden = tab !== 'guide';
+      document.getElementById('api-tab').hidden = tab !== 'api';
+      document.body.dataset.tab = tab;
+      document.querySelectorAll('.tabs button[data-tab]').forEach(button => {
+        button.setAttribute('aria-selected', String(button.dataset.tab === tab));
+      });
+      if (tab === 'api' && !redocInitialized) {
+        redocInitialized = true;
+        Redoc.init('/trades/openapi.json', {theme: window.REDOC_THEME}, document.getElementById('redoc-container'));
+      }
+    }
+
+    document.querySelectorAll('.tabs button[data-tab]').forEach(button => {
+      button.addEventListener('click', () => showTab(button.dataset.tab));
+    });
+  </script>
+</body>
+
+</html>

@@ -60,7 +60,7 @@ class MessagingInquiryRequest(BaseModel):
 class MessagingSendRequest(BaseModel):
     to: NonBlankString
     reply_to: NonBlankString = Field(alias="replyTo")
-    text: NonBlankString
+    text: Annotated[str, StringConstraints(min_length=1, max_length=500, pattern=r"\S")]
 
 
 class MessagingResponse(BaseModel):

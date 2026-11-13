@@ -1,16 +1,23 @@
 import os
 import subprocess
 
+import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from app.models import BusinessPeriod
-from scripts.test_e3 import isolated_postgres, postgres_bin
+from scripts.test_e3 import (
+    isolated_postgres,
+    native_postgres_tools_available,
+    postgres_bin,
+)
 from tests.models.test_e2_migration import run_migration
 from tests.support.billing import make_period
 
 
 def test_backup_restore_and_epoch_preservation_on_disposable_databases(tmp_path):
+    if not native_postgres_tools_available("initdb", "pg_ctl", "pg_dump", "pg_restore"):
+        pytest.skip("backup rehearsal requires native PostgreSQL command-line tools")
     # Neither source nor target can reference an operational URL: the cluster
     # itself is created by the isolated E3 test harness.
     with isolated_postgres() as address:

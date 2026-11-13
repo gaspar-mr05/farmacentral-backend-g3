@@ -100,6 +100,10 @@ class MessagingClient:
         response = await self._request(
             "POST", path, json=request.model_dump(by_alias=True)
         )
+        if response.status_code != 200:
+            raise MessagingInvalidResponseError(
+                f"Messaging inquiry returned unexpected HTTP {response.status_code}"
+            )
         confirmation = self._confirmation(response)
         if confirmation.get("status") not in (None, "inquiry"):
             raise MessagingInvalidResponseError(
@@ -126,6 +130,10 @@ class MessagingClient:
         response = await self._request(
             "POST", "messages", json=request.model_dump(by_alias=True)
         )
+        if response.status_code != 201:
+            raise MessagingInvalidResponseError(
+                f"Messaging send returned unexpected HTTP {response.status_code}"
+            )
         return self._confirmation(response)
 
     async def discard(self, message_id: str, *, reason: str) -> None:
@@ -162,8 +170,6 @@ class MessagingClient:
 
     @staticmethod
     def _confirmation(response: httpx.Response) -> dict[str, Any]:
-        # E3 request bodies are specified in the assignment; the public API still
-        # documents E2. Preserve confirmations without inventing response IDs.
         if not response.is_success:
             raise MessagingInvalidResponseError(
                 f"Messaging service returned unexpected HTTP {response.status_code}"

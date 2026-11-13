@@ -135,17 +135,14 @@ y termina el evento sin importar, decidir ni facturar una orden inexistente. El
 prefijo del `messageId` no basta para reconocer una prueba. Si existe un
 `orderId`, la OC sigue el flujo normal, incluso si la respuesta indica prueba.
 
-**Contrato E3 pendiente de confirmación:** el 12 de noviembre se consultaron
-[OpenAPI](https://dev.proyecto.2026-2.tallerdeintegracion.cl/messaging/openapi.json)
-y [la guía pública](https://dev.proyecto.2026-2.tallerdeintegracion.cl/messaging/docs).
-Ambos todavía muestran sólo `order/discarded` y no publican el envío de texto.
-La captura queda en `docs/e3/contracts/2026-11-12/`. Por eso, las operaciones
-nuevas conservan el objeto JSON de confirmación (o `{}` ante un `204` vacío),
-sin exigir un ID remoto ni inventar una clave de idempotencia. Si la respuesta
-incluye estado u OC de la clasificación, deben coincidir con la consulta.
-Los códigos y cuerpos de éxito concretos, deduplicación y consulta de envío
-deben contrastarse cuando esté publicado el contrato; la prueba real contra el
-chat de desarrollo sigue pendiente.
+El contrato E3 de mensajería quedó publicado el 13 de noviembre y su captura
+está en `docs/e3/contracts/2026-11-13/`. Confirma `inquiry`, el envío de texto,
+`200` para clasificación, `201` para envío, el límite de 500 caracteres y la
+ventana de 30 minutos. El cliente exige esos códigos y conserva la confirmación
+JSON; si la clasificación incluye estado u OC, deben coincidir con la consulta.
+El contrato no publica consulta ni clave de idempotencia para un envío, por lo
+que un resultado incierto no se repite automáticamente. La prueba real de
+recepción contra el chat de desarrollo sigue pendiente.
 
 El 12 de noviembre a las 18:18 de Chile se ejecutó un envío real con un webhook
 auténtico recibido a las 18:16: autenticación `200`, pero el POST de texto devolvió
@@ -155,8 +152,8 @@ y una referencia rechazada por el servicio. La evidencia sin datos del cliente
 está en `docs/e3/contracts/2026-11-12/messaging-outbound-probe.json`.
 
 El paso 18 conecta ambas operaciones al worker con las fases durables descritas
-más abajo. La validación real del contrato y de la recepción en el chat continúa
-pendiente; las pruebas locales no sustituyen esa comprobación.
+más abajo. La recepción real en el chat continúa pendiente; la captura del
+contrato y las pruebas locales no sustituyen esa comprobación de transporte.
 
 Pruebas locales, con servicios simulados y PostgreSQL de pruebas:
 
@@ -467,8 +464,11 @@ Comprobar el servidor:
 curl --fail http://127.0.0.1:8000/api/health/ready
 systemctl is-active farmacentral-backend.service
 systemctl is-active farmacentral-workers.target
-systemctl is-active farmacentral-worker@process_billing.service
-systemctl is-active farmacentral-worker@process_trades.service
+for worker in poll_sftp_orders poll_pubsub_orders process_messaging \
+  fulfill_external_orders process_recalls replenish_inventory \
+  process_billing process_trades; do
+  systemctl is-active "farmacentral-worker@${worker}.service"
+done
 systemctl is-active farmacentral-inventory-sync.timer
 ```
 

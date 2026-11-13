@@ -86,3 +86,20 @@ def test_cluster_is_stopped_and_deleted_when_test_execution_fails(monkeypatch):
     assert commands[-1][-1] == "stop"
     root = Path(commands[0][commands[0].index("-D") + 1]).parent
     assert not root.exists()
+
+
+def test_isolated_postgres_uses_docker_when_native_tools_are_missing(monkeypatch):
+    used = []
+
+    @contextmanager
+    def docker_database():
+        used.append(True)
+        yield "postgresql+psycopg://e3_test@127.0.0.1:54321/postgres"
+
+    monkeypatch.setattr(module, "native_postgres_tools_available", lambda *args: False)
+    monkeypatch.setattr(module, "docker_postgres", docker_database)
+
+    with module.isolated_postgres() as url:
+        assert url.endswith(":54321/postgres")
+
+    assert used == [True]

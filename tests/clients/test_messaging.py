@@ -124,12 +124,8 @@ async def test_inquiry_and_reply_use_separate_endpoints_and_original_routing():
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("operation", ["inquiry", "send"])
-@pytest.mark.parametrize("status", [200, 201, 204])
-async def test_new_operations_accept_http_confirmations_without_inventing_ids(
-    operation,
-    status,
-):
+@pytest.mark.parametrize(("operation", "status"), [("inquiry", 200), ("send", 201)])
+async def test_new_operations_accept_documented_http_confirmations(operation, status):
     def handler(request):
         if request.url.path.endswith("/auth"):
             return httpx.Response(200, json={"token": "test-token"})
@@ -143,6 +139,25 @@ async def test_new_operations_accept_http_confirmations_without_inventing_ids(
     ) as http_client:
         client = MessagingClient(settings=make_settings(), http_client=http_client)
         assert await new_operation(client, operation) == {}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("operation", "status"),
+    [("inquiry", 201), ("inquiry", 204), ("send", 200), ("send", 204)],
+)
+async def test_new_operations_reject_undocumented_success_codes(operation, status):
+    def handler(request):
+        if request.url.path.endswith("/auth"):
+            return httpx.Response(200, json={"token": "test-token"})
+        return httpx.Response(status, json={})
+
+    async with httpx.AsyncClient(
+        base_url="https://messaging.test/", transport=httpx.MockTransport(handler)
+    ) as http_client:
+        client = MessagingClient(settings=make_settings(), http_client=http_client)
+        with pytest.raises(MessagingInvalidResponseError):
+            await new_operation(client, operation)
 
 
 @pytest.mark.anyio
@@ -277,6 +292,8 @@ async def test_invalid_inquiry_id_and_blank_reply_are_rejected_before_http():
             await client.respond_inquiry(" ", order_id=ORDER_ID)
         with pytest.raises(ValidationError):
             await client.send_reply(incoming_message(), text=" ")
+        with pytest.raises(ValidationError):
+            await client.send_reply(incoming_message(), text="x" * 501)
 
 
 @pytest.mark.anyio

@@ -7,6 +7,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -25,8 +26,73 @@ def postgres_bin(name):
     return str(candidates[-1])
 
 
+def native_postgres_tools_available(*names):
+    try:
+        for name in names:
+            postgres_bin(name)
+    except RuntimeError:
+        return False
+    return True
+
+
+@contextmanager
+def docker_postgres():
+    image = os.environ.get("E3_POSTGRES_IMAGE", "postgres:16-alpine")
+    command = [
+        "docker",
+        "run",
+        "--rm",
+        "--detach",
+        "--pull=missing",
+        "--env",
+        "POSTGRES_HOST_AUTH_METHOD=trust",
+        "--env",
+        "POSTGRES_USER=e3_test",
+        "--publish",
+        "127.0.0.1::5432",
+        image,
+    ]
+    container = subprocess.run(
+        command, check=True, capture_output=True, text=True, timeout=30
+    ).stdout.strip()
+    try:
+        published = subprocess.run(
+            ["docker", "port", container, "5432/tcp"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+        port = int(published.rsplit(":", 1)[-1])
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            ready = subprocess.run(
+                ["docker", "exec", container, "pg_isready", "-U", "e3_test"],
+                check=False,
+                capture_output=True,
+                timeout=5,
+            )
+            if ready.returncode == 0:
+                break
+            time.sleep(0.25)
+        else:
+            raise RuntimeError("Disposable Docker PostgreSQL did not start")
+        yield f"postgresql+psycopg://e3_test@127.0.0.1:{port}/postgres"
+    finally:
+        subprocess.run(
+            ["docker", "stop", "--time", "5", container],
+            check=False,
+            capture_output=True,
+            timeout=15,
+        )
+
+
 @contextmanager
 def isolated_postgres():
+    if not native_postgres_tools_available("initdb", "pg_ctl"):
+        with docker_postgres() as url:
+            yield url
+        return
     initdb, pg_ctl = postgres_bin("initdb"), postgres_bin("pg_ctl")
     with TemporaryDirectory(prefix="farmacentral-e3-tests-") as directory:
         root = Path(directory)

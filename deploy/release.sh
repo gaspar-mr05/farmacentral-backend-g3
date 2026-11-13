@@ -3,6 +3,16 @@
 set -Eeuo pipefail
 
 readonly APP_DIR="/home/integracion/farmacentral-backend"
+readonly WORKERS=(
+    poll_sftp_orders
+    poll_pubsub_orders
+    process_messaging
+    fulfill_external_orders
+    process_recalls
+    replenish_inventory
+    process_billing
+    process_trades
+)
 
 cd "$APP_DIR"
 export APP_ENV_FILE="$APP_DIR/.env"
@@ -33,8 +43,10 @@ require_active() {
 
 restart_service farmacentral-backend.service
 restart_service farmacentral-workers.target
-require_active farmacentral-worker@process_billing.service
-require_active farmacentral-worker@process_trades.service
+for worker in "${WORKERS[@]}"; do
+    require_active "farmacentral-worker@${worker}.service"
+done
+require_active farmacentral-inventory-sync.timer
 
 for attempt in {1..10}; do
     if curl --fail --silent --show-error --connect-timeout 2 --max-time 6 \
