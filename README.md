@@ -315,7 +315,8 @@ LLM. El catálogo y el checkout mantienen sus dependencias propias, separadas
 de esos servicios.
 
 El equipo puede consultar `/api/operations/waiting-orders`, `/offers`,
-`/invoices` y `/metrics` bajo el mismo prefijo `/api/operations`. Son consultas
+`/invoices`, `/metrics` y `/workers` bajo el mismo prefijo `/api/operations`.
+Son consultas
 locales de sólo lectura: no activan conciliaciones ni operaciones comerciales.
 Cada una requiere `period_id`, con validación de grupo y ambiente. Las listas
 usan `limit`, `offset` y `has_more`; las fechas de observación y captura permiten
@@ -336,6 +337,43 @@ checkout, trazabilidad y recalls, además de autenticación y lectura sin escrit
 .venv/bin/python -m pytest -q tests/api/test_operations.py \
   tests/api/test_e3_frontend_availability.py
 ```
+
+### Workers E3 y supervisión — paso 21
+
+El target ejecuta `scripts.process_billing` y `scripts.process_trades`. El
+primero concilia facturas y, cuando sus flags están habilitados, emite ventas y
+paga deudas antes de guardar métricas; el segundo concilia ofertas y custodia.
+Cada proceso usa un advisory lock por período, persiste `next_retry_at` en las
+colas existentes y confirma su transacción antes de dormir.
+
+Cada ciclo actualiza `worker_heartbeats` con inicio, último éxito o fallo,
+fallos consecutivos, profundidad de cola y fecha del elemento más antiguo.
+`GET /api/operations/workers?period_id=...` permite observar esos datos sin
+invocar servicios externos. Un proceso `active` con heartbeat antiguo o sin
+`last_success_at` no se considera evidencia de operación correcta.
+
+Al desplegar este cambio por primera vez, instala el target actualizado antes
+de ejecutar `release.sh`; el instalador también detiene los nombres antiguos
+para que no queden productores duplicados:
+
+```bash
+cd /home/integracion/farmacentral-backend
+./deploy/install-systemd-units.sh
+sudo systemctl restart farmacentral-workers.target
+```
+
+El despliegue habitual reinicia el target y falla si los dos workers E3 no
+quedan activos. Para que el ciclo financiero ejecute las mutaciones requeridas,
+el entorno del servidor debe seleccionar el período y habilitarlas:
+
+```dotenv
+BILLING_PERIOD_ID=UUID_DEL_PERIODO
+BILLING_EMIT_SALES_ENABLED=true
+BILLING_PAY_INVOICES_ENABLED=true
+```
+
+La clave y el período no se imprimen en logs. Los timeouts de Billing, Trades,
+OCs y Farma Central continúan configurándose por sus variables `*_TIMEOUT_SECONDS`.
 
 ### Esperar stock antes de rechazar una OC
 
@@ -410,8 +448,7 @@ Instalar nginx y las unidades systemd:
 sudo cp deploy/farmacentral-backend.service /etc/systemd/system/
 sudo cp deploy/farmacentral-inventory-sync.service /etc/systemd/system/
 sudo cp deploy/farmacentral-inventory-sync.timer /etc/systemd/system/
-sudo cp deploy/farmacentral-worker@.service /etc/systemd/system/
-sudo cp deploy/farmacentral-workers.target /etc/systemd/system/
+./deploy/install-systemd-units.sh
 sudo cp deploy/nginx.conf /etc/nginx/sites-available/farmacentral-backend
 sudo ln -sfn /etc/nginx/sites-available/farmacentral-backend \
   /etc/nginx/sites-enabled/farmacentral-backend
@@ -430,6 +467,8 @@ Comprobar el servidor:
 curl --fail http://127.0.0.1:8000/api/health/ready
 systemctl is-active farmacentral-backend.service
 systemctl is-active farmacentral-workers.target
+systemctl is-active farmacentral-worker@process_billing.service
+systemctl is-active farmacentral-worker@process_trades.service
 systemctl is-active farmacentral-inventory-sync.timer
 ```
 

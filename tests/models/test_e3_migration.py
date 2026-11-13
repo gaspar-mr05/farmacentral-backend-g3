@@ -24,6 +24,7 @@ LATER_MIGRATION_TABLES = {
     "messaging_messages",
     "procurement_requests",
     "replenishment_states",
+    "worker_heartbeats",
 }
 
 

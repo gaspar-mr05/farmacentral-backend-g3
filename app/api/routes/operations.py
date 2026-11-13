@@ -18,13 +18,16 @@ from app.models import (
     MarketOffer,
     Order,
     OrderStatus,
+    WorkerHeartbeat,
 )
 from app.schemas.operations import (
     OperationalInvoiceResponse,
     OperationalOfferResponse,
     OperationsMetricsResponse,
     OperationsPage,
+    OperationsWorkersResponse,
     WaitingOrderResponse,
+    WorkerHeartbeatResponse,
 )
 from app.services.billing.periods import billing_period
 
@@ -142,4 +145,37 @@ def metrics(session: Database, period: Period):
         captured_at=snapshot.captured_at if snapshot else None,
         commit_sha=snapshot.commit_sha if snapshot else None,
         metrics=snapshot.metrics if snapshot else None,
+    )
+
+
+@router.get("/workers", response_model=OperationsWorkersResponse)
+def workers(session: Database, period: Period):
+    read_at = datetime.now(UTC)
+    rows = session.scalars(
+        select(WorkerHeartbeat)
+        .where(WorkerHeartbeat.period_id == period.id)
+        .order_by(WorkerHeartbeat.worker_name)
+    ).all()
+    return OperationsWorkersResponse(
+        period_id=period.id,
+        read_at=read_at,
+        items=[
+            WorkerHeartbeatResponse(
+                worker_name=row.worker_name,
+                heartbeat_at=row.heartbeat_at,
+                last_started_at=row.last_started_at,
+                last_success_at=row.last_success_at,
+                last_failure_at=row.last_failure_at,
+                last_error_type=row.last_error_type,
+                consecutive_failures=row.consecutive_failures,
+                queue_depth=row.queue_depth,
+                oldest_queued_at=row.oldest_queued_at,
+                queue_age_seconds=(
+                    max(0, int((read_at - row.oldest_queued_at).total_seconds()))
+                    if row.oldest_queued_at
+                    else None
+                ),
+            )
+            for row in rows
+        ],
     )

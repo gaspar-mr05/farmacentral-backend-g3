@@ -56,6 +56,7 @@ from app.models.recall import (
 )
 from app.models.replenishment import ReplenishmentState
 from app.models.unit import Unit
+from app.models.worker_heartbeat import WorkerHeartbeat
 
 __all__ = [
     "Base",
@@ -110,4 +111,5 @@ __all__ = [
     "RecallDelivery",
     "RecallNotification",
     "RecallNotificationStatus",
+    "WorkerHeartbeat",
 ]

@@ -21,8 +21,15 @@ from app.services.billing import BillingReconciliationService, BusinessMetricsSe
 from app.services.billing.payments import InvoicePaymentService
 from app.services.billing.periods import billing_period
 from app.services.billing.sales import SalesInvoicingService
+from app.services.workers import (
+    billing_queue_snapshot,
+    mark_failure,
+    mark_started,
+    mark_success,
+)
 
 logger = logging.getLogger(__name__)
+WORKER_NAME = "process_billing"
 
 
 async def run(
@@ -63,6 +70,7 @@ async def run(
                         else None
                     )
                     while True:
+                        mark_started(session, period.id, WORKER_NAME)
                         try:
                             reconciliation = BillingReconciliationService(
                                 client, session, period, settings=settings
@@ -131,11 +139,33 @@ async def run(
                                 "Billing reconciliation cycle failed: error=%s",
                                 type(exc).__name__,
                             )
-                            # A lost DB connection also loses its advisory lock.
-                            # Restart under the supervisor to acquire it again.
-                            if once or isinstance(exc, SQLAlchemyError):
+                            # A lost DB connection also loses its advisory lock and
+                            # cannot reliably persist a failure heartbeat.
+                            if isinstance(exc, SQLAlchemyError):
+                                raise SystemExit(1) from None
+                            mark_failure(
+                                session,
+                                period.id,
+                                WORKER_NAME,
+                                exc,
+                                billing_queue_snapshot(session, period.id),
+                            )
+                            if once:
                                 raise SystemExit(1) from None
                         else:
+                            queue = billing_queue_snapshot(session, period.id)
+                            if result["failed"]:
+                                mark_failure(
+                                    session,
+                                    period.id,
+                                    WORKER_NAME,
+                                    "CycleIncomplete",
+                                    queue,
+                                )
+                            else:
+                                mark_success(
+                                    session, period.id, WORKER_NAME, queue
+                                )
                             if once:
                                 if result["failed"]:
                                     raise SystemExit(1)

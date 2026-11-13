@@ -17,11 +17,22 @@ restart_service() {
     fi
 }
 
+require_active() {
+    local unit="$1"
+    if ! sudo -n /usr/bin/systemctl is-active --quiet "$unit"; then
+        printf 'Deployment failed: %s is not active after restart.\n' "$unit" >&2
+        printf 'Install the current systemd units with deploy/install-systemd-units.sh.\n' >&2
+        return 1
+    fi
+}
+
 .venv/bin/python -m pip install --disable-pip-version-check .
 .venv/bin/alembic upgrade head
 
 restart_service farmacentral-backend.service
 restart_service farmacentral-workers.target
+require_active farmacentral-worker@process_billing.service
+require_active farmacentral-worker@process_trades.service
 
 for attempt in {1..10}; do
     if curl --fail --silent --show-error --connect-timeout 2 --max-time 6 \

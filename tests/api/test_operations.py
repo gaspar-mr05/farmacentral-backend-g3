@@ -8,7 +8,7 @@ from sqlalchemy import event, select
 
 from app.api import dependencies
 from app.api.routes import operations
-from app.models import BusinessMetricSnapshot, MarketOffer
+from app.models import BusinessMetricSnapshot, MarketOffer, WorkerHeartbeat
 from app.services.billing.metrics import BusinessMetricsService
 from tests.support.billing import make_invoice, make_period
 from tests.support.farma_central import make_settings
@@ -37,7 +37,9 @@ def period(db_session, settings):
     return row
 
 
-@pytest.mark.parametrize("path", ["waiting-orders", "offers", "invoices", "metrics"])
+@pytest.mark.parametrize(
+    "path", ["waiting-orders", "offers", "invoices", "metrics", "workers"]
+)
 @pytest.mark.parametrize("auth", [None, "Bearer wrong-key", "Basic dXNlcjpwYXNz"])
 def test_diagnostics_require_authentication(api_client, settings, path, auth):
     response = api_client.get(
@@ -137,7 +139,7 @@ def test_read_only_diagnostics_work_when_all_remote_services_are_down(
     connection = db_session.connection()
     event.listen(connection, "before_cursor_execute", capture)
     try:
-        for path in ("waiting-orders", "offers", "invoices", "metrics"):
+        for path in ("waiting-orders", "offers", "invoices", "metrics", "workers"):
             response = api_client.get(
                 f"/api/operations/{path}?period_id={period.id}", headers=HEADERS
             )
@@ -219,6 +221,36 @@ def test_financial_data_is_not_mixed_between_periods(api_client, db_session, per
     assert response.json()["state"] == "not_captured"
 
 
+def test_worker_diagnostics_expose_progress_and_queue_age(
+    api_client, db_session, period
+):
+    now = datetime.now(UTC)
+    db_session.add(
+        WorkerHeartbeat(
+            period_id=period.id,
+            worker_name="process_billing",
+            heartbeat_at=now - timedelta(seconds=5),
+            last_started_at=now - timedelta(seconds=10),
+            last_success_at=now - timedelta(minutes=1),
+            last_failure_at=None,
+            last_error_type=None,
+            consecutive_failures=0,
+            queue_depth=3,
+            oldest_queued_at=now - timedelta(minutes=5),
+        )
+    )
+    db_session.commit()
+    response = api_client.get(
+        f"/api/operations/workers?period_id={period.id}", headers=HEADERS
+    )
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["worker_name"] == "process_billing"
+    assert item["queue_depth"] == 3
+    assert item["queue_age_seconds"] >= 299
+    assert item["last_success_at"] is not None
+
+
 @pytest.mark.parametrize("query", ["limit=0", "limit=101", "offset=-1"])
 def test_page_limits_are_validated(api_client, period, query):
     assert (
@@ -230,7 +262,7 @@ def test_page_limits_are_validated(api_client, period, query):
 
 
 def test_private_routes_do_not_offer_commands(api_client, period):
-    for path in ("waiting-orders", "offers", "invoices", "metrics"):
+    for path in ("waiting-orders", "offers", "invoices", "metrics", "workers"):
         assert (
             api_client.post(
                 f"/api/operations/{path}?period_id={period.id}", headers=HEADERS

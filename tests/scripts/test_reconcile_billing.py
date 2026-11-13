@@ -8,7 +8,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.models import BillingSyncState
+from app.models import BillingSyncState, WorkerHeartbeat
 from scripts import reconcile_billing as module
 from tests.models.test_e2_migration import migration_database as migration_database
 from tests.models.test_e2_migration import run_migration
@@ -54,6 +54,9 @@ async def test_worker_once_persists_observations_and_releases_lock(
         states = session.scalars(select(BillingSyncState)).all()
         assert len(states) == 5
         assert all(state.last_success_at is not None for state in states)
+        heartbeat = session.get(WorkerHeartbeat, (period_id, "process_billing"))
+        assert heartbeat.last_success_at is not None
+        assert heartbeat.consecutive_failures == 0
     assert source.bank_calls == 1
     assert len(source.calls) == 8
     factory = module.BillingReconciliationService
@@ -65,6 +68,10 @@ async def test_worker_once_persists_observations_and_releases_lock(
     with pytest.raises(SystemExit) as stopped:
         await module.run(period_id=period_id)
     assert stopped.value.code == 1
+    with Session(engine) as session:
+        heartbeat = session.get(WorkerHeartbeat, (period_id, "process_billing"))
+        # A lost DB connection is left for systemd to expose and restart.
+        assert heartbeat.last_started_at >= heartbeat.last_success_at
     monkeypatch.setattr(module, "BillingReconciliationService", factory)
     await module.run(period_id=period_id, once=True)
     assert len(source.calls) == 12

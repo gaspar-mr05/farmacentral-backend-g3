@@ -51,6 +51,7 @@ La documentación interactiva generada por FastAPI está disponible en:
 | `GET` | `/api/operations/offers` | Ofertas locales y estado de conciliación. |
 | `GET` | `/api/operations/invoices` | Facturas persistidas del período. |
 | `GET` | `/api/operations/metrics` | Último snapshot de métricas del período. |
+| `GET` | `/api/operations/workers` | Heartbeat, último éxito y edad de cola de workers E3. |
 
 ## Salud
 
@@ -820,7 +821,7 @@ worker actualiza la investigación y el reporte para incorporarlos.
 
 ## Diagnóstico operativo privado — paso 20
 
-Estas cuatro rutas consultan exclusivamente datos persistidos. No concilian,
+Estas cinco rutas consultan exclusivamente datos persistidos. No concilian,
 interpretan, compran, publican ofertas, emiten facturas ni pagan. Exigen:
 
 ```http
@@ -884,6 +885,13 @@ congela los datos si los workers los modifican entre solicitudes.
   conciliación y conteos de mercado. No recalcula el snapshot ni simula una
   actualización. `metrics.reconciliation` distingue una conciliación incompleta
   y conserva su fecha de cobertura; `captured_at` permite evaluar la antigüedad.
+- `GET /api/operations/workers`: devuelve la evidencia durable de los ciclos E3.
+  Cada elemento incluye `worker_name`, `heartbeat_at`, `last_started_at`,
+  `last_success_at`, `last_failure_at`, `last_error_type`,
+  `consecutive_failures`, `queue_depth`, `oldest_queued_at` y
+  `queue_age_seconds`. La edad se calcula al leer los datos; no se contacta a
+  systemd ni a servicios remotos. Un heartbeat iniciado sin éxito posterior
+  permite detectar un ciclo colgado aunque la unidad siga activa.
 
 Las rutas sólo admiten GET. El diagnóstico no habilita operaciones manuales de
 pago o compra. El portal, creación de órdenes, checkout, trazabilidad y retiros

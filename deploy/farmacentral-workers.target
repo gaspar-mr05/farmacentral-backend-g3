@@ -6,8 +6,8 @@ Wants=farmacentral-worker@process_messaging.service
 Wants=farmacentral-worker@fulfill_external_orders.service
 Wants=farmacentral-worker@process_recalls.service
 Wants=farmacentral-worker@replenish_inventory.service
-Wants=farmacentral-worker@reconcile_billing.service
-Wants=farmacentral-worker@reconcile_trades.service
+Wants=farmacentral-worker@process_billing.service
+Wants=farmacentral-worker@process_trades.service
 After=network-online.target postgresql.service
 
 [Install]

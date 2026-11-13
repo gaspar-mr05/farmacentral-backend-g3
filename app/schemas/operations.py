@@ -83,3 +83,23 @@ class OperationsMetricsResponse(BaseModel):
     captured_at: datetime | None
     commit_sha: str | None
     metrics: BusinessMetrics | None
+
+
+class WorkerHeartbeatResponse(BaseModel):
+    worker_name: str
+    heartbeat_at: datetime
+    last_started_at: datetime
+    last_success_at: datetime | None
+    last_failure_at: datetime | None
+    last_error_type: str | None
+    consecutive_failures: int
+    queue_depth: int
+    oldest_queued_at: datetime | None
+    queue_age_seconds: int | None
+
+
+class OperationsWorkersResponse(BaseModel):
+    period_id: UUID
+    read_at: datetime
+    data_source: Literal["persisted"] = "persisted"
+    items: list[WorkerHeartbeatResponse]

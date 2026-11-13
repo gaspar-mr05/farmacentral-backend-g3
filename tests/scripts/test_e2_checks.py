@@ -220,7 +220,7 @@ async def test_public_recall_api_compares_db_and_http(db_session, problem):
 @pytest.mark.parametrize(
     "problem", [None, "stopped", "restart", "replenishment", "systemd", "timeout"]
 )
-async def test_workers_require_five_original_services_and_never_start_them(
+async def test_workers_require_supervised_services_and_never_start_them(
     monkeypatch, problem
 ):
     blocks = []
@@ -253,7 +253,7 @@ async def test_workers_require_five_original_services_and_never_start_them(
     )
     assert command.call_args.args[:2] == ("systemctl", "show")
     assert len([arg for arg in command.call_args.args if arg.endswith(".service")]) == (
-        6 if problem == "replenishment" else 5
+        8 if problem == "replenishment" else 7
     )
     assert process.kill.call_count == (1 if problem == "timeout" else 0)
 

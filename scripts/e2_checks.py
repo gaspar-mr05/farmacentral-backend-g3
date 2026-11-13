@@ -29,6 +29,8 @@ WORKERS = (
     "process_messaging",
     "fulfill_external_orders",
     "process_recalls",
+    "process_billing",
+    "process_trades",
 )
 
 

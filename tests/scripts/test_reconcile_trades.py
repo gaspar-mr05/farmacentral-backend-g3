@@ -7,6 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.models import WorkerHeartbeat
 from scripts import reconcile_trades as module
 from tests.models.test_e2_migration import migration_database as migration_database
 from tests.models.test_e2_migration import run_migration
@@ -33,6 +34,10 @@ async def test_worker_once_with_no_offers_only_reads_local_state(
         period_id = period.id
     configure(monkeypatch, engine)
     await module.run(period_id=period_id, once=True)
+    with Session(engine) as session:
+        heartbeat = session.get(WorkerHeartbeat, (period_id, "process_trades"))
+        assert heartbeat.last_success_at is not None
+        assert heartbeat.queue_depth == 0
     for name in ("TradesClient", "PurchaseOrdersClient", "FarmaCentralClient"):
         client = getattr(module, name).return_value.__aenter__.return_value
         assert client.mock_calls == []

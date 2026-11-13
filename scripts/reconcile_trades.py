@@ -18,8 +18,15 @@ from app.core.config import get_settings
 from app.db.session import engine
 from app.services.trades.periods import market_period
 from app.services.trades.reconciliation import TradeReconciliationService
+from app.services.workers import (
+    mark_failure,
+    mark_started,
+    mark_success,
+    trades_queue_snapshot,
+)
 
 logger = logging.getLogger(__name__)
+WORKER_NAME = "process_trades"
 
 
 async def run(*, period_id: UUID, once=False, interval=60, batch_size=50):
@@ -58,6 +65,7 @@ async def run(*, period_id: UUID, once=False, interval=60, batch_size=50):
                         batch_size=batch_size,
                     )
                     while True:
+                        mark_started(session, period.id, WORKER_NAME)
                         try:
                             result = await service.poll()
                             logger.info(
@@ -78,9 +86,32 @@ async def run(*, period_id: UUID, once=False, interval=60, batch_size=50):
                                 "Market reconciliation cycle failed: error=%s",
                                 type(exc).__name__,
                             )
-                            if once or isinstance(exc, SQLAlchemyError):
+                            if isinstance(exc, SQLAlchemyError):
+                                raise SystemExit(1) from None
+                            mark_failure(
+                                session,
+                                period.id,
+                                WORKER_NAME,
+                                exc,
+                                trades_queue_snapshot(session, period.id),
+                            )
+                            if once:
                                 raise SystemExit(1) from None
                         else:
+                            queue = trades_queue_snapshot(session, period.id)
+                            incomplete = result["failed"] or result["blocked"]
+                            if incomplete:
+                                mark_failure(
+                                    session,
+                                    period.id,
+                                    WORKER_NAME,
+                                    "CycleIncomplete",
+                                    queue,
+                                )
+                            else:
+                                mark_success(
+                                    session, period.id, WORKER_NAME, queue
+                                )
                             if once:
                                 if result["failed"] or result["blocked"]:
                                     raise SystemExit(1)
