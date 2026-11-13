@@ -19,9 +19,10 @@ restart_service() {
 
 require_active() {
     local unit="$1"
-    if ! sudo -n /usr/bin/systemctl is-active --quiet "$unit"; then
+    if ! /usr/bin/systemctl is-active --quiet "$unit"; then
         printf 'Deployment failed: %s is not active after restart.\n' "$unit" >&2
-        printf 'Install the current systemd units with deploy/install-systemd-units.sh.\n' >&2
+        printf 'Check: systemctl status %s --no-pager\n' "$unit" >&2
+        printf 'If the unit is missing, install it with deploy/install-systemd-units.sh.\n' >&2
         return 1
     fi
 }

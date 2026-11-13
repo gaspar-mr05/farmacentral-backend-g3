@@ -8,11 +8,16 @@ import pytest
 
 
 @pytest.mark.parametrize(
-    "failed_unit",
-    [None, "farmacentral-backend.service", "farmacentral-workers.target"],
+    "failed_unit,failed_check",
+    [
+        (None, None),
+        ("farmacentral-backend.service", None),
+        ("farmacentral-workers.target", None),
+        (None, "farmacentral-worker@process_billing.service"),
+    ],
 )
 def test_deploy_reports_exact_failed_restart_and_checks_health_only_after_both(
-    tmp_path, failed_unit
+    tmp_path, failed_unit, failed_check
 ):
     app_dir = tmp_path / "app"
     bin_dir = tmp_path / "bin"
@@ -29,6 +34,8 @@ def test_deploy_reports_exact_failed_restart_and_checks_health_only_after_both(
     executable(
         bin_dir / "sudo",
         'printf "sudo %s\\n" "$*" >> "$COMMAND_LOG"\n'
+        'if [[ " $* " == *" is-active "* ]]; then\n'
+        '  echo "sudo: a password is required" >&2; exit 1\nfi\n'
         'if [[ " $* " == *" -l "* ]]; then exit 0; fi\n'
         'if [[ "${!#}" == "$FAILED_UNIT" ]]; then\n'
         '  echo "sudo: a password is required" >&2; exit 1\nfi\n',
@@ -39,6 +46,11 @@ def test_deploy_reports_exact_failed_restart_and_checks_health_only_after_both(
             f'printf "{name} %s\\n" "$*" >> "$COMMAND_LOG"\n',
         )
     executable(bin_dir / "curl", 'echo "health" >> "$COMMAND_LOG"\n')
+    executable(
+        bin_dir / "systemctl",
+        'printf "systemctl %s\\n" "$*" >> "$COMMAND_LOG"\n'
+        'if [[ "${!#}" == "$FAILED_CHECK" ]]; then exit 3; fi\n',
+    )
     script = (
         Path("deploy/release.sh")
         .read_text()
@@ -47,6 +59,7 @@ def test_deploy_reports_exact_failed_restart_and_checks_health_only_after_both(
             f'readonly APP_DIR="{app_dir}"',
         )
     )
+    script = script.replace("/usr/bin/systemctl", str(bin_dir / "systemctl"))
     release = tmp_path / "release.sh"
     release.write_text(script)
     completed = subprocess.run(
@@ -56,6 +69,7 @@ def test_deploy_reports_exact_failed_restart_and_checks_health_only_after_both(
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "COMMAND_LOG": str(command_log),
             "FAILED_UNIT": failed_unit or "",
+            "FAILED_CHECK": failed_check or "",
         },
         capture_output=True,
         text=True,
@@ -72,9 +86,19 @@ def test_deploy_reports_exact_failed_restart_and_checks_health_only_after_both(
         assert "health" not in commands
         if failed_unit == "farmacentral-backend.service":
             assert "restart farmacentral-workers.target" not in commands
+    elif failed_check:
+        assert completed.returncode != 0
+        assert failed_check in completed.stderr
+        assert "systemctl status" in completed.stderr
+        assert "sudo: a password" not in completed.stderr
+        assert "health" not in commands
     else:
         assert completed.returncode == 0
         assert "Deployment completed successfully" in completed.stdout
+        assert "systemctl is-active --quiet" in commands
+        assert not any(
+            "sudo" in line and "is-active" in line for line in commands.splitlines()
+        )
         assert (
             commands.index("restart farmacentral-backend.service")
             < commands.index("restart farmacentral-workers.target")
