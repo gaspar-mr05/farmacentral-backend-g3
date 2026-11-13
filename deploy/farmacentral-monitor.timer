@@ -1,0 +1,11 @@
+[Unit]
+Description=Measure Farmacentral public sites every two minutes
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=120s
+AccuracySec=1s
+Unit=farmacentral-monitor.service
+
+[Install]
+WantedBy=timers.target

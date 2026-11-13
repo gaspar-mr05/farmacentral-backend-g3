@@ -246,3 +246,17 @@ def test_interest_breakdown_and_closing_cutoff(db_session):
     assert report["margin"] == "44"
     assert report["client_interest_paid"] == "1"
     assert report["client_interest_pending"] == "5"
+
+
+def test_payment_after_cutoff_remains_pending_in_closing_metrics(db_session):
+    period = setup_metrics(db_session)
+    prepare_closing(db_session, period)
+    invoice = db_session.scalar(select(Invoice).where(Invoice.channel == "buffer"))
+    invoice.paid_at = NOW + timedelta(minutes=1)
+    db_session.commit()
+    report = BusinessMetricsService(db_session, period).calculate(
+        now=NOW + timedelta(minutes=3), financial_as_of=NOW
+    )
+    assert report.pending_payments.count == 3
+    assert report.pending_payments.oldest_age_seconds == 16 * 3600
+    assert report.client_interest_paid == 0

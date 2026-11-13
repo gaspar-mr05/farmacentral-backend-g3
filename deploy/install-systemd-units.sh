@@ -7,7 +7,8 @@ readonly SYSTEMD_DIR="/etc/systemd/system"
 
 for unit in farmacentral-backend.service farmacentral-inventory-sync.service \
     farmacentral-inventory-sync.timer farmacentral-worker@.service \
-    farmacentral-workers.target; do
+    farmacentral-workers.target farmacentral-monitor.service \
+    farmacentral-monitor.timer; do
     sudo /usr/bin/install -m 0644 "$DEPLOY_DIR/$unit" "$SYSTEMD_DIR/$unit"
 done
 sudo /usr/bin/systemctl daemon-reload

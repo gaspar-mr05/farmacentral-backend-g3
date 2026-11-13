@@ -81,10 +81,18 @@ class BusinessMetricsService:
             cost_channels[key] += invoice.principal
 
         pending = [
-            row for row in client_invoices if row.status == InvoiceStatus.PENDING
+            row
+            for row in client_invoices
+            if row.status == InvoiceStatus.PENDING
+            or (
+                financial_as_of is not None
+                and row.paid_at is not None
+                and row.paid_at > financial_as_of
+            )
         ]
         oldest = min((row.issued_at for row in pending), default=None)
-        oldest_age = max(0, int((now - oldest).total_seconds())) if oldest else 0
+        age_at = financial_as_of or now
+        oldest_age = max(0, int((age_at - oldest).total_seconds())) if oldest else 0
 
         sync_states = self.session.scalars(
             select(BillingSyncState).where(

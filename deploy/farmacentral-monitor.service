@@ -1,0 +1,20 @@
+[Unit]
+Description=Observe Farmacentral sites and business state without business mutations
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=integracion
+Group=integracion
+WorkingDirectory=/home/integracion/farmacentral-backend
+EnvironmentFile=/home/integracion/farmacentral-backend/.env
+Environment=APP_ENV_FILE=/home/integracion/farmacentral-backend/.env
+ExecStart=/home/integracion/farmacentral-backend/.venv/bin/python -m scripts.monitor_e3
+StateDirectory=farmacentral
+UMask=0077
+TimeoutStartSec=90
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only

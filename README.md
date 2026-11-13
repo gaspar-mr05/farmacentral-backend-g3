@@ -603,7 +603,8 @@ La validación oficial de punta a punta sigue correspondiendo al paso 24.
 
 ### Validación real en desarrollo — paso 24
 
-El procedimiento y el estado de la evidencia están en `docs/e3/STEP24.md`.
+El procedimiento y el estado de la evidencia están en
+[la guía de operación E3](docs/e3/OPERACION.md#24-validar-recorridos-reales-en-desarrollo).
 El observador `scripts.validate_e3_flow` consulta sólo desarrollo, exige período
 explícito, usa una transacción de lectura y conserva como pendientes las pruebas
 manuales de chat, verdad/diff y reinicios. `--list-ids` permite descubrir períodos
@@ -627,10 +628,19 @@ la descripción oficial en su evidencia privada.
 
 ### Preparación de producción y reset — paso 25
 
-El procedimiento está en [docs/e3/STEP25.md](docs/e3/STEP25.md): respaldo y
+El procedimiento está en [la guía de operación E3](docs/e3/OPERACION.md#25-preparar-producción-y-una-época-nueva): respaldo y
 restauración, DB nueva por época, instalación de unidades, límites y ensayo en
 desarrollo. `scripts.check_e3_readiness` revisa configuración sin llamadas remotas;
 `scripts.prepare_e3_epoch` verifica una DB migrada vacía y sólo crea el período
 con `--create` y referencia explícita del reset confirmado. No borra historial.
 Systemd y el deploy fijan `APP_ENV_FILE` para excluir `.env.local` del servidor.
 La activación de producción y el ensayo remoto aún requieren comprobación real.
+
+### Operación y métricas durante la evaluación — paso 26
+
+[La guía de operación E3](docs/e3/OPERACION.md#26-monitorear-registrar-incidentes-y-cerrar) explica cómo activar el timer de observación
+cada dos minutos, revisar alertas y conservar evidencia privada por período.
+`scripts.monitor_e3` mide ambos sitios y consulta la DB en sólo lectura, sin
+acciones de negocio. `--summary` calcula disponibilidad sobre muestras reales,
+separa ensayos y muestra huecos. El cierre reutiliza la captura financiera
+existente; instalar el monitor no acredita las 60 horas de operación real.
