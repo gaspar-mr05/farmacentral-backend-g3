@@ -35,6 +35,8 @@ class InventorySyncResult:
     lots: EntityChanges
     units: EntityChanges
     inventory_complete: bool = False
+    created_unit_ids: tuple[str, ...] = ()
+    missing_unit_ids: tuple[str, ...] = ()
 
 
 class InventorySyncService:
@@ -128,6 +130,8 @@ def sync_inventory(
         inventory_complete=bool(
             data.products and data.locations and not incomplete_groups
         ),
+        created_unit_ids=tuple(unit.external_unit_id for unit in units.created_units),
+        missing_unit_ids=tuple(unit.external_unit_id for unit in units.missing_units),
     )
 
 

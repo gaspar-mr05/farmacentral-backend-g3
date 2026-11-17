@@ -2,10 +2,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import exists, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import exists, func, select
+from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.clients.farma_central import FarmaCentralClient
 from app.clients.purchase_orders import PurchaseOrdersClient
@@ -32,6 +33,9 @@ from app.schemas.purchase_orders import PurchaseOrder, PurchaseOrderState
 from app.schemas.trades import TradeOffer, TradeOfferCreate
 from app.services.billing.queue import enqueue_sale
 from app.services.custody.events import record_move
+
+if TYPE_CHECKING:
+    from app.services.inventory.sync import InventorySyncResult
 
 
 class InvalidTradeStateError(Exception):
@@ -117,13 +121,34 @@ class TradeCustodyService:
         self._session.commit()
         return official
 
-    async def accept_buy(self, official: TradeOffer) -> tuple[TradeOffer, MarketTrade]:
-        return await self._accept_once(official, side=MarketOfferSide.BUY)
+    async def accept_buy(
+        self,
+        official: TradeOffer,
+        *,
+        guard: ReservationGuard | None = None,
+        strategy: str | None = None,
+        estimated_unit_cost: Decimal | None = None,
+    ) -> tuple[TradeOffer, MarketTrade]:
+        return await self._accept_once(
+            official,
+            side=MarketOfferSide.BUY,
+            guard=guard,
+            strategy=strategy,
+            estimated_unit_cost=estimated_unit_cost,
+        )
 
     async def accept_sell(self, official: TradeOffer) -> tuple[TradeOffer, MarketTrade]:
         return await self._accept_once(official, side=MarketOfferSide.SELL)
 
-    async def _accept_once(self, official, *, side):
+    async def _accept_once(
+        self,
+        official,
+        *,
+        side,
+        guard=None,
+        strategy=None,
+        estimated_unit_cost=None,
+    ):
         with operation_lock(
             self._session, f"trade-accept:{self._period.id}:{official.id}"
         ) as acquired:
@@ -146,10 +171,22 @@ class TradeCustodyService:
                     )
                 return observed, trade
             if side == MarketOfferSide.BUY:
-                return await self._accept_buy(official)
+                return await self._accept_buy(
+                    official,
+                    guard=guard,
+                    strategy=strategy,
+                    estimated_unit_cost=estimated_unit_cost,
+                )
             return await self._accept_sell(official)
 
-    async def _accept_buy(self, official: TradeOffer) -> tuple[TradeOffer, MarketTrade]:
+    async def _accept_buy(
+        self,
+        official: TradeOffer,
+        *,
+        guard: ReservationGuard | None = None,
+        strategy: str | None = None,
+        estimated_unit_cost: Decimal | None = None,
+    ) -> tuple[TradeOffer, MarketTrade]:
         """Accept another group's buy offer as seller."""
         self._validate_counterparty_offer(official, side=MarketOfferSide.BUY)
         offer = self._reserve_offer(
@@ -162,6 +199,9 @@ class TradeCustodyService:
             publisher_group_id=official.publisher_group,
             external_offer_id=official.id,
             status="accepting",
+            guard=guard,
+            strategy=strategy,
+            estimated_unit_cost=estimated_unit_cost,
         )
         try:
             destination_id = await self._move_reservations_to_dispatch(offer)
@@ -372,6 +412,76 @@ class TradeCustodyService:
                     )
         self._session.commit()
         return trade
+
+    def record_synchronized_trade_units(
+        self,
+        trade: MarketTrade,
+        sync: "InventorySyncResult | None",
+    ) -> bool:
+        """Attach an unambiguous unit delta from one official inventory snapshot."""
+        recorded = self._session.scalar(
+            select(func.count(CustodyEvent.id)).where(
+                CustodyEvent.market_trade_id == trade.id
+            )
+        )
+        if recorded:
+            return recorded == trade.quantity
+        if sync is None or getattr(sync, "inventory_complete", False) is not True:
+            return False
+
+        if trade.role == MarketRole.SELLER:
+            candidate_ids = self._trade_sku_unit_ids(trade, sync.missing_unit_ids)
+        else:
+            candidate_ids = self._trade_sku_unit_ids(trade, sync.created_unit_ids)
+            if len(candidate_ids) != trade.quantity:
+                candidate_ids = self._unlinked_receipt_ids(trade)
+
+        if len(candidate_ids) != trade.quantity:
+            return False
+        self.record_trade_units(trade.id, candidate_ids)
+        return True
+
+    def _trade_sku_unit_ids(
+        self, trade: MarketTrade, external_ids: Sequence[str]
+    ) -> list[str]:
+        if not external_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(Unit.external_unit_id)
+                .join(Lot, Unit.lot_id == Lot.id)
+                .join(Product, Lot.product_id == Product.id)
+                .where(
+                    Unit.external_unit_id.in_(tuple(external_ids)),
+                    Product.sku == trade.sku,
+                )
+                .order_by(Unit.external_unit_id)
+            )
+        )
+
+    def _unlinked_receipt_ids(self, trade: MarketTrade) -> list[str]:
+        linked_event = aliased(CustodyEvent)
+        linked_to_market = exists().where(
+            linked_event.unit_id == Unit.id,
+            linked_event.market_trade_id.is_not(None),
+        )
+        return list(
+            self._session.scalars(
+                select(Unit.external_unit_id)
+                .join(Lot, Unit.lot_id == Lot.id)
+                .join(Product, Lot.product_id == Product.id)
+                .join(CustodyEvent, CustodyEvent.unit_id == Unit.id)
+                .where(
+                    Product.sku == trade.sku,
+                    CustodyEvent.event_type == CustodyEventType.RECEIVED,
+                    CustodyEvent.market_trade_id.is_(None),
+                    CustodyEvent.occurred_at >= trade.closed_at,
+                    ~linked_to_market,
+                )
+                .distinct()
+                .order_by(Unit.external_unit_id)
+            )
+        )
 
     def release_offer(self, external_offer_id: str, *, status: str) -> MarketOffer:
         if status.lower() not in {"cancelled", "canceled", "expired", "failed"}:

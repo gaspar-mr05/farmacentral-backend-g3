@@ -594,9 +594,15 @@ class ScarcityProcurementService:
         if trade:
             sync = InventorySyncService(self.inventory, self.session)
             if self.tolerant_inventory:
-                await sync.synchronize(tolerate_changes=True)
+                synchronized = await sync.synchronize(tolerate_changes=True)
             else:
-                await sync.synchronize()
+                synchronized = await sync.synchronize()
+            if not self.custody.record_synchronized_trade_units(trade, synchronized):
+                local.reconciled_at = None
+                row.status = "custody_pending"
+                row.last_error = "Transferred unit IDs are not unambiguous yet"
+                self.session.commit()
+                return row
             local.reconciled_at = datetime.now(UTC)
             row.status, row.last_error = "acquired", None
             row.decision = (row.decision or {}) | {

@@ -3,10 +3,10 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.models import CustodyEvent, MarketOffer, MarketRole, MarketTrade
+from app.models import CustodyEvent, MarketOffer, MarketTrade
 from app.services.inventory.sync import InventorySyncService
 
 from .custody import TradeCustodyService
@@ -35,6 +35,12 @@ class TradeReconciliationService:
     async def poll(self, *, now=None):
         now = now or datetime.now(UTC)
         result = {"checked": 0, "closed": 0, "released": 0, "pending": 0, "failed": 0}
+        evidence_count = self._evidence_count()
+        incomplete_trade = exists().where(
+            MarketTrade.period_id == self.period.id,
+            MarketTrade.external_offer_id == MarketOffer.external_offer_id,
+            evidence_count != MarketTrade.quantity,
+        )
         cooldown = self.session.scalar(
             select(func.max(MarketOffer.next_retry_at)).where(
                 MarketOffer.period_id == self.period.id,
@@ -48,7 +54,7 @@ class TradeReconciliationService:
             select(MarketOffer)
             .where(
                 MarketOffer.period_id == self.period.id,
-                MarketOffer.reconciled_at.is_(None),
+                or_(MarketOffer.reconciled_at.is_(None), incomplete_trade),
                 MarketOffer.status != "failed",
                 or_(
                     MarketOffer.next_retry_at.is_(None),
@@ -76,14 +82,21 @@ class TradeReconciliationService:
                 self.session.commit()
                 official = await self.trades.get_offer(offer.external_offer_id)
                 trade = await self.custody.reconcile_offer(official)
-                if trade and trade.role == MarketRole.BUYER:
-                    # Recognize receipt/overflow without waiting for an invoice.
-                    await InventorySyncService(
+                custody_complete = trade is None or self._trade_custody_complete(trade)
+                if trade and not custody_complete:
+                    sync = await InventorySyncService(
                         self.inventory, self.session
                     ).synchronize()
+                    custody_complete = self.custody.record_synchronized_trade_units(
+                        trade, sync
+                    )
                 if official.status in {"cancelled", "expired", "closed"}:
-                    offer.reconciled_at = now
-                    result["closed" if trade else "released"] += 1
+                    if trade is not None and not custody_complete:
+                        offer.reconciled_at = None
+                        result["pending"] += 1
+                    else:
+                        offer.reconciled_at = now
+                        result["closed" if trade else "released"] += 1
                 else:
                     result["pending"] += 1
                 offer.attempt_count = 0
@@ -128,12 +141,7 @@ class TradeReconciliationService:
         return result | {"blocked": 0, "custody_pending": self._custody_pending()}
 
     def _custody_pending(self):
-        evidence_count = (
-            select(func.count(CustodyEvent.id))
-            .where(CustodyEvent.market_trade_id == MarketTrade.id)
-            .correlate(MarketTrade)
-            .scalar_subquery()
-        )
+        evidence_count = self._evidence_count()
         count = self.session.scalar(
             select(func.count())
             .select_from(MarketTrade)
@@ -144,3 +152,20 @@ class TradeReconciliationService:
         )
         self.session.commit()
         return count
+
+    @staticmethod
+    def _evidence_count():
+        return (
+            select(func.count(CustodyEvent.id))
+            .where(CustodyEvent.market_trade_id == MarketTrade.id)
+            .correlate(MarketTrade)
+            .scalar_subquery()
+        )
+
+    def _trade_custody_complete(self, trade: MarketTrade) -> bool:
+        count = self.session.scalar(
+            select(func.count(CustodyEvent.id)).where(
+                CustodyEvent.market_trade_id == trade.id
+            )
+        )
+        return count == trade.quantity

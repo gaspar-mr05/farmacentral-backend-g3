@@ -529,7 +529,7 @@ que un efecto remoto ocurrió una única vez.
 | Pago | Consultar el ID exacto en `paid` y `pending`, usando la ventana de emisión original. Un recibo guardado se verifica antes de aplicarlo. Sólo una observación válida permite avanzar; no suponer que un timeout equivale a rechazo. |
 | Publicación de oferta | Mantener las reservas ante `creation_uncertain`. Asociar únicamente un ID oficial verificado y conciliar por GET; similitud de SKU, precio o fecha no prueba identidad. |
 | Aceptación | Serializar por período/oferta. Si ya existe intención local, usar GET y validar cierre, OC y contraparte antes de retornar. No repetir el POST pendiente o incierto, aunque el GET aún muestre `open`. |
-| Transferencia | La OC comercial no identifica unidades. Registrar sólo IDs oficiales mediante `record_trade_units`; conservar reservas hasta obtener evidencia. Los cierres sin evidencia cuentan como cola pendiente y no como éxito del worker. |
+| Transferencia | La OC comercial no identifica unidades. El worker compara una sincronización oficial completa y llama `record_trade_units` sólo cuando el delta de altas o bajas coincide exactamente en SKU y cantidad; si el conjunto es ambiguo, conserva reservas y reintenta. Los cierres sin evidencia cuentan como cola pendiente y no como éxito del worker. |
 | Clasificación y texto | Recuperar las fases guardadas por separado. Un POST incierto queda para revisión; no duplicar clasificación ni texto por un `409` o un timeout. |
 
 Para recuperar, detener primero cualquier intervención manual concurrente,

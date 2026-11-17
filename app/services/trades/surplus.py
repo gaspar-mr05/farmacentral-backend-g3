@@ -279,9 +279,19 @@ class SurplusSalesService:
                 continue
             try:
                 official = await self.trades.get_offer(local.external_offer_id)
-                await self.custody.reconcile_offer(official)
-                if official.status in TERMINAL:
+                trade = await self.custody.reconcile_offer(official)
+                custody_complete = trade is None
+                if trade is not None:
+                    synchronized = await InventorySyncService(
+                        self.inventory, self.session
+                    ).synchronize()
+                    custody_complete = self.custody.record_synchronized_trade_units(
+                        trade, synchronized
+                    )
+                if official.status in TERMINAL and custody_complete:
                     local.reconciled_at = now
+                elif trade is not None:
+                    local.reconciled_at = None
                 local.last_error = local.http_status = local.next_retry_at = None
                 self.session.commit()
             except SQLAlchemyError:
@@ -380,6 +390,7 @@ class SurplusSalesService:
     async def cycle(self, *, execute=False):
         result = {
             "published": 0,
+            "accepted": 0,
             "cancelled": 0,
             "deferred": 0,
             "failed": 0,
@@ -500,6 +511,7 @@ class SurplusSalesService:
                     )
                     for sku in self.policy.skus
                 }
+                buy_offers = await self.trades.list_offers(side="buy", state="open")
                 for quote in sorted(
                     quotes, key=lambda q: (last_publication[q.sku], q.sku)
                 ):
@@ -514,6 +526,53 @@ class SurplusSalesService:
                         for o in managed
                     ):
                         continue
+                    matching_buys = [
+                        offer
+                        for offer in buy_offers
+                        if offer.sku == quote.sku
+                        and offer.publisher_group != self.period.group_id
+                        and offer.quantity <= quote.quantity
+                        and offer.unit_price >= quote.unit_price
+                        and offer.expires_at is not None
+                        and offer.expires_at > now + timedelta(seconds=60)
+                    ]
+                    if matching_buys:
+                        selected = max(
+                            matching_buys,
+                            key=lambda offer: (offer.unit_price, offer.quantity),
+                        )
+                        try:
+                            _, trade = await self.custody.accept_buy(
+                                selected,
+                                guard=ReservationGuard(
+                                    [unit.id for unit in free[quote.sku]],
+                                    quote.protected,
+                                ),
+                                strategy=STRATEGY,
+                                estimated_unit_cost=quote.estimated_unit_cost,
+                            )
+                            synchronized = await InventorySyncService(
+                                self.inventory, self.session
+                            ).synchronize()
+                            self.custody.record_synchronized_trade_units(
+                                trade, synchronized
+                            )
+                            result["accepted"] += 1
+                        except SQLAlchemyError:
+                            raise
+                        except Exception as exc:
+                            local = self.session.scalar(
+                                select(MarketOffer).where(
+                                    MarketOffer.period_id == self.period.id,
+                                    MarketOffer.external_offer_id == selected.id,
+                                )
+                            )
+                            if local is not None:
+                                self._remember_failure(local, exc)
+                            else:
+                                self.session.rollback()
+                            result["failed"] += 1
+                        return result | {"participation": self.participation()}
                     active_count = self.session.scalar(
                         select(func.count())
                         .select_from(MarketOffer)

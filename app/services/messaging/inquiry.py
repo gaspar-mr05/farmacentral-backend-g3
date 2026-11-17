@@ -281,43 +281,59 @@ def _temporal_filter(
     candidates: list[OrderCandidate],
 ) -> list[OrderCandidate] | None:
     local_received = received_at.astimezone(CHILE)
+    remaining = list(candidates)
+    matched = False
+    day = None
     if re.search(r"\bayer\b", text):
         day = local_received.date() - timedelta(days=1)
-        return [
-            candidate
-            for candidate in candidates
-            if candidate.occurred_at.astimezone(CHILE).date() == day
-        ]
-    if re.search(r"\bhoy\b", text):
+    elif re.search(r"\bhoy\b", text):
         day = local_received.date()
-        return [
+    part_of_day = None
+    if re.search(r"\b(?:en|por|de) la manana\b|\besta manana\b", text):
+        part_of_day = "morning"
+    elif re.search(r"\b(?:en|por|de) la tarde\b|\besta tarde\b", text):
+        part_of_day = "afternoon"
+    elif re.search(r"\b(?:en|por|de) la noche\b|\besta noche\b", text):
+        part_of_day = "night"
+
+    # A part of day without another date is relative to the inquiry day.
+    if day is None and part_of_day is not None:
+        day = local_received.date()
+    if day is not None:
+        remaining = [
             candidate
-            for candidate in candidates
+            for candidate in remaining
             if candidate.occurred_at.astimezone(CHILE).date() == day
         ]
-    if re.search(r"\b(?:en|por|de) la manana\b|\besta manana\b", text):
-        return [
+        matched = True
+
+    if part_of_day == "morning":
+        remaining = [
             candidate
-            for candidate in candidates
+            for candidate in remaining
             if candidate.occurred_at.astimezone(CHILE).hour < 12
         ]
-    if re.search(r"\b(?:en|por|de) la tarde\b|\besta tarde\b", text):
-        return [
+        matched = True
+    elif part_of_day == "afternoon":
+        remaining = [
             candidate
-            for candidate in candidates
+            for candidate in remaining
             if 12 <= candidate.occurred_at.astimezone(CHILE).hour < 20
         ]
-    if re.search(r"\b(?:en|por|de) la noche\b|\besta noche\b", text):
-        return [
+        matched = True
+    elif part_of_day == "night":
+        remaining = [
             candidate
-            for candidate in candidates
+            for candidate in remaining
             if candidate.occurred_at.astimezone(CHILE).hour >= 20
         ]
-    if re.search(r"\b(?:ultimo|ultima|mas reciente)\b", text) and candidates:
-        return [max(candidates, key=lambda candidate: candidate.occurred_at)]
-    if re.search(r"\b(?:primero|primera)\b", text) and candidates:
-        return [min(candidates, key=lambda candidate: candidate.occurred_at)]
-    return None
+        matched = True
+
+    if re.search(r"\b(?:ultimo|ultima|mas reciente)\b", text) and remaining:
+        return [max(remaining, key=lambda candidate: candidate.occurred_at)]
+    if re.search(r"\b(?:primero|primera)\b", text) and remaining:
+        return [min(remaining, key=lambda candidate: candidate.occurred_at)]
+    return remaining if matched else None
 
 
 def _response_text(order: PurchaseOrder) -> str:

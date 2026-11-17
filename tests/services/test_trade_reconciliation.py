@@ -7,6 +7,7 @@ from sqlalchemy import select
 from app.clients.trades import TradesHTTPError
 from app.models import BillingTask, CustodyEvent, MarketOffer, MarketRole, MarketTrade
 from app.schemas.trades import TradeOfferCreate
+from app.services.inventory.sync import EntityChanges, InventorySyncResult
 from app.services.trades.reconciliation import TradeReconciliationService
 from tests.services.test_trade_custody import (
     FarmaCentralStub,
@@ -22,6 +23,18 @@ def reconciler(session, period, dispatch, official, *, order_source=None):
     orders = order_source or TradesStub(official)
     inventory = FarmaCentralStub(dispatch.code)
     return TradeReconciliationService(trades, orders, inventory, session, period)
+
+
+def inventory_sync(*, created=(), missing=()):
+    return InventorySyncResult(
+        products=EntityChanges(),
+        locations=EntityChanges(),
+        lots=EntityChanges(),
+        units=EntityChanges(),
+        inventory_complete=True,
+        created_unit_ids=tuple(created),
+        missing_unit_ids=tuple(missing),
+    )
 
 
 async def published_sale(session):
@@ -55,26 +68,39 @@ class OwnSaleOrders(TradesStub):
 
 
 @pytest.mark.anyio
-async def test_sale_closed_while_worker_was_down_is_recovered_once(db_session):
+async def test_sale_closed_while_worker_was_down_is_recovered_once(
+    db_session, monkeypatch
+):
     period, dispatch, units, closed = await published_sale(db_session)
     service = reconciler(
         db_session, period, dispatch, closed, order_source=OwnSaleOrders(closed)
     )
+    synchronize = AsyncMock(
+        return_value=inventory_sync(
+            missing=[unit.external_unit_id for unit in units[:2]]
+        )
+    )
+    monkeypatch.setattr(
+        "app.services.trades.reconciliation.InventorySyncService",
+        Mock(return_value=Mock(synchronize=synchronize)),
+    )
     result = await service.poll()
     assert result["closed"] == 1
-    assert result["custody_pending"] == 1
+    assert result["custody_pending"] == 0
     trade = db_session.scalar(select(MarketTrade))
     assert trade.role == MarketRole.SELLER
     assert trade.counterparty_id == "5"
     assert trade.closed_at == closed.closed_at
     assert db_session.scalar(select(BillingTask)).external_order_id == closed.order_id
     assert (
-        db_session.scalar(
-            select(CustodyEvent).where(CustodyEvent.market_trade_id == trade.id)
+        len(
+            db_session.scalars(
+                select(CustodyEvent).where(CustodyEvent.market_trade_id == trade.id)
+            ).all()
         )
-        is None
+        == 2
     )
-    assert all(u.status == "trade_reserved" for u in units[:2])
+    assert all(u.status == "dispatched" for u in units[:2])
     # A fresh service simulates a restarted worker, with no in-memory progress.
     again = reconciler(
         db_session, period, dispatch, closed, order_source=OwnSaleOrders(closed)
@@ -83,6 +109,33 @@ async def test_sale_closed_while_worker_was_down_is_recovered_once(db_session):
     again.trades.get_offer.assert_not_awaited()
     assert len(db_session.scalars(select(MarketTrade)).all()) == 1
     assert len(db_session.scalars(select(BillingTask)).all()) == 1
+
+
+@pytest.mark.anyio
+async def test_closed_trade_with_ambiguous_unit_delta_remains_retryable(
+    db_session, monkeypatch
+):
+    period, dispatch, units, closed = await published_sale(db_session)
+    service = reconciler(
+        db_session, period, dispatch, closed, order_source=OwnSaleOrders(closed)
+    )
+    synchronize = AsyncMock(
+        return_value=inventory_sync(missing=[units[0].external_unit_id])
+    )
+    monkeypatch.setattr(
+        "app.services.trades.reconciliation.InventorySyncService",
+        Mock(return_value=Mock(synchronize=synchronize)),
+    )
+    now = datetime.now(UTC)
+
+    first = await service.poll(now=now)
+    second = await service.poll(now=now + timedelta(seconds=60))
+
+    assert first["closed"] == second["closed"] == 0
+    assert first["pending"] == second["pending"] == 1
+    assert first["custody_pending"] == second["custody_pending"] == 1
+    assert db_session.scalar(select(MarketOffer)).reconciled_at is None
+    assert synchronize.await_count == 2
 
 
 @pytest.mark.anyio
@@ -155,13 +208,17 @@ async def test_lost_acceptance_closed_by_another_group_releases_our_reservation(
 
 @pytest.mark.anyio
 async def test_buy_receipt_does_not_wait_for_supplier_invoice(db_session, monkeypatch):
-    period, dispatch, _, closed = await published_sale(db_session)
+    period, dispatch, units, closed = await published_sale(db_session)
     offer = db_session.scalar(select(MarketOffer))
     offer.publisher_group_id = 5
     offer.status = "acceptance_uncertain"
     db_session.commit()
     bought = closed.model_copy(update={"publisher_group": 5, "counterparty_group": 3})
-    synchronize = AsyncMock()
+    synchronize = AsyncMock(
+        return_value=inventory_sync(
+            created=[unit.external_unit_id for unit in units[:2]]
+        )
+    )
     monkeypatch.setattr(
         "app.services.trades.reconciliation.InventorySyncService",
         Mock(return_value=Mock(synchronize=synchronize)),
@@ -176,9 +233,9 @@ async def test_buy_receipt_does_not_wait_for_supplier_invoice(db_session, monkey
 
 @pytest.mark.anyio
 async def test_invoice_enqueue_survives_failure_before_final_reconciliation_commit(
-    db_session,
+    db_session, monkeypatch
 ):
-    period, dispatch, _, closed = await published_sale(db_session)
+    period, dispatch, units, closed = await published_sale(db_session)
     service = reconciler(
         db_session, period, dispatch, closed, order_source=OwnSaleOrders(closed)
     )
@@ -187,13 +244,27 @@ async def test_invoice_enqueue_survives_failure_before_final_reconciliation_comm
     recovered = reconciler(
         db_session, period, dispatch, closed, order_source=OwnSaleOrders(closed)
     )
+    monkeypatch.setattr(
+        "app.services.trades.reconciliation.InventorySyncService",
+        Mock(
+            return_value=Mock(
+                synchronize=AsyncMock(
+                    return_value=inventory_sync(
+                        missing=[unit.external_unit_id for unit in units[:2]]
+                    )
+                )
+            )
+        ),
+    )
     assert (await recovered.poll())["closed"] == 1
     assert len(db_session.scalars(select(BillingTask)).all()) == 1
 
 
 @pytest.mark.anyio
-async def test_lost_acceptance_is_confirmed_by_get_without_reaccepting(db_session):
-    period, dispatch, _, closed = await published_sale(db_session)
+async def test_lost_acceptance_is_confirmed_by_get_without_reaccepting(
+    db_session, monkeypatch
+):
+    period, dispatch, units, closed = await published_sale(db_session)
     offer = db_session.scalar(select(MarketOffer))
     offer.publisher_group_id = 5
     offer.side = "buy"
@@ -203,6 +274,18 @@ async def test_lost_acceptance_is_confirmed_by_get_without_reaccepting(db_sessio
         update={"publisher_group": 5, "side": "buy", "counterparty_group": 3}
     )
     service = reconciler(db_session, period, dispatch, ours)
+    monkeypatch.setattr(
+        "app.services.trades.reconciliation.InventorySyncService",
+        Mock(
+            return_value=Mock(
+                synchronize=AsyncMock(
+                    return_value=inventory_sync(
+                        missing=[unit.external_unit_id for unit in units[:2]]
+                    )
+                )
+            )
+        ),
+    )
     result = await service.poll()
     assert result["closed"] == 1
     assert db_session.scalar(select(MarketTrade)).role == MarketRole.SELLER
@@ -215,7 +298,7 @@ async def test_lost_acceptance_is_confirmed_by_get_without_reaccepting(db_sessio
 async def test_own_buy_offer_and_receipt_sync_failure_recover_independently(
     db_session, monkeypatch
 ):
-    period, dispatch, _, closed = await published_sale(db_session)
+    period, dispatch, units, closed = await published_sale(db_session)
     offer = db_session.scalar(select(MarketOffer))
     offer.side = "buy"
     db_session.commit()
@@ -226,7 +309,12 @@ async def test_own_buy_offer_and_receipt_sync_failure_recover_independently(
             order = await super().get_order(order_id)
             return order.model_copy(update={"supplier_id": "5", "customer_id": "3"})
 
-    synchronize = AsyncMock(side_effect=[TimeoutError(), None])
+    synchronize = AsyncMock(
+        side_effect=[
+            TimeoutError(),
+            inventory_sync(created=[unit.external_unit_id for unit in units[:2]]),
+        ]
+    )
     monkeypatch.setattr(
         "app.services.trades.reconciliation.InventorySyncService",
         Mock(return_value=Mock(synchronize=synchronize)),

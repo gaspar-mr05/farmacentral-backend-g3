@@ -383,3 +383,50 @@ async def test_ambiguous_reference_does_not_guess_the_latest_order(db_session):
         FIRST_ORDER_ID,
         SECOND_ORDER_ID,
     ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("text", "expected_id"),
+    [
+        ("¿Cómo va el pedido de esta mañana?", SECOND_ORDER_ID),
+        ("¿Cómo va el pedido de ayer en la mañana?", FIRST_ORDER_ID),
+    ],
+)
+async def test_part_of_day_is_combined_with_the_referenced_date(
+    db_session, text, expected_id
+):
+    query_time = datetime(2026, 11, 13, 21, tzinfo=UTC)
+    for message_id, order_id, occurred_at in (
+        ("yesterday-morning", FIRST_ORDER_ID, datetime(2026, 11, 12, 13, tzinfo=UTC)),
+        (
+            "yesterday-afternoon",
+            "84abc123def456789012abcd",
+            datetime(2026, 11, 12, 18, tzinfo=UTC),
+        ),
+        ("today-morning", SECOND_ORDER_ID, datetime(2026, 11, 13, 13, tzinfo=UTC)),
+    ):
+        add_message(
+            db_session,
+            message_id=message_id,
+            phone="+56955550123",
+            text="Quiero dos kits",
+            occurred_at=occurred_at,
+            decision=MessagingDecision.ORDER,
+            order_id=order_id,
+            sku="KIT-CURACION",
+            quantity=2,
+        )
+    inquiry = add_message(
+        db_session,
+        message_id=f"inquiry-{expected_id}",
+        phone="+56955550123",
+        text=text,
+        occurred_at=query_time,
+        decision=MessagingDecision.INQUIRY,
+    )
+    orders = FakeOrders()
+
+    await InquiryResolutionService(orders, db_session, group_id=3).resolve(inquiry)
+
+    assert orders.requested == [expected_id]

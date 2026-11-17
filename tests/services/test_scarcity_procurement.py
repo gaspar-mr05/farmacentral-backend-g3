@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.clients.trades import TradesHTTPError
 from app.models import MarketOffer, ProcurementRequest
 from app.schemas.procurement import ProcurementAction, ProcurementPlan
+from app.services.inventory.sync import EntityChanges, InventorySyncResult
 from app.services.supply.procurement import ScarcityProcurementService
 from tests.services.test_procurement_planning import RAW, demand, offer, product
 from tests.services.test_trade_custody import add_market_stock
@@ -36,6 +37,17 @@ def service(session, period, *, result=None):
         )
     )
     return instance
+
+
+def completed_sync(units):
+    return InventorySyncResult(
+        products=EntityChanges(),
+        locations=EntityChanges(),
+        lots=EntityChanges(),
+        units=EntityChanges(),
+        inventory_complete=True,
+        created_unit_ids=tuple(unit.external_unit_id for unit in units),
+    )
 
 
 @pytest.mark.anyio
@@ -137,7 +149,9 @@ async def test_purchase_is_confirmed_once_with_cost_and_supplier_trace(
     from app.models import MarketTrade
     from tests.services.test_trade_custody import TradesStub
 
-    period, _, _, _ = add_market_stock(db_session)
+    period, _, _, units = add_market_stock(db_session, quantity=4)
+    units[0].lot.product.sku = RAW
+    db_session.commit()
     opened = offer(RAW, 4, 2)
     closed = opened.model_copy(
         update={
@@ -165,7 +179,7 @@ async def test_purchase_is_confirmed_once_with_cost_and_supplier_trace(
     source.trades.get_offer.side_effect = [opened, closed]
     source.trades.accept_offer.return_value = closed
     source.custody._purchase_orders = TradesStub(closed)
-    synchronize = AsyncMock()
+    synchronize = AsyncMock(return_value=completed_sync(units))
     monkeypatch.setattr(
         "app.services.supply.procurement.InventorySyncService",
         Mock(return_value=Mock(synchronize=synchronize)),
@@ -271,7 +285,9 @@ async def test_cancel_race_recognizes_purchase_instead_of_accepting_another_offe
 ):
     from tests.services.test_trade_custody import TradesStub
 
-    period, _, _, _ = add_market_stock(db_session)
+    period, _, _, units = add_market_stock(db_session, quantity=4)
+    units[0].lot.product.sku = RAW
+    db_session.commit()
     source = service(db_session, period)
     opened = offer(RAW, 4, 2, publisher=3).model_copy(update={"side": "buy"})
     source.trades.create_offer.return_value = opened
@@ -313,7 +329,9 @@ async def test_cancel_race_recognizes_purchase_instead_of_accepting_another_offe
     source.trades.get_offer.side_effect = [opened, closed]
     monkeypatch.setattr(
         "app.services.supply.procurement.InventorySyncService",
-        Mock(return_value=Mock(synchronize=AsyncMock())),
+        Mock(
+            return_value=Mock(synchronize=AsyncMock(return_value=completed_sync(units)))
+        ),
     )
     await source.ensure("cancel-race", need)
     assert row.status == "acquired"

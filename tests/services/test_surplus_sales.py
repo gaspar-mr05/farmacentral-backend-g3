@@ -6,16 +6,23 @@ import pytest
 from sqlalchemy import select
 
 from app.models import (
+    CustodyEvent,
     MarketOffer,
+    MarketTrade,
     Order,
     OrderItem,
     OrderSource,
     OrderStatus,
 )
 from app.schemas.surplus import SurplusPolicy
+from app.services.inventory.sync import EntityChanges, InventorySyncResult
 from app.services.trades.surplus import SurplusSalesService
 from tests.services.test_procurement_planning import product
-from tests.services.test_trade_custody import add_market_stock, official_offer
+from tests.services.test_trade_custody import (
+    TradesStub,
+    add_market_stock,
+    official_offer,
+)
 
 
 def setup_sales(session, monkeypatch, *, quantity=10, buffer=1):
@@ -45,7 +52,11 @@ def setup_sales(session, monkeypatch, *, quantity=10, buffer=1):
         move_product=AsyncMock(),
     )
     trades = Mock(
-        create_offer=AsyncMock(), get_offer=AsyncMock(), cancel_offer=AsyncMock()
+        create_offer=AsyncMock(),
+        get_offer=AsyncMock(),
+        cancel_offer=AsyncMock(),
+        accept_offer=AsyncMock(),
+        list_offers=AsyncMock(return_value=[]),
     )
     prices = Mock(get_current_prices=AsyncMock(return_value=[{"sku": sku, "price": 5}]))
     policy = SurplusPolicy(skus=(sku,), lot_size=3, raw_buffer_batches=buffer)
@@ -93,6 +104,55 @@ async def test_preview_and_publication_keep_buffer_and_never_duplicate_open_offe
     assert again["published"] == 0
     assert service.trades.create_offer.await_count == 1
     assert sum(u.status == "available" for u in units) == 7
+
+
+@pytest.mark.anyio
+async def test_profitable_open_buy_offer_is_accepted_and_custody_is_recorded(
+    db_session, monkeypatch
+):
+    service, units, _, _ = setup_sales(db_session, monkeypatch)
+    sku = units[0].lot.product.sku
+    opened = official_offer(sku=sku, side="buy", publisher_group=5, quantity=3)
+    closed = opened.model_copy(
+        update={
+            "status": "closed",
+            "counterparty_group": 3,
+            "closed_at": datetime.now(UTC),
+            "order_id": "b" * 24,
+        }
+    )
+    service.trades.list_offers.return_value = [opened]
+    service.trades.accept_offer.return_value = closed
+    service.custody._purchase_orders = TradesStub(closed)
+    synchronized = InventorySyncResult(
+        products=EntityChanges(),
+        locations=EntityChanges(),
+        lots=EntityChanges(),
+        units=EntityChanges(),
+        inventory_complete=True,
+        missing_unit_ids=tuple(unit.external_unit_id for unit in units[:3]),
+    )
+    monkeypatch.setattr(
+        "app.services.trades.surplus.InventorySyncService",
+        Mock(return_value=Mock(synchronize=AsyncMock(return_value=synchronized))),
+    )
+
+    result = await service.cycle(execute=True)
+
+    assert result["accepted"] == 1
+    assert result["published"] == 0
+    service.trades.accept_offer.assert_awaited_once_with(opened.id)
+    trade = db_session.scalar(select(MarketTrade))
+    assert trade is not None
+    assert (
+        len(
+            db_session.scalars(
+                select(CustodyEvent).where(CustodyEvent.market_trade_id == trade.id)
+            ).all()
+        )
+        == 3
+    )
+    assert all(unit.status == "dispatched" for unit in units[:3])
 
 
 @pytest.mark.anyio

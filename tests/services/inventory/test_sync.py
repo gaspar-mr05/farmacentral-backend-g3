@@ -93,6 +93,7 @@ async def test_sync_is_idempotent_and_updates_external_changes(db_session) -> No
     assert first.locations.created == 2
     assert first.lots.created == 1
     assert first.units.created == 1
+    assert first.created_unit_ids == (client.unit_id,)
     assert second.products.created == second.products.updated == 0
     assert second.locations.created == second.locations.updated == 0
     assert second.lots.created == second.lots.updated == 0
@@ -137,6 +138,7 @@ async def test_sync_is_idempotent_and_updates_external_changes(db_session) -> No
 
     db_session.refresh(unit)
     assert missing.units.updated == 1
+    assert missing.missing_unit_ids == (client.unit_id,)
     assert unit.status == "unavailable"
 
 
