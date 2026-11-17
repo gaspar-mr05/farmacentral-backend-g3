@@ -311,8 +311,17 @@ class E3ReplenishmentService:
                             "No current sale value to justify procurement"
                         )
                     shelf_hours = catalog[state.sku].obsolescence
-                    deadline = deadline or datetime.now(UTC) + timedelta(
-                        hours=min(2, shelf_hours / 2) if shelf_hours else 2
+                    shelf_horizon = (
+                        timedelta(hours=shelf_hours / 2)
+                        if shelf_hours
+                        else timedelta(0)
+                    )
+                    deadline = deadline or datetime.now(UTC) + max(
+                        timedelta(hours=2),
+                        timedelta(
+                            seconds=self.settings.replenishment_minimum_lifetime_seconds
+                        ),
+                        shelf_horizon,
                     )
                     if self.period.ends_at:
                         deadline = min(deadline, self.period.ends_at)

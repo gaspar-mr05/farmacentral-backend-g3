@@ -195,6 +195,21 @@ async def test_initial_zero_accounting_balance_allows_budgeted_startup(
 
 
 @pytest.mark.anyio
+async def test_background_goal_allows_full_replenishment_horizon(migration_database):
+    run_migration(migration_database, "upgrade", "head")
+    pharmacy = Pharmacy(restricted=True)
+    with Session(migration_database, expire_on_commit=False) as session:
+        service = setup(session, pharmacy)
+        started = datetime.now(UTC)
+
+        await service.poll()
+
+        state = session.scalar(select(ReplenishmentState))
+        deadline = datetime.fromisoformat(state.goal["deadline"])
+        assert deadline >= started + timedelta(hours=3, minutes=59)
+
+
+@pytest.mark.anyio
 async def test_multilevel_production_resumes_without_waiting_and_preserves_lineage(
     migration_database,
 ):
