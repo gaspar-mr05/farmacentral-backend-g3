@@ -83,6 +83,64 @@ class ProcurementPlanner:
     def _economic_cost(self, plan):
         return plan.consumed_cost if self.allocate_costs else plan.cost
 
+    def _market_options(self, sku, missing, free_cost):
+        # Whole offers only. Keep the cheapest combination for each quantity;
+        # the quantity ceiling bounds both purchases and planning work.
+        lots = {0: (Decimal(0), ())}
+        seen = set()
+        for offer in sorted(
+            self.offers.get(sku, []), key=lambda o: (o.unit_price, o.id)
+        ):
+            if (
+                offer.id in seen
+                or offer.side != "sell"
+                or offer.status != "open"
+                or offer.publisher_group in {None, self.group_id}
+                or offer.expires_at is None
+                or (offer.expires_at - self.now).total_seconds() < 60
+                or offer.quantity > self.max_lot
+            ):
+                continue
+            seen.add(offer.id)
+            for quantity, (cost, selected) in list(lots.items()):
+                total = quantity + offer.quantity
+                if quantity >= missing or total > self.max_lot:
+                    continue
+                full_cost = cost + offer.unit_price * offer.quantity
+                if total not in lots or full_cost < lots[total][0]:
+                    lots[total] = (full_cost, (*selected, offer))
+        options = []
+        for quantity, (cost, selected) in lots.items():
+            if quantity < missing:
+                continue
+            remaining = missing
+            actions = []
+            for offer in selected:
+                useful = min(remaining, offer.quantity)
+                remaining -= useful
+                actions.append(
+                    ProcurementAction(
+                        kind="accept",
+                        sku=sku,
+                        quantity=offer.quantity,
+                        useful_quantity=useful,
+                        cost=offer.unit_price * offer.quantity,
+                        offer_id=offer.id,
+                    )
+                )
+            options.append(
+                ProcurementPlan(
+                    status="market",
+                    seconds=60 * len(actions),
+                    cost=cost,
+                    # Estimate consumption at the combined lot's average cost;
+                    # cost still charges every purchased unit against outlay.
+                    consumed_cost=free_cost + cost * Decimal(missing) / quantity,
+                    actions=actions,
+                )
+            )
+        return options
+
     def _node(self, sku, quantity, stock, path, deadline):
         if sku in path or sku not in self.catalog:
             self.blockers.append(f"{sku}: missing or cyclic recipe")
@@ -133,39 +191,9 @@ class ProcurementPlanner:
                 seconds=incoming_seconds,
                 reason="Confirmed supply/production pending",
             ), stock
-        options = []
+        options = self._market_options(sku, missing, free_cost)
         make = None
         branch_stock = stock
-        for offer in self.offers.get(sku, []):
-            if (
-                offer.side != "sell"
-                or offer.status != "open"
-                or offer.publisher_group in {None, self.group_id}
-                or offer.expires_at is None
-                or (offer.expires_at - self.now).total_seconds() < 60
-                or offer.quantity < missing
-                or offer.quantity
-                > min(self.max_lot, max(2 * missing, product.production.batch))
-            ):
-                continue
-            options.append(
-                ProcurementPlan(
-                    status="market",
-                    seconds=60,
-                    cost=offer.unit_price * offer.quantity,
-                    consumed_cost=free_cost + offer.unit_price * missing,
-                    actions=[
-                        ProcurementAction(
-                            kind="accept",
-                            sku=sku,
-                            quantity=offer.quantity,
-                            useful_quantity=missing,
-                            cost=offer.unit_price * offer.quantity,
-                            offer_id=offer.id,
-                        )
-                    ],
-                )
-            )
         batch_quantity = (
             ceil(missing / product.production.batch) * product.production.batch
         )
@@ -320,7 +348,7 @@ class ProcurementPlanner:
             acquired = (
                 batch_quantity
                 if chosen is make
-                else chosen.actions[0].quantity
+                else sum(a.quantity for a in chosen.actions if a.sku == sku)
                 if chosen.actions
                 else missing
             )

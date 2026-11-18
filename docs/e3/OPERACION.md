@@ -124,6 +124,13 @@ usar `--execute`; este vendedor no se activa con el target. Ajustar lotes, buffe
 y margen sin vender stock comprometido. Verificar `/`, `/trazabilidad`, recalls
 y chat; conservar la evidencia del paso 24 y publicar GitHub antes del inicio.
 
+El abastecimiento puede combinar ofertas de venta pequeñas y comprar lotes
+mayores al faltante, respetando el límite de cantidad, desembolso, espacio,
+frío y plazo. Ejecuta una adquisición y reevalúa el inventario antes de continuar;
+el plan completo no constituye stock confirmado. Para sustituir una oferta buy,
+primero concilia y confirma su cancelación o cierre. Las restricciones de pérdida
+y presupuesto siguen aplicándose aunque exista una oferta disponible.
+
 Ensayar también el SHA anterior en la copia restaurada. Para revertir aplicación,
 detener procesos y usar un checkout limpio compatible con el esquema. No hacer
 downgrade ni restaurar encima de la DB activa. Después del reset remoto, conservar

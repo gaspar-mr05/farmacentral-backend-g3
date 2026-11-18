@@ -329,7 +329,10 @@ async def test_purchase_is_confirmed_once_with_cost_and_supplier_trace(
 
 
 @pytest.mark.anyio
-async def test_better_sell_offer_cancels_existing_bid_before_replanning(db_session):
+@pytest.mark.parametrize("parts", [1, 2])
+async def test_better_sell_offer_cancels_existing_bid_before_replanning(
+    db_session, parts
+):
     period, _, _, _ = add_market_stock(db_session)
     source = service(db_session, period)
     opened = offer(RAW, 4, 2, publisher=3).model_copy(update={"side": "buy"})
@@ -346,11 +349,12 @@ async def test_better_sell_offer_cancels_existing_bid_before_replanning(db_sessi
             ProcurementAction(
                 kind="accept",
                 sku=RAW,
-                quantity=4,
-                useful_quantity=4,
-                cost=4,
-                offer_id="d" * 24,
+                quantity=4 // parts,
+                useful_quantity=4 // parts,
+                cost=4 // parts,
+                offer_id=letter * 24,
             )
+            for letter in "de"[:parts]
         ],
     )
     source.trades.get_offer.side_effect = [

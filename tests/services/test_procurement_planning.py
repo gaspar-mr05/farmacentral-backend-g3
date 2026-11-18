@@ -129,6 +129,96 @@ def test_full_offer_cost_and_moderate_lots_prevent_false_bargains():
     assert result.actions[0].kind == "bid"
 
 
+def test_combines_whole_small_lots_before_publishing_a_buy_bid():
+    result = planner(
+        offers={
+            RAW: [
+                offer(RAW, 5, 2),
+                offer(RAW, 8, 3, id="b" * 24),
+            ]
+        }
+    ).plan(demand(sku=RAW, quantity=10, expected_revenue=100, max_outlay=34))
+    assert result.status == "market"
+    assert result.cost == 34
+    assert result.consumed_cost == Decimal(34) * 10 / 13
+    assert [a.quantity for a in result.actions] == [5, 8]
+    assert sum(a.useful_quantity for a in result.actions) == 10
+    assert result.seconds == 120
+
+
+def test_larger_lot_is_valid_when_full_outlay_and_storage_fit():
+    result = planner(offers={RAW: [offer(RAW, 13, 2)]}).plan(
+        demand(sku=RAW, quantity=2, expected_revenue=10, max_outlay=26)
+    )
+    assert result.status == "market"
+    assert result.cost == 26 and result.consumed_cost == 4
+    assert result.actions[0].quantity == 13
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"max_lot": 12},
+        {"free_space": 12},
+        {"cold_space": 12},
+    ],
+)
+def test_combined_lots_still_respect_total_quantity_and_storage(limits):
+    p = planner(
+        catalog={RAW: product(RAW, cold=True)},
+        offers={
+            RAW: [
+                offer(RAW, 5, 2),
+                offer(RAW, 8, 3, id="b" * 24),
+            ]
+        },
+        **limits,
+    )
+    result = p.plan(demand(sku=RAW, quantity=10, expected_revenue=100, max_outlay=34))
+    assert not any(a.kind == "accept" for a in result.actions)
+
+
+def test_combination_cannot_spend_more_than_the_full_outlay_budget():
+    p = planner(offers={RAW: [offer(RAW, 5, 2), offer(RAW, 8, 3, id="b" * 24)]})
+    result = p.plan(demand(sku=RAW, quantity=10, expected_revenue=100, max_outlay=33))
+    assert not any(a.kind == "accept" for a in result.actions)
+
+
+def test_duplicate_offer_is_not_used_twice_to_complete_shortage():
+    one = offer(RAW, 3, 1)
+    result = planner(offers={RAW: [one, one]}).plan(demand(sku=RAW, quantity=5))
+    assert not any(a.kind == "accept" for a in result.actions)
+
+
+def test_multiple_acceptances_must_fit_remaining_delivery_time():
+    p = planner(offers={RAW: [offer(RAW, 3, 1), offer(RAW, 3, 1, id="b" * 24)]})
+    result = p.plan(
+        demand(sku=RAW, quantity=5, deadline=datetime.now(UTC) + timedelta(seconds=90))
+    )
+    assert not result.actions
+
+
+def test_combined_lot_surplus_can_fill_another_recipe_branch():
+    products = {
+        RAW: product(RAW),
+        MID: product(MID, components=[(RAW, 5)]),
+        KIT: product(KIT, components=[(MID, 1), (RAW, 2)]),
+    }
+    result = planner(
+        catalog=products,
+        offers={
+            RAW: [
+                offer(RAW, 3, 1),
+                offer(RAW, 4, 1, id="b" * 24),
+            ]
+        },
+    ).plan(demand(quantity=1, expected_revenue=100, max_outlay=9))
+    assert result.status == "produce"
+    assert result.cost == result.consumed_cost == 9
+    assert len(result.actions) == 2
+    assert sum(a.quantity for a in result.actions) == 7
+
+
 @pytest.mark.parametrize(
     "kwargs", [{"publisher": 3}, {"state": "expired"}, {"minutes": 0}]
 )
