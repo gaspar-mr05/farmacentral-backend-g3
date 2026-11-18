@@ -374,7 +374,9 @@ async def test_customer_retargets_background_kit_bid_to_inputs_after_cancellatio
         service = setup(session, pharmacy, trades=trades)
         service.settings.replenishment_spending_limit = 20
         service.prices.get_current_prices.return_value = [
-            {"sku": sku, "price": {"KIT-A": 10, "MID": 8}.get(sku, 1)}
+            # Keep the intermediate bid unaffordable under the initial margin,
+            # including after correctly reserving the kit's own production cost.
+            {"sku": sku, "price": {"KIT-A": 10, "MID": 12}.get(sku, 1)}
             for sku in pharmacy.catalog
         ]
         await service.poll()

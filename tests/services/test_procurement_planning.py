@@ -309,6 +309,64 @@ def test_useful_consumption_and_full_lot_outlay_are_separate():
     assert OTHER in denied.reason and "full outlay 20 exceeds 19" in denied.reason
 
 
+@pytest.mark.parametrize(
+    "revenue,outlay,viable",
+    [
+        (20, 111, True),
+        (10, 111, False),
+        (20, 110, False),
+    ],
+)
+def test_intermediate_batch_cost_is_allocated_before_checking_customer_margin(
+    revenue, outlay, viable
+):
+    products = {
+        OTHER: product(OTHER, batch=10, cost=10),
+        MID: product(MID, components=[(OTHER, 1)], batch=10, cost=1),
+        KIT: product(KIT, components=[(MID, 1)], cost=1),
+    }
+    result = planner(catalog=products).plan(
+        demand(
+            quantity=1,
+            expected_revenue=revenue,
+            max_outlay=outlay,
+            includes_committed=True,
+            priority=1,
+        )
+    )
+    # Buy ten raw (100), make ten intermediate (10), finish one kit (1).
+    # Only one intermediate is consumed: the kit costs 10 + 1 + 1 = 12.
+    if viable:
+        assert result.status == "produce", result.reason
+        assert result.cost == 111
+        assert result.consumed_cost == 12
+        assert result.actions[0].quantity == 10
+    else:
+        assert not result.actions
+
+
+def test_intermediate_batch_bid_uses_allocated_budget_without_inventing_stock():
+    products = {
+        RAW: product(RAW, batch=10, cost=10),
+        MID: product(MID, components=[(RAW, 1)], batch=10, cost=1),
+        KIT: product(KIT, components=[(MID, 1)], cost=1),
+    }
+    result = planner(catalog=products).plan(
+        demand(
+            quantity=1,
+            expected_revenue=5,
+            max_outlay=31,
+            includes_committed=True,
+            priority=1,
+        )
+    )
+    assert result.status == "waiting"
+    assert result.cost == 31 and result.consumed_cost == 4
+    assert [(a.sku, a.kind, a.quantity, a.cost) for a in result.actions] == [
+        (RAW, "bid", 10, Decimal(20))
+    ]
+
+
 def test_production_allocation_includes_all_stages_and_keeps_full_outlay():
     products = {
         OTHER: product(OTHER, batch=10, cost=2),

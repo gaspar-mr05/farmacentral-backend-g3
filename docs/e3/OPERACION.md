@@ -130,6 +130,10 @@ frío y plazo. Ejecuta una adquisición y reevalúa el inventario antes de conti
 el plan completo no constituye stock confirmado. Para sustituir una oferta buy,
 primero concilia y confirma su cancelación o cierre. Las restricciones de pérdida
 y presupuesto siguen aplicándose aunque exista una oferta disponible.
+El presupuesto de consumo se reparte a través de las recetas según la fracción
+del lote intermedio que requiere el pedido; el desembolso conserva el costo del
+lote completo. Así un lote grande no se compara prematuramente con el ingreso
+de un solo kit. El plan final sigue comprobando margen, desembolso y plazo.
 Una oferta buy necesaria se conserva si el nuevo plan todavía pide comprar ese
 SKU mediante otra oferta buy; encontrar una venta de otro insumo no la reemplaza.
 

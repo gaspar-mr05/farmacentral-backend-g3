@@ -141,7 +141,8 @@ class ProcurementPlanner:
             )
         return options
 
-    def _node(self, sku, quantity, stock, path, deadline):
+    def _node(self, sku, quantity, stock, path, deadline, consumption_budget=None):
+        budget = self.budget if consumption_budget is None else consumption_budget
         if sku in path or sku not in self.catalog:
             self.blockers.append(f"{sku}: missing or cyclic recipe")
             return None, stock
@@ -229,6 +230,15 @@ class ProcurementPlanner:
         ):
             branch_stock = dict(stock)
             children = []
+            # This whole intermediate batch may serve only a fraction of the
+            # customer demand. Scale its component allowance before recursion;
+            # the parent still checks the sum and the full cash outlay.
+            child_budget = (
+                (budget - free_cost) * batch_quantity / missing
+                - product.cost * batch_quantity
+                if self.allocate_costs
+                else None
+            )
             for component in product.components:
                 child, branch_stock = self._node(
                     component.sku,
@@ -236,6 +246,7 @@ class ProcurementPlanner:
                     branch_stock,
                     (*path, sku),
                     deadline,
+                    child_budget,
                 )
                 if child is None:
                     break
@@ -264,7 +275,7 @@ class ProcurementPlanner:
             # the market's reference-price band and paying the whole lot.
             proposed = min(
                 price,
-                (self.budget - free_cost) / missing,
+                (budget - free_cost) / missing,
                 self.outlay_budget / batch_quantity,
             ).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
             if proposed < price * Decimal("0.5"):
@@ -304,10 +315,9 @@ class ProcurementPlanner:
         feasible = []
         for option in options:
             causes = []
-            if self._economic_cost(option) > self.budget:
+            if self._economic_cost(option) > budget:
                 causes.append(
-                    f"consumption cost {self._economic_cost(option)} "
-                    f"exceeds {self.budget}"
+                    f"consumption cost {self._economic_cost(option)} exceeds {budget}"
                 )
             if option.cost > self.outlay_budget:
                 causes.append(f"full outlay {option.cost} exceeds {self.outlay_budget}")
