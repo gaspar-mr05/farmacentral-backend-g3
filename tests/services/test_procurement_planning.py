@@ -332,6 +332,69 @@ def test_buy_bid_uses_affordable_price_inside_market_band():
     assert not denied.actions and "below market floor" in denied.reason
 
 
+def test_customer_order_prefers_viable_recipe_over_waiting_for_finished_kit():
+    products = {
+        RAW: product(RAW, cost=1),
+        KIT: product(KIT, components=[(RAW, 1)], cost=3),
+    }
+    source = planner(catalog=products)
+    source.prices = {RAW: Decimal(2), KIT: Decimal(4)}
+    pending = source.plan(
+        demand(
+            quantity=1,
+            expected_revenue=10,
+            max_outlay=20,
+            includes_committed=True,
+            priority=1,
+        )
+    )
+    assert [(a.kind, a.sku) for a in pending.actions] == [("bid", RAW)]
+    background = source.plan(
+        demand(
+            quantity=1,
+            expected_revenue=10,
+            max_outlay=20,
+        )
+    )
+    assert [(a.kind, a.sku) for a in background.actions] == [("bid", KIT)]
+
+
+def test_explicit_loss_limit_keeps_full_outlay_cap_and_defaults_to_zero():
+    products = {OTHER: product(OTHER, cost=11)}
+    strict = planner(catalog=products).plan(
+        demand(
+            sku=OTHER,
+            quantity=1,
+            expected_revenue=10,
+            max_outlay=20,
+            minimum_margin=0,
+        )
+    )
+    assert not strict.actions
+    permitted = planner(catalog=products).plan(
+        demand(
+            sku=OTHER,
+            quantity=1,
+            expected_revenue=10,
+            max_outlay=20,
+            minimum_margin=0,
+            maximum_loss_fraction=Decimal("0.20"),
+        )
+    )
+    assert permitted.status == "direct" and permitted.cost == 11
+    capped = planner(catalog=products).plan(
+        demand(
+            sku=OTHER,
+            quantity=1,
+            expected_revenue=10,
+            max_outlay=10,
+            minimum_margin=0,
+            maximum_loss_fraction=Decimal("0.20"),
+        )
+    )
+    assert not capped.actions and "full outlay" in capped.reason
+
+
 def test_waiting_offers_still_do_not_become_stock_in_allocated_policy():
     result = planner(pending_skus={RAW}).plan(
         demand(

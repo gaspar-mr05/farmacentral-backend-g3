@@ -86,6 +86,30 @@ async def test_open_bid_is_a_wait_and_is_shared_instead_of_duplicated(db_session
 
 
 @pytest.mark.anyio
+async def test_retarget_retires_bid_only_after_confirmed_cancellation(db_session):
+    period, _, _, _ = add_market_stock(db_session)
+    source = service(db_session, period)
+    opened = offer(RAW, 4, 2, publisher=3).model_copy(update={"side": "buy"})
+    source.trades.create_offer.return_value = opened
+    source.trades.get_offer.return_value = opened
+    need = demand(sku=RAW, quantity=4)
+    row = await source.ensure("retarget", need)
+    row.next_retry_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.commit()
+    source.trades.get_offer.side_effect = [
+        opened,
+        opened.model_copy(update={"status": "cancelled"}),
+    ]
+    source.preview.reset_mock()
+    result = await source.ensure("retarget", need, retire=True)
+    assert result.status == "superseded" and result.market_offer_id is None
+    source.trades.cancel_offer.assert_awaited_once_with(opened.id)
+    source.preview.assert_not_awaited()
+    source.trades.create_offer.assert_awaited_once()
+    source.trades.accept_offer.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_confirmed_rejection_can_be_replanned_without_unknown_mutation(
     db_session,
 ):
@@ -280,8 +304,9 @@ async def test_accepted_unassigned_commitment_is_deducted_from_usable_stock(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("retire", [False, True])
 async def test_cancel_race_recognizes_purchase_instead_of_accepting_another_offer(
-    db_session, monkeypatch
+    db_session, monkeypatch, retire
 ):
     from tests.services.test_trade_custody import TradesStub
 
@@ -333,7 +358,7 @@ async def test_cancel_race_recognizes_purchase_instead_of_accepting_another_offe
             return_value=Mock(synchronize=AsyncMock(return_value=completed_sync(units)))
         ),
     )
-    await source.ensure("cancel-race", need)
+    await source.ensure("cancel-race", need, retire=retire)
     assert row.status == "acquired"
     assert row.decision["acquisition"]["order_id"] == "e" * 24
     source.trades.accept_offer.assert_not_awaited()

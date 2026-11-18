@@ -240,9 +240,18 @@ class E3ReplenishmentService:
                     )
                 if state.procurement_id:
                     request = self.session.get(ProcurementRequest, state.procurement_id)
+                    saved_demand = ProcurementDemand.model_validate(request.demand)
+                    retarget = priority < 2 and (
+                        saved_demand.priority != priority
+                        or saved_demand.quantity != quantity
+                        or (deadline is not None and deadline < saved_demand.deadline)
+                        or saved_demand.maximum_loss_fraction
+                        != self.settings.replenishment_order_loss_limit
+                    )
                     request = await self.sourcing.ensure(
                         request.request_key,
-                        ProcurementDemand.model_validate(request.demand),
+                        saved_demand,
+                        retire=retarget,
                     )
                     if request.status == "acquired":
                         state.estimated_spend += Decimal(
@@ -251,7 +260,13 @@ class E3ReplenishmentService:
                         state.procurement_id = None
                         self.session.commit()
                         result["purchased"] += 1
-                    elif request.status in {"ready", "direct", "produce", "expired"}:
+                    elif request.status in {
+                        "ready",
+                        "direct",
+                        "produce",
+                        "expired",
+                        "superseded",
+                    }:
                         if request.status in {"direct", "produce"}:
                             request.status = "superseded"
                         if request.status == "expired":
@@ -277,6 +292,7 @@ class E3ReplenishmentService:
                     and not state.procurement_id
                     and (
                         priority < state.goal.get("priority", 2)
+                        or (priority < 2 and state.goal["quantity"] != quantity)
                         or (
                             deadline is not None
                             and deadline
@@ -365,8 +381,13 @@ class E3ReplenishmentService:
                 spent = state.estimated_spend - Decimal(goal.get("spend_started", "0"))
                 # Bound one replenishment to the value of one useful target
                 # basket, and all replenishments to the shared period envelope.
+                loss_limit = (
+                    self.settings.replenishment_order_loss_limit
+                    if goal.get("priority", priority) < 2
+                    else Decimal(0)
+                )
                 goal_limit = max(
-                    Decimal(goal["revenue"]),
+                    Decimal(goal["revenue"]) * (1 + loss_limit),
                     prices.get(state.sku, Decimal(0))
                     * max(state.target, goal["quantity"]),
                 )
@@ -379,8 +400,9 @@ class E3ReplenishmentService:
                     other_costs=spent,
                     max_outlay=max_outlay,
                     minimum_margin=0
-                    if goal.get("priority", priority) == 0
+                    if goal.get("priority", priority) < 2
                     else Decimal("0.10"),
+                    maximum_loss_fraction=loss_limit,
                     includes_committed=True,
                     priority=goal.get("priority", priority),
                 )

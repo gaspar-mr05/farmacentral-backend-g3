@@ -360,7 +360,7 @@ class ScarcityProcurementService:
         return plan.model_copy(update={"protected_stock": protected})
 
     async def ensure(
-        self, request_key: str, demand: ProcurementDemand
+        self, request_key: str, demand: ProcurementDemand, *, retire=False
     ) -> ProcurementRequest:
         if not request_key.strip() or len(request_key) > 128:
             raise ValueError(
@@ -409,7 +409,11 @@ class ScarcityProcurementService:
             self.session.commit()
             try:
                 if row.market_offer_id:
-                    return await self._observe(row)
+                    return await self._observe(row, retire=retire)
+                if retire:
+                    row.status = "superseded"
+                    self.session.commit()
+                    return row
                 if (
                     demand.deadline <= now
                     or now < self.period.starts_at
@@ -580,7 +584,7 @@ class ScarcityProcurementService:
                 self.session.commit()
                 return row
 
-    async def _observe(self, row, *, may_cancel=True):
+    async def _observe(self, row, *, may_cancel=True, retire=False):
         local = self.session.get(MarketOffer, row.market_offer_id)
         if not local.external_offer_id:
             row.status, row.last_error = (
@@ -617,7 +621,7 @@ class ScarcityProcurementService:
         elif official.status in {"expired", "cancelled", "closed"}:
             local.reconciled_at = datetime.now(UTC)
             row.market_offer_id = None
-            row.status = "waiting"
+            row.status = "superseded" if retire else "waiting"
             row.last_error = "Offer ended without a purchase for this group"
         else:
             row.status = "waiting"
@@ -632,17 +636,17 @@ class ScarcityProcurementService:
                 expired = demand.deadline <= datetime.now(UTC)
                 plan = (
                     None
-                    if expired
+                    if expired or retire
                     else await self.preview(demand, replacing_offer_id=local.id)
                 )
                 better_route = plan is not None and (
                     plan.status in {"ready", "produce", "direct"}
                     or any(a.kind == "accept" for a in plan.actions)
                 )
-                if expired or better_route:
+                if expired or better_route or retire:
                     self.session.commit()
                     await self.trades.cancel_offer(official.id)
                     # A concurrent acceptance may have won. Confirm before replanning.
-                    return await self._observe(row, may_cancel=False)
+                    return await self._observe(row, may_cancel=False, retire=retire)
         self.session.commit()
         return row

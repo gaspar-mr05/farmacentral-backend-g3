@@ -16,15 +16,18 @@ class ProcurementDemand(BaseModel):
     # Opt in to separate useful consumption from the full cash outlay.
     # None retains the step 11 policy for existing persisted requests/callers.
     max_outlay: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
+    maximum_loss_fraction: Decimal = Field(
+        default=Decimal(0), ge=0, le=1, allow_inf_nan=False
+    )
     minimum_margin: Decimal = Field(
         default=Decimal("0.10"), ge=0, lt=1, allow_inf_nan=False
     )
 
     @property
     def budget(self) -> Decimal:
-        return self.expected_revenue * (1 - self.minimum_margin) - (
-            self.other_costs if self.max_outlay is None else Decimal(0)
-        )
+        return self.expected_revenue * (
+            1 - self.minimum_margin + self.maximum_loss_fraction
+        ) - (self.other_costs if self.max_outlay is None else Decimal(0))
 
     @property
     def outlay_budget(self) -> Decimal:

@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     replenishment_minimum_stock: int = Field(default=2, ge=1)
     replenishment_target_stock: int = Field(default=6, ge=1)
     replenishment_minimum_lifetime_seconds: float = Field(default=14400, ge=0)
+    replenishment_order_loss_limit: Decimal = Field(
+        default=Decimal(0), ge=0, le=1, allow_inf_nan=False
+    )
     # Optional initial spending envelope per E3 period; defaults to one target
     # basket at current prices. Confirmed positive invoiced margin extends it.
     replenishment_spending_limit: Decimal | None = Field(

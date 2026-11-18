@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -15,6 +16,7 @@ from app.models import (
     MarketOfferReservation,
     OrderItem,
     OrderStatus,
+    ProcurementRequest,
     ProductionRun,
     ReplenishmentState,
     Unit,
@@ -207,6 +209,69 @@ async def test_background_goal_allows_full_replenishment_horizon(migration_datab
         state = session.scalar(select(ReplenishmentState))
         deadline = datetime.fromisoformat(state.goal["deadline"])
         assert deadline >= started + timedelta(hours=3, minutes=59)
+
+
+@pytest.mark.anyio
+async def test_customer_retargets_background_kit_bid_to_inputs_after_cancellation(
+    migration_database,
+):
+    run_migration(migration_database, "upgrade", "head")
+    pharmacy = Pharmacy(restricted=True)
+    pharmacy.catalog["MID"].cost = pharmacy.catalog["KIT-A"].cost = Decimal(5)
+    opened = {}
+    trades = Mock(list_offers=AsyncMock(return_value=[]))
+
+    async def create(request, **kwargs):
+        now = datetime.now(UTC)
+        offer = TradeOffer(
+            id=f"{len(opened) + 1:024x}",
+            state="open",
+            side="buy",
+            sku=request.sku,
+            quantity=request.quantity,
+            unitPrice=request.unit_price,
+            publisher="3",
+            createdAt=now,
+            expiresAt=now + timedelta(hours=1),
+        )
+        opened[offer.id] = offer
+        return offer
+
+    async def cancel(identity):
+        opened[identity] = opened[identity].model_copy(update={"status": "cancelled"})
+
+    trades.create_offer = AsyncMock(side_effect=create)
+    trades.get_offer = AsyncMock(side_effect=lambda identity: opened[identity])
+    trades.cancel_offer = AsyncMock(side_effect=cancel)
+    with Session(migration_database, expire_on_commit=False) as session:
+        service = setup(session, pharmacy, trades=trades)
+        service.settings.replenishment_spending_limit = 20
+        service.prices.get_current_prices.return_value = [
+            {"sku": sku, "price": {"KIT-A": 10, "MID": 8}.get(sku, 1)}
+            for sku in pharmacy.catalog
+        ]
+        await service.poll()
+        assert trades.create_offer.call_args.args[0].sku == "KIT-A"
+        state = session.scalar(select(ReplenishmentState))
+        old_request = session.get(ProcurementRequest, state.procurement_id)
+        old_request.next_retry_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.add(
+            make_external_order(
+                items=[OrderItem(sku="KIT-A", quantity=1, unit_price=10)],
+            )
+        )
+        # Explicit tolerance only inside this isolated simulation.
+        service.settings.replenishment_order_loss_limit = Decimal("0.20")
+        session.commit()
+        next_turn(session)
+        result = await service.poll()
+        assert result["failed"] == 0, result
+        assert old_request.status == "superseded"
+        trades.cancel_offer.assert_awaited_once()
+        assert trades.create_offer.await_count == 2
+        assert trades.create_offer.call_args.args[0].sku == pharmacy.raw
+        assert state.goal["priority"] == 1
+        assert pharmacy.posts == []
 
 
 @pytest.mark.anyio

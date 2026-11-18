@@ -52,6 +52,9 @@ class ProcurementPlanner:
         self.budget = demand.budget
         self.outlay_budget = demand.outlay_budget
         self.allocate_costs = demand.max_outlay is not None
+        self.prefer_recipe = (
+            self.allocate_costs and demand.includes_committed and demand.priority < 2
+        )
         self.blockers = []
         available = dict(self.stock)
         available.update(
@@ -305,6 +308,8 @@ class ProcurementPlanner:
             feasible,
             key=lambda p: (
                 p.status == "waiting",
+                self.prefer_recipe
+                and any(a.kind == "bid" and a.sku == sku for a in p.actions),
                 self._economic_cost(p),
                 p.cost,
                 p.seconds,
