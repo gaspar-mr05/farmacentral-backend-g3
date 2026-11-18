@@ -199,7 +199,13 @@ class E3ReplenishmentService:
             if (
                 state.goal
                 and state.goal.get("buffer_recovery")
-                and priority != 0
+                and priority == 1
+                and state.goal.get("buffer_recovery_for")
+                == {
+                    "quantity": quantity,
+                    "deadline": deadline.isoformat() if deadline else None,
+                    "revenue": str(revenue),
+                }
                 and datetime.fromisoformat(state.goal["deadline"]) > now
             ):
                 quantity = state.goal["quantity"]
@@ -351,6 +357,7 @@ class E3ReplenishmentService:
                         "priority": priority,
                     }
                     updated_goal.pop("buffer_recovery", None)
+                    updated_goal.pop("buffer_recovery_for", None)
                     state.goal = updated_goal
                     self.session.commit()
                 if (
@@ -746,6 +753,11 @@ class E3ReplenishmentService:
         if self.period.ends_at:
             deadline = min(deadline, self.period.ends_at)
         quantity = min(200, max(state.target, goal["quantity"]))
+        recovery_for = goal.get("buffer_recovery_for") or {
+            "quantity": goal["quantity"],
+            "deadline": goal["deadline"],
+            "revenue": goal["revenue"],
+        }
         return {
             "sku": state.sku,
             "quantity": quantity,
@@ -756,6 +768,7 @@ class E3ReplenishmentService:
             "priority": 1,
             "spend_started": str(state.estimated_spend),
             "buffer_recovery": True,
+            "buffer_recovery_for": recovery_for,
         }
 
     async def _select_later_order(self, state, room, snapshot, offer_cache):

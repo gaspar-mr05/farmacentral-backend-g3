@@ -289,8 +289,33 @@ async def test_rejected_order_goal_does_not_block_next_order_with_same_quantity(
 ):
     run_migration(migration_database, "upgrade", "head")
     pharmacy = Pharmacy()
+    opened = {}
+    trades = Mock(list_offers=AsyncMock(return_value=[]))
+
+    async def create(request, **kwargs):
+        now = datetime.now(UTC)
+        offer = TradeOffer(
+            id=f"{len(opened) + 1:024x}",
+            state="open",
+            side="buy",
+            sku=request.sku,
+            quantity=request.quantity,
+            unitPrice=request.unit_price,
+            publisher="3",
+            createdAt=now,
+            expiresAt=now + timedelta(hours=1),
+        )
+        opened[offer.id] = offer
+        return offer
+
+    async def cancel(identity):
+        opened[identity] = opened[identity].model_copy(update={"status": "cancelled"})
+
+    trades.create_offer = AsyncMock(side_effect=create)
+    trades.get_offer = AsyncMock(side_effect=lambda identity: opened[identity])
+    trades.cancel_offer = AsyncMock(side_effect=cancel)
     with Session(migration_database, expire_on_commit=False) as session:
-        service = setup(session, pharmacy)
+        service = setup(session, pharmacy, trades=trades)
         usual_prices = service.prices.get_current_prices.return_value
         # Neither this OC nor a speculative buffer can fund the recipe yet.
         service.prices.get_current_prices.return_value = [
@@ -305,6 +330,8 @@ async def test_rejected_order_goal_does_not_block_next_order_with_same_quantity(
         session.commit()
         first = await service.poll()
         assert first["supplied"] == first["produced"] == 0
+        request = session.scalar(select(ProcurementRequest))
+        request.next_retry_at = datetime.now(UTC) - timedelta(seconds=1)
         service.prices.get_current_prices.return_value = usual_prices
         old.status = OrderStatus.REJECTED
         if new_order:
@@ -321,6 +348,7 @@ async def test_rejected_order_goal_does_not_block_next_order_with_same_quantity(
 
         state = session.scalar(select(ReplenishmentState))
         assert result["supplied"] == 1, result
+        trades.cancel_offer.assert_awaited_once()
         if new_order:
             assert state.goal["deadline"] == new.delivery_deadline.isoformat()
         else:
