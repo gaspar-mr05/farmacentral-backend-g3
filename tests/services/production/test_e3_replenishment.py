@@ -702,6 +702,63 @@ async def test_infeasible_waiting_order_does_not_block_later_viable_demand(
 
 
 @pytest.mark.anyio
+async def test_infeasible_customer_bid_builds_future_buffer_instead(
+    migration_database,
+):
+    run_migration(migration_database, "upgrade", "head")
+    pharmacy = Pharmacy()
+    pharmacy.catalog["RAW"].production.time = 70
+    pharmacy.catalog["MID"].production.time = 30
+    pharmacy.catalog["KIT-A"].production.time = 30
+    now = datetime.now(UTC)
+    with Session(migration_database, expire_on_commit=False) as session:
+        service = setup(session, pharmacy)
+        session.add(
+            make_external_order(
+                items=[OrderItem(sku="KIT-A", quantity=1, unit_price=10)],
+                delivery_deadline=now + timedelta(hours=2),
+            )
+        )
+        session.commit()
+
+        result = await service.poll()
+
+        state = session.scalar(select(ReplenishmentState))
+        assert result["supplied"] == 1, result
+        assert pharmacy.posts == [("RAW", 1)]
+        assert service.sourcing.trades.create_offer.await_count == 0
+        assert state.goal["buffer_recovery"] is True
+        assert datetime.fromisoformat(state.goal["deadline"]) >= (
+            now + timedelta(hours=3, minutes=59)
+        )
+
+
+@pytest.mark.anyio
+async def test_rejected_customer_demand_still_increases_future_stock_target(
+    migration_database,
+):
+    run_migration(migration_database, "upgrade", "head")
+    pharmacy = Pharmacy()
+    with Session(migration_database, expire_on_commit=False) as session:
+        service = setup(session, pharmacy)
+        for index in range(12):
+            session.add(
+                make_external_order(
+                    external_order_id=f"{index:024x}",
+                    status=OrderStatus.REJECTED,
+                    items=[OrderItem(sku="KIT-A", quantity=1, unit_price=10)],
+                )
+            )
+        session.commit()
+
+        await service.poll()
+
+        state = session.scalar(select(ReplenishmentState))
+        assert state.minimum > 1
+        assert state.target > 1
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("status", [OrderStatus.ACCEPTED, OrderStatus.PAID])
 async def test_later_waiting_order_never_replaces_an_accepted_commitment(
     migration_database,

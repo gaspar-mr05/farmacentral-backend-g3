@@ -17,6 +17,7 @@ from app.clients.trades import TradesHTTPError
 from app.models import (
     Order,
     OrderItem,
+    OrderSource,
     OrderStatus,
     ProcurementRequest,
     ProductionRun,
@@ -163,7 +164,17 @@ class E3ReplenishmentService:
                     .join(Order)
                     .where(
                         OrderItem.sku == kit.sku,
-                        Order.status == OrderStatus.DISPATCHED,
+                        Order.external_order_id.is_not(None),
+                        Order.source.in_(
+                            [
+                                OrderSource.SFTP,
+                                OrderSource.PUBSUB,
+                                OrderSource.MESSAGING,
+                            ]
+                        ),
+                        Order.status.not_in(
+                            [OrderStatus.CANCELLED, OrderStatus.EXPIRED]
+                        ),
                         Order.created_at >= now - timedelta(hours=6),
                     )
                 )
@@ -185,6 +196,16 @@ class E3ReplenishmentService:
                 now,
                 preferred_order_id=(state.goal or {}).get("order_id"),
             )
+            if (
+                state.goal
+                and state.goal.get("buffer_recovery")
+                and priority != 0
+                and datetime.fromisoformat(state.goal["deadline"]) > now
+            ):
+                quantity = state.goal["quantity"]
+                deadline = datetime.fromisoformat(state.goal["deadline"])
+                revenue = Decimal(state.goal["revenue"])
+                priority = state.goal["priority"]
             producer = self._producer(state, catalog, spaces)
             lifetime = self.settings.replenishment_minimum_lifetime_seconds
             if kit.obsolescence:
@@ -321,7 +342,7 @@ class E3ReplenishmentService:
                     )
                 ):
                     # Follow the current OC, including after the previous one ended.
-                    state.goal = state.goal | {
+                    updated_goal = state.goal | {
                         "quantity": quantity,
                         "deadline": (
                             deadline or datetime.fromisoformat(state.goal["deadline"])
@@ -329,6 +350,8 @@ class E3ReplenishmentService:
                         "revenue": str(revenue),
                         "priority": priority,
                     }
+                    updated_goal.pop("buffer_recovery", None)
+                    state.goal = updated_goal
                     self.session.commit()
                 if (
                     state.goal
@@ -413,17 +436,39 @@ class E3ReplenishmentService:
                     snapshot=(catalog, current_spaces, prices),
                     offer_cache=offer_cache,
                 )
-                if (
-                    plan.status == "waiting"
-                    and not plan.actions
-                    and plan.consumed_cost is None
-                    and await self._select_later_order(
-                        state, room, (catalog, current_spaces, prices), offer_cache
-                    )
+                if self._needs_buffer_recovery(
+                    plan, state.sku
+                ) and await self._select_later_order(
+                    state, room, (catalog, current_spaces, prices), offer_cache
                 ):
                     raise ReplenishmentDeferred(
                         "Selected a viable later order; revalidate next cycle"
                     )
+                if self._needs_buffer_recovery(plan, state.sku):
+                    recovery_goal = self._buffer_recovery_goal(
+                        state, goal, catalog[state.sku], prices[state.sku]
+                    )
+                    recovery_demand = self._procurement_demand(
+                        state, recovery_goal, room, prices
+                    )
+                    recovery_plan = await self.sourcing.preview(
+                        recovery_demand,
+                        snapshot=(catalog, current_spaces, prices),
+                        offer_cache=offer_cache,
+                    )
+                    if not self._needs_buffer_recovery(recovery_plan, state.sku):
+                        goal = recovery_goal
+                        demand = recovery_demand
+                        plan = recovery_plan
+                        state.goal = goal
+                        self.session.commit()
+                        logger.info(
+                            "Replenishment switched to buffer recovery: "
+                            "sku=%s quantity=%s deadline=%s",
+                            state.sku,
+                            goal["quantity"],
+                            goal["deadline"],
+                        )
                 state.goal = goal | {
                     "budget": budget_details,
                     "max_outlay": str(demand.max_outlay),
@@ -675,6 +720,40 @@ class E3ReplenishmentService:
             priority=priority,
         )
 
+    @staticmethod
+    def _needs_buffer_recovery(plan, sku):
+        if plan.status == "waiting" and not plan.actions and plan.consumed_cost is None:
+            return True
+        return len(plan.actions) == 1 and (
+            plan.actions[0].kind == "bid" and plan.actions[0].sku == sku
+        )
+
+    def _buffer_recovery_goal(self, state, goal, product, price):
+        shelf_horizon = (
+            timedelta(hours=product.obsolescence / 2)
+            if product.obsolescence
+            else timedelta(0)
+        )
+        deadline = datetime.now(UTC) + max(
+            timedelta(hours=2),
+            timedelta(seconds=self.settings.replenishment_minimum_lifetime_seconds),
+            shelf_horizon,
+        )
+        if self.period.ends_at:
+            deadline = min(deadline, self.period.ends_at)
+        quantity = min(200, max(state.target, goal["quantity"]))
+        return {
+            "sku": state.sku,
+            "quantity": quantity,
+            "deadline": deadline.isoformat(),
+            "revenue": str(price * quantity),
+            # Customer urgency keeps recipes ahead of speculative final-kit bids,
+            # while the longer horizon lets those recipes actually complete.
+            "priority": 1,
+            "spend_started": str(state.estimated_spend),
+            "buffer_recovery": True,
+        }
+
     async def _select_later_order(self, state, room, snapshot, offer_cache):
         goal = state.goal
         if goal.get("priority") != 1 or state.pending_operation or state.procurement_id:
@@ -707,7 +786,7 @@ class E3ReplenishmentService:
                 plan.status != "waiting"
                 or plan.actions
                 or plan.consumed_cost is not None
-            ):
+            ) and not self._needs_buffer_recovery(plan, state.sku):
                 # Persist the choice across cycles/restarts. No acceptance or
                 # purchasing here: the next cycle revalidates before execution.
                 state.goal = candidate | {
