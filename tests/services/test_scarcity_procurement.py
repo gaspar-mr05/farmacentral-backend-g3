@@ -110,6 +110,110 @@ async def test_retarget_retires_bid_only_after_confirmed_cancellation(db_session
 
 
 @pytest.mark.anyio
+async def test_customer_kit_bid_yields_to_feasible_waiting_recipe(db_session):
+    period, _, _, _ = add_market_stock(db_session)
+    need = demand(includes_committed=True, priority=1)
+    root_bid = ProcurementPlan(
+        status="waiting",
+        actions=[
+            ProcurementAction(
+                kind="bid", sku=need.sku, quantity=2, useful_quantity=2, cost=8
+            )
+        ],
+    )
+    source = service(db_session, period, result=root_bid)
+    opened = offer(need.sku, 2, 4, publisher=3).model_copy(update={"side": "buy"})
+    source.trades.create_offer.return_value = opened
+    source.trades.get_offer.return_value = opened
+    row = await source.ensure("recipe-handoff", need)
+    row.next_retry_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.commit()
+    source.preview.return_value = ProcurementPlan(
+        status="waiting",
+        actions=[
+            ProcurementAction(
+                kind="bid", sku=RAW, quantity=4, useful_quantity=4, cost=8
+            )
+        ],
+    )
+    source.trades.get_offer.side_effect = [
+        opened,
+        opened.model_copy(update={"status": "cancelled"}),
+    ]
+
+    row = await source.ensure("recipe-handoff", need)
+
+    source.trades.cancel_offer.assert_awaited_once_with(opened.id)
+    assert row.market_offer_id is None
+    source.trades.accept_offer.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_selected_recipe_input_survives_a_retry(db_session):
+    from tests.services.test_procurement_planning import OTHER
+
+    period, _, _, _ = add_market_stock(db_session)
+    need = demand()
+    row = ProcurementRequest(
+        period_id=period.id,
+        request_key="selected-input",
+        demand=need.model_dump(mode="json"),
+        decision={"next_action_sku": OTHER},
+        status="waiting",
+    )
+    db_session.add(row)
+    db_session.commit()
+    source = service(db_session, period)
+    source.preview.side_effect = TradesHTTPError(429)
+    await source.ensure(row.request_key, need)
+    row.next_retry_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.commit()
+    source.preview.side_effect = None
+    source.preview.return_value = ProcurementPlan(
+        status="waiting",
+        actions=[
+            ProcurementAction(
+                kind="bid", sku=sku, quantity=4, useful_quantity=4, cost=8
+            )
+            for sku in (RAW, OTHER)
+        ],
+    )
+    source.trades.create_offer.return_value = offer(
+        OTHER, 4, 2, publisher=3
+    ).model_copy(update={"side": "buy"})
+    source.trades.get_offer.return_value = source.trades.create_offer.return_value
+
+    await source.ensure(row.request_key, need)
+
+    assert source.trades.create_offer.call_args.args[0].sku == OTHER
+    assert row.decision["next_action_sku"] == OTHER
+
+
+@pytest.mark.anyio
+async def test_input_already_satisfied_returns_to_recipe_instead_of_buying_another(
+    db_session,
+):
+    period, _, _, _ = add_market_stock(db_session)
+    need = demand()
+    row = ProcurementRequest(
+        period_id=period.id,
+        request_key="satisfied-input",
+        demand=need.model_dump(mode="json"),
+        decision={"next_action_sku": RAW},
+        status="waiting",
+    )
+    db_session.add(row)
+    db_session.commit()
+    source = service(db_session, period, result=ProcurementPlan(status="ready"))
+
+    await source.ensure(row.request_key, need)
+
+    assert row.status == "superseded"
+    source.trades.create_offer.assert_not_awaited()
+    source.trades.accept_offer.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_confirmed_rejection_can_be_replanned_without_unknown_mutation(
     db_session,
 ):

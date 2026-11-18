@@ -246,18 +246,25 @@ class MessagingClient:
                 "Could not communicate with the messaging service"
             ) from exc
 
-    @staticmethod
     def _raise_for_status(
-        response: httpx.Response, *, authenticating: bool = False
+        self, response: httpx.Response, *, authenticating: bool = False
     ) -> None:
         if not response.is_error:
             return
         logger.warning(
-            "Messaging request failed: %s %s HTTP %s",
+            "Messaging request failed: %s %s HTTP %s host=%s group=%s",
             response.request.method,
             response.request.url.path,
             response.status_code,
+            response.request.url.host,
+            self._group,
         )
+        if response.status_code == 404:
+            logger.warning(
+                "Messaging object not found; verify message ID in the same "
+                "group/environment (and ownership of the OC for inquiries). "
+                "No alternate environment will be tried"
+            )
         if response.status_code == 401 or (
             authenticating and response.status_code in (400, 403)
         ):

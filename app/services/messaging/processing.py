@@ -433,7 +433,8 @@ class MessagingProcessingService:
             else None
         )
         logger.warning(
-            "Messaging event failed: message_id=%s error=%s",
+            "Messaging event failed: message_id=%s error=%s next_retry_at=%s",
             event.external_event_id,
             error,
+            event.next_retry_at.isoformat() if event.next_retry_at else None,
         )

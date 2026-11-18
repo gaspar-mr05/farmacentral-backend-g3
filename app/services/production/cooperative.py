@@ -31,7 +31,9 @@ class ReplenishmentDeferred(Exception):
 
 
 class SupplyNeeded(ReplenishmentDeferred):
-    pass
+    def __init__(self, sku):
+        self.sku = sku
+        super().__init__(f"Supply policy must resolve {sku}")
 
 
 class CooperativeKitProduction(KitProductionService):
@@ -44,6 +46,7 @@ class CooperativeKitProduction(KitProductionService):
             allow_external_batches=True,
         )
         self.protected_stock = {}
+        self.sourcing_skus = set()
         self._group_id = group_id
         self.state = state
         self._catalog = catalog
@@ -70,11 +73,14 @@ class CooperativeKitProduction(KitProductionService):
         )
 
     async def _provision_raw_material(self, product, missing):
-        raise SupplyNeeded(f"Supply policy must resolve {product.sku}")
+        raise SupplyNeeded(product.sku)
 
     async def _ensure_available(self, sku, quantity, *, dependency_path):
         if len(self._available_units(sku)) >= quantity:
             return
+        if sku in self.sourcing_skus:
+            # A planned purchase must not silently turn into a different recipe.
+            raise SupplyNeeded(sku)
         product = self._catalog.get(sku)
         if product is None:
             raise ProductionCatalogError(f"Product {sku} is missing from catalog")
@@ -83,7 +89,7 @@ class CooperativeKitProduction(KitProductionService):
                 product, quantity, dependency_path=dependency_path
             )
         else:
-            raise SupplyNeeded(f"Supply policy must resolve {sku}")
+            raise SupplyNeeded(sku)
 
     async def _clear_packaging(self):
         await self.put_away(include_packaging=True)

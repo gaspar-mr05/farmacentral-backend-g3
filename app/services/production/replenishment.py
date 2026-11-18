@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import logging
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -37,6 +38,8 @@ from app.services.supply.requests import (
 from .cooperative import CooperativeKitProduction, ReplenishmentDeferred, SupplyNeeded
 from .replenishment_budget import spending_room
 from .replenishment_policy import schedule_key, stock_targets
+
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -226,6 +229,8 @@ class E3ReplenishmentService:
         for _, state, quantity, deadline, revenue, priority in sorted(
             candidates, key=lambda c: c[0]
         )[:3]:
+            if deadline is not None and self.period.ends_at:
+                deadline = min(deadline, self.period.ends_at)
             state.last_attempt_at = datetime.now(UTC)
             state.next_retry_at = state.last_attempt_at + timedelta(seconds=60)
             state.last_error = None
@@ -241,12 +246,15 @@ class E3ReplenishmentService:
                 if state.procurement_id:
                     request = self.session.get(ProcurementRequest, state.procurement_id)
                     saved_demand = ProcurementDemand.model_validate(request.demand)
-                    retarget = priority < 2 and (
-                        saved_demand.priority != priority
-                        or saved_demand.quantity != quantity
-                        or (deadline is not None and deadline < saved_demand.deadline)
-                        or saved_demand.maximum_loss_fraction
-                        != self.settings.replenishment_order_loss_limit
+                    retarget = saved_demand.priority != priority or (
+                        priority < 2
+                        and (
+                            saved_demand.quantity != quantity
+                            or saved_demand.expected_revenue != revenue
+                            or deadline != saved_demand.deadline
+                            or saved_demand.maximum_loss_fraction
+                            != self.settings.replenishment_order_loss_limit
+                        )
                     )
                     request = await self.sourcing.ensure(
                         request.request_key,
@@ -290,17 +298,26 @@ class E3ReplenishmentService:
                 if (
                     state.goal
                     and not state.procurement_id
+                    and priority == 2
+                    and state.goal.get("priority", 2) < 2
+                ):
+                    state.goal = None
+                    self.session.commit()
+                if (
+                    state.goal
+                    and not state.procurement_id
                     and (
-                        priority < state.goal.get("priority", 2)
+                        priority != state.goal.get("priority", 2)
                         or (priority < 2 and state.goal["quantity"] != quantity)
+                        or (priority < 2 and Decimal(state.goal["revenue"]) != revenue)
                         or (
                             deadline is not None
                             and deadline
-                            < datetime.fromisoformat(state.goal["deadline"])
+                            != datetime.fromisoformat(state.goal["deadline"])
                         )
                     )
                 ):
-                    # A new customer deadline supersedes a background buffer goal.
+                    # Follow the current OC, including after the previous one ended.
                     state.goal = state.goal | {
                         "quantity": quantity,
                         "deadline": (
@@ -424,14 +441,40 @@ class E3ReplenishmentService:
                     else None,
                 }
                 self.session.commit()
-                market = next(
-                    (a for a in plan.actions if a.kind in {"accept", "bid"}), None
+                producer.protected_stock = plan.protected_stock
+                producer.sourcing_skus = {a.sku for a in plan.actions}
+                action = next((a for a in plan.actions if a.sku == state.sku), None)
+                if action is None:
+                    if plan.status == "waiting" and not plan.actions:
+                        raise ReplenishmentDeferred(
+                            plan.reason or "Waiting for a feasible replenishment route"
+                        )
+                    # Advance the recipe before buying ingredients for later stages.
+                    # This may start one manufacture, or identify its first shortage.
+                    try:
+                        await producer.advance(state.sku, goal["quantity"])
+                    except SupplyNeeded as exc:
+                        action = next(
+                            (a for a in plan.actions if a.sku == exc.sku), None
+                        )
+                        if action is None:
+                            raise
+                    else:
+                        continue
+                logger.info(
+                    "Replenishment input selected: kit=%s sku=%s kind=%s quantity=%s",
+                    state.sku,
+                    action.sku,
+                    action.kind,
+                    action.quantity,
                 )
+                market = action if action.kind in {"accept", "bid"} else None
                 if market:
                     request = ProcurementRequest(
                         period_id=self.period.id,
                         request_key=f"replenish:{state.id}:{uuid4()}",
                         demand=demand.model_dump(mode="json"),
+                        decision={"next_action_sku": market.sku},
                         status="waiting",
                     )
                     self.session.add(request)
@@ -459,8 +502,10 @@ class E3ReplenishmentService:
                     raise ReplenishmentDeferred(
                         "Sourcing turn complete; re-evaluate actual stock next cycle"
                     )
-                action = next((a for a in plan.actions if a.kind == "direct"), None)
-                if action:
+                if action.kind == "direct":
+                    # Receipt confirmation compares the whole physical stock,
+                    # including stock protected for other orders.
+                    producer.protected_stock = {}
                     state.pending_operation = {
                         "kind": "supply",
                         "key": str(uuid4()),
@@ -488,8 +533,6 @@ class E3ReplenishmentService:
                     raise ReplenishmentDeferred(
                         plan.reason or "Waiting for a feasible replenishment route"
                     )
-                producer.protected_stock = plan.protected_stock
-                await producer.advance(state.sku, goal["quantity"])
             except ReplenishmentDeferred as exc:
                 state.last_error = str(exc)
                 result["deferred"] += 1
@@ -500,6 +543,12 @@ class E3ReplenishmentService:
                     and state.pending_operation["key"] != previous_operation_key
                 ):
                     result["produced"] += 1
+                    logger.info(
+                        "Replenishment production confirmed: kit=%s sku=%s quantity=%s",
+                        state.sku,
+                        state.pending_operation["sku"],
+                        state.pending_operation["quantity"],
+                    )
                 self.session.commit()
             except ProductionBusyError:
                 state.last_error = "Packaging busy; retry on the next turn"

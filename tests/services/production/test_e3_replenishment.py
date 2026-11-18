@@ -197,6 +197,133 @@ async def test_initial_zero_accounting_balance_allows_budgeted_startup(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("raw_stock", [0, 1])
+async def test_recipe_advances_before_buying_material_for_a_later_stage(
+    migration_database, raw_stock
+):
+    run_migration(migration_database, "upgrade", "head")
+    pharmacy = Pharmacy()
+    pharmacy.catalog["SOB-PAPEL-EST"] = product("SOB-PAPEL-EST", time=0)
+    pharmacy.catalog["KIT-A"] = product(
+        "KIT-A", components=[("MID", 1), ("SOB-PAPEL-EST", 1)], time=0
+    )
+    if raw_stock:
+        pharmacy.receive("RAW", raw_stock, store="STORE")
+    with Session(migration_database, expire_on_commit=False) as session:
+        service = setup(session, pharmacy)
+
+        result = await service.poll()
+
+        assert result["failed"] == 0, result
+        assert result["produced" if raw_stock else "supplied"] == 1
+        assert pharmacy.posts == [("MID" if raw_stock else "RAW", 1)]
+        service.sourcing.trades.create_offer.assert_not_awaited()
+        service.sourcing.trades.accept_offer.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_ready_recipe_stage_does_not_replace_a_planned_intermediate_purchase(
+    migration_database,
+):
+    from app.clients.trades import TradesHTTPError
+    from tests.services.test_procurement_planning import offer
+
+    run_migration(migration_database, "upgrade", "head")
+    pharmacy = Pharmacy()
+    pharmacy.catalog["MID"].cost = Decimal(8)
+    pharmacy.receive("RAW", 1, store="STORE")
+    opened = offer("MID", 1, 1)
+    trades = Mock(
+        list_offers=AsyncMock(
+            side_effect=lambda **kw: [opened] if kw["sku"] == "MID" else []
+        ),
+        get_offer=AsyncMock(return_value=opened),
+        accept_offer=AsyncMock(side_effect=TradesHTTPError(429)),
+    )
+    with Session(migration_database, expire_on_commit=False) as session:
+        service = setup(session, pharmacy, trades=trades)
+
+        await service.poll()
+
+        trades.accept_offer.assert_awaited_once_with(opened.id)
+        assert pharmacy.posts == []
+        request = session.scalar(select(ProcurementRequest))
+        assert request.decision["next_action_sku"] == "MID"
+
+
+@pytest.mark.anyio
+async def test_ready_stage_is_not_manufactured_when_full_recipe_exceeds_budget(
+    migration_database,
+):
+    run_migration(migration_database, "upgrade", "head")
+    pharmacy = Pharmacy()
+    pharmacy.catalog["KIT-A"].cost = Decimal(100)
+    pharmacy.receive("RAW", 1, store="STORE")
+    with Session(migration_database, expire_on_commit=False) as session:
+        service = setup(session, pharmacy)
+        service.settings.replenishment_spending_limit = 1000
+        service.settings.replenishment_order_loss_limit = Decimal("0.20")
+        service.prices.get_current_prices.return_value = [{"sku": "RAW", "price": 1}]
+        session.add(
+            make_external_order(
+                items=[OrderItem(sku="KIT-A", quantity=1, unit_price=10)],
+            )
+        )
+        session.commit()
+
+        result = await service.poll()
+
+        assert result["failed"] == 0
+        assert result["produced"] == result["supplied"] == result["purchased"] == 0
+        assert "exceeds" in result["kits"][0]["last_error"]
+        assert pharmacy.posts == []
+        service.sourcing.trades.create_offer.assert_not_awaited()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("new_order", [False, True])
+async def test_rejected_order_goal_does_not_block_next_order_with_same_quantity(
+    migration_database,
+    new_order,
+):
+    run_migration(migration_database, "upgrade", "head")
+    pharmacy = Pharmacy()
+    with Session(migration_database, expire_on_commit=False) as session:
+        service = setup(session, pharmacy)
+        old = make_external_order(
+            items=[OrderItem(sku="KIT-A", quantity=1, unit_price=1)],
+            delivery_deadline=datetime.now(UTC) + timedelta(minutes=40),
+        )
+        session.add(old)
+        session.commit()
+        first = await service.poll()
+        assert first["supplied"] == first["produced"] == 0
+        old.status = OrderStatus.REJECTED
+        if new_order:
+            new = make_external_order(
+                external_order_id="e" * 24,
+                items=[OrderItem(sku="KIT-A", quantity=1, unit_price=10)],
+                delivery_deadline=datetime.now(UTC) + timedelta(hours=2),
+            )
+            session.add(new)
+        session.commit()
+        next_turn(session)
+
+        result = await service.poll()
+
+        state = session.scalar(select(ReplenishmentState))
+        assert result["supplied"] == 1, result
+        if new_order:
+            assert state.goal["deadline"] == new.delivery_deadline.isoformat()
+        else:
+            assert state.goal["priority"] == 2
+            assert datetime.fromisoformat(state.goal["deadline"]) > (
+                datetime.now(UTC) + timedelta(hours=3)
+            )
+        assert state.goal["revenue"] == "10"
+
+
+@pytest.mark.anyio
 async def test_background_goal_allows_full_replenishment_horizon(migration_database):
     run_migration(migration_database, "upgrade", "head")
     pharmacy = Pharmacy(restricted=True)

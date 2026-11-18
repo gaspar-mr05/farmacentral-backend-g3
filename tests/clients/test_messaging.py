@@ -84,6 +84,27 @@ async def test_register_order_uses_documented_contract_and_reuses_token():
 
 
 @pytest.mark.anyio
+async def test_missing_message_logs_destination_without_exposing_credentials(caplog):
+    def handler(request):
+        if request.url.path.endswith("/auth"):
+            return httpx.Response(200, json={"token": "test-token"})
+        return httpx.Response(404, json={"message": "test-secret test-token"})
+
+    async with httpx.AsyncClient(
+        base_url="https://messaging.test/messaging/",
+        transport=httpx.MockTransport(handler),
+    ) as http_client:
+        client = MessagingClient(settings=make_settings(), http_client=http_client)
+        with pytest.raises(MessagingHTTPError):
+            await client.discard(MESSAGE_ID, reason="Consulta general")
+
+    assert "host=messaging.test group=3" in caplog.text
+    assert "verify message ID" in caplog.text
+    assert "test-secret" not in caplog.text
+    assert "test-token" not in caplog.text
+
+
+@pytest.mark.anyio
 async def test_inquiry_and_reply_use_separate_endpoints_and_original_routing():
     requests = []
     reply = {"accepted": True, "messageId": "opaque-outbound-id"}

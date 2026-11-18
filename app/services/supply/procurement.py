@@ -433,13 +433,28 @@ class ScarcityProcurementService:
                     )
                     self.session.commit()
                     return row
+                action_sku = (row.decision or {}).get("next_action_sku")
                 row.decision = plan.model_dump(mode="json")
+                if action_sku is not None:
+                    row.decision = row.decision | {"next_action_sku": action_sku}
                 row.status, row.last_error = plan.status, plan.reason or None
                 self.session.commit()
                 action = next(
-                    (a for a in plan.actions if a.kind in {"accept", "bid"}), None
+                    (
+                        a
+                        for a in plan.actions
+                        if a.kind in {"accept", "bid"}
+                        and (action_sku is None or a.sku == action_sku)
+                    ),
+                    None,
                 )
                 if action is None:
+                    if action_sku is not None:
+                        row.status = "superseded"
+                        row.last_error = (
+                            "Selected input no longer requires a market purchase"
+                        )
+                        self.session.commit()
                     return row  # Direct supply/fabrication is integrated in step 13.
                 existing = self.session.scalar(
                     select(MarketOffer)
@@ -642,6 +657,13 @@ class ScarcityProcurementService:
                 better_route = plan is not None and (
                     plan.status in {"ready", "produce", "direct"}
                     or any(a.kind == "accept" for a in plan.actions)
+                    or (
+                        demand.includes_committed
+                        and demand.priority < 2
+                        and local.sku == demand.sku
+                        and bool(plan.actions)
+                        and all(a.sku != demand.sku for a in plan.actions)
+                    )
                 )
                 if expired or better_route or retire:
                     self.session.commit()
