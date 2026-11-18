@@ -110,6 +110,41 @@ async def test_retarget_retires_bid_only_after_confirmed_cancellation(db_session
 
 
 @pytest.mark.anyio
+async def test_unrelated_purchase_does_not_cancel_a_still_needed_input_bid(db_session):
+    period, _, _, _ = add_market_stock(db_session)
+    source = service(db_session, period)
+    opened = offer(RAW, 4, 2, publisher=3).model_copy(update={"side": "buy"})
+    source.trades.create_offer.return_value = opened
+    source.trades.get_offer.return_value = opened
+    need = demand(includes_committed=True, priority=1)
+    row = await source.ensure("keep-needed-input", need)
+    row.next_retry_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.commit()
+    source.preview.return_value = ProcurementPlan(
+        status="waiting",
+        actions=[
+            ProcurementAction(
+                kind="bid", sku=RAW, quantity=4, useful_quantity=4, cost=8
+            ),
+            ProcurementAction(
+                kind="accept",
+                sku="EXC-SUERO-FISIO",
+                quantity=2,
+                useful_quantity=2,
+                cost=2,
+                offer_id="d" * 24,
+            ),
+        ],
+    )
+    await source.ensure("keep-needed-input", need)
+    source.trades.cancel_offer.assert_not_awaited()
+    source.trades.create_offer.assert_awaited_once()
+    source.trades.accept_offer.assert_not_awaited()
+    assert row.market_offer_id is not None
+    assert row.status == "waiting"
+
+
+@pytest.mark.anyio
 async def test_customer_kit_bid_yields_to_feasible_waiting_recipe(db_session):
     period, _, _, _ = add_market_stock(db_session)
     need = demand(includes_committed=True, priority=1)

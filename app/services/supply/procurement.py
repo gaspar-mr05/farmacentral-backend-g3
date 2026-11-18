@@ -654,15 +654,24 @@ class ScarcityProcurementService:
                     if expired or retire
                     else await self.preview(demand, replacing_offer_id=local.id)
                 )
-                better_route = plan is not None and (
-                    plan.status in {"ready", "produce", "direct"}
-                    or any(a.kind == "accept" for a in plan.actions)
-                    or (
-                        demand.includes_committed
-                        and demand.priority < 2
-                        and local.sku == demand.sku
-                        and bool(plan.actions)
-                        and all(a.sku != demand.sku for a in plan.actions)
+                still_needs_bid = plan is not None and any(
+                    a.kind == "bid" and a.sku == local.sku for a in plan.actions
+                )
+                # Another input becoming purchasable does not replace this bid.
+                # Otherwise we cancel it only to publish it again next cycle.
+                better_route = (
+                    plan is not None
+                    and not still_needs_bid
+                    and (
+                        plan.status in {"ready", "produce", "direct"}
+                        or any(a.kind == "accept" for a in plan.actions)
+                        or (
+                            demand.includes_committed
+                            and demand.priority < 2
+                            and local.sku == demand.sku
+                            and bool(plan.actions)
+                            and all(a.sku != demand.sku for a in plan.actions)
+                        )
                     )
                 )
                 if expired or better_route or retire:

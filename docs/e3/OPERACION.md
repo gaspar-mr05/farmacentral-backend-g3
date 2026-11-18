@@ -130,6 +130,8 @@ frío y plazo. Ejecuta una adquisición y reevalúa el inventario antes de conti
 el plan completo no constituye stock confirmado. Para sustituir una oferta buy,
 primero concilia y confirma su cancelación o cierre. Las restricciones de pérdida
 y presupuesto siguen aplicándose aunque exista una oferta disponible.
+Una oferta buy necesaria se conserva si el nuevo plan todavía pide comprar ese
+SKU mediante otra oferta buy; encontrar una venta de otro insumo no la reemplaza.
 
 Ensayar también el SHA anterior en la copia restaurada. Para revertir aplicación,
 detener procesos y usar un checkout limpio compatible con el esquema. No hacer
