@@ -4,11 +4,37 @@ import pytest
 
 from app.services.trades.surplus_planning import (
     InvalidSurplusCatalogError,
+    merge_protected_demand,
     offer_price,
     protected_stock,
     replacement_cost,
 )
 from tests.services.test_procurement_planning import KIT, MID, OTHER, RAW, catalog
+from tests.services.test_procurement_planning import demand as make_demand
+
+
+def test_customer_orders_and_overlapping_replenishments_are_not_added_twice():
+    requests = [make_demand(quantity=q, includes_committed=True) for q in (2, 3)]
+    # Four kits of customer demand plus one operational kit buffer.
+    assert merge_protected_demand({KIT: 5}, requests) == {KIT: 5}
+
+
+def test_larger_replenishment_goal_and_independent_requests_remain_protected():
+    requests = [
+        make_demand(quantity=6, buffer=1, includes_committed=True),
+        make_demand(quantity=2),
+        make_demand(quantity=3),
+    ]
+    assert merge_protected_demand({KIT: 5}, requests) == {KIT: 12}
+
+
+def test_deduplication_keeps_other_skus_and_raw_operational_buffer():
+    demand = merge_protected_demand(
+        {KIT: 3, OTHER: 2}, [make_demand(quantity=2, includes_committed=True)]
+    )
+    protected = protected_stock(catalog(), {}, demand)
+    assert protected[RAW] == 7  # Three kits need six units plus one raw batch.
+    assert protected[OTHER] == 6  # Three kits + independent two + one raw batch.
 
 
 def test_reserves_finished_stock_before_expanding_the_missing_recipe():

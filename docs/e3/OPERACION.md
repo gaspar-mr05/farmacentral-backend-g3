@@ -120,7 +120,7 @@ El deploy requiere las reglas sudoers documentadas para reiniciar sin contraseñ
 Ensayar en dev un reset coordinado del sandbox: compras directas sólo permitidas,
 ofertas buy, cuatro insumos restringidos, producción, primeras compras/ventas y
 pedidos cumplidos. Revisar excedentes con `scripts.sell_surplus --once` antes de
-usar `--execute`; este vendedor no se activa con el target. Ajustar lotes, buffers
+usar `--execute`; este vendedor no se activa por defecto. Ajustar lotes, buffers
 y margen sin vender stock comprometido. Verificar `/`, `/trazabilidad`, recalls
 y chat; conservar la evidencia del paso 24 y publicar GitHub antes del inicio.
 
@@ -132,6 +132,59 @@ primero concilia y confirma su cancelación o cierre. Las restricciones de pérd
 y presupuesto siguen aplicándose aunque exista una oferta disponible.
 Una oferta buy necesaria se conserva si el nuevo plan todavía pide comprar ese
 SKU mediante otra oferta buy; encontrar una venta de otro insumo no la reemplaza.
+
+### Ventas de excedentes y contraste del conteo
+
+El stock protegido combina pedidos y buffer con los objetivos del reabastecedor
+sin sumar dos veces solicitudes que ya incluyen esos compromisos. Las solicitudes
+independientes sí se suman; se conservan buffers, reservas, margen y vida útil.
+Después de desplegar, revisar el plan actualizado:
+
+```bash
+APP_ENV_FILE="$PWD/.env" .venv/bin/python -m scripts.sell_surplus --once
+```
+
+Si las cantidades son positivas y el plan es adecuado, instalar y habilitar el
+servicio continuo (cada 120 s). El instalador sólo copia la unidad, no la inicia:
+
+```bash
+bash deploy/install-systemd-units.sh
+sudo systemctl enable --now farmacentral-surplus.service
+sudo journalctl -u farmacentral-surplus.service -f -n 50
+```
+
+La unidad habilitada acompaña el target de workers en reinicios y paradas. No
+ejecutar otro vendedor manual en paralelo. Para detenerla:
+`sudo systemctl disable --now farmacentral-surplus.service`.
+Si `quantity` sigue en cero, no hay excedente bajo la política actual: revisar
+buffers, pedidos, lotes y espacio; la corrección no genera inventario ni compra
+insumos automáticamente para vender. No desproteger pedidos para sumar operaciones.
+
+El total local cuenta cierres de `MarketTrade`, no unidades. Si difiere del portal,
+contrastar ofertas por ID antes de ajustar métricas. Por ejemplo, consultar una
+oferta antigua que la vista no muestra (sólo lectura remota; respetar 429):
+
+```bash
+APP_ENV_FILE="$PWD/.env" .venv/bin/python - <<'PY'
+import asyncio
+from app.clients.trades import TradesClient
+
+async def main():
+    async with TradesClient() as client:
+        offer = await client.get_offer("6afdb7788bf79117168f0a50")
+    print({"id": offer.id, "estado": offer.status, "tipo": offer.side,
+           "publicador": offer.publisher_group,
+           "contraparte": offer.counterparty_group, "oc": offer.order_id,
+           "cantidad": offer.quantity, "cierre": str(offer.closed_at)})
+
+asyncio.run(main())
+PY
+```
+
+Para una venta publicada por otro grupo, `estado=closed` y `contraparte=3`
+confirman que el grupo 3 compró; contrastar también OC y fecha del período.
+Repetir para las ofertas discrepantes sin ráfagas. Conservar resultados privados;
+una lista visible incompleta no justifica borrar cierres locales ni cambiar roles.
 
 Ensayar también el SHA anterior en la copia restaurada. Para revertir aplicación,
 detener procesos y usar un checkout limpio compatible con el esquema. No hacer

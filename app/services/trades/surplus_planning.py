@@ -7,6 +7,24 @@ class InvalidSurplusCatalogError(ValueError):
     pass
 
 
+def merge_protected_demand(order_demand, sourcing_demands):
+    """Committed requests cover existing demand; independent requests add to it."""
+    demand = defaultdict(int, order_demand)
+    covered = defaultdict(int)
+    additional = defaultdict(int)
+    for need in sourcing_demands:
+        quantity = need.quantity + need.buffer
+        if need.includes_committed:
+            covered[need.sku] = max(covered[need.sku], quantity)
+        else:
+            additional[need.sku] += quantity
+    for sku, quantity in covered.items():
+        demand[sku] = max(demand[sku], quantity)
+    for sku, quantity in additional.items():
+        demand[sku] += quantity
+    return dict(demand)
+
+
 def protected_stock(catalog, stock, demand, *, raw_buffer_batches=1):
     """Allocate finished stock first, then reserve the recipe's missing inputs."""
     remaining = dict(stock)

@@ -38,7 +38,12 @@ from app.services.inventory.sync import InventorySyncService
 from app.services.production.locking import ProductionBusyError, production_lock
 
 from .custody import ReservationGuard, TradeCustodyService
-from .surplus_planning import offer_price, protected_stock, replacement_cost
+from .surplus_planning import (
+    merge_protected_demand,
+    offer_price,
+    protected_stock,
+    replacement_cost,
+)
 
 STRATEGY = "surplus"
 TERMINAL = {"cancelled", "expired", "closed", "failed"}
@@ -154,6 +159,7 @@ class SurplusSalesService:
                 or item.order.delivery_deadline > datetime.now(UTC)
             ):
                 demand[item.sku] += max(0, item.quantity - len(item.assigned_units))
+        sourcing_demands = []
         for request in self.session.scalars(
             select(ProcurementRequest).where(
                 ProcurementRequest.period_id == self.period.id,
@@ -162,10 +168,12 @@ class SurplusSalesService:
                 ),
             )
         ):
-            # Pending sourcing is additional protection, never stock capacity.
+            # Replenishment requests already include the customer commitments;
+            # reserving their whole demand again would double-count the orders.
             need = ProcurementDemand.model_validate(request.demand)
             if need.deadline > datetime.now(UTC):
-                demand[need.sku] += need.quantity + need.buffer
+                sourcing_demands.append(need)
+        demand = merge_protected_demand(demand, sourcing_demands)
         protected = protected_stock(
             catalog, physical, demand, raw_buffer_batches=self.policy.raw_buffer_batches
         )

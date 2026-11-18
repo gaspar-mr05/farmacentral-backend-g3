@@ -1,0 +1,29 @@
+[Unit]
+Description=Sell Farmacentral surplus while preserving customer commitments
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+PartOf=farmacentral-workers.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=integracion
+Group=integracion
+WorkingDirectory=/home/integracion/farmacentral-backend
+EnvironmentFile=/home/integracion/farmacentral-backend/.env
+Environment=APP_ENV_FILE=/home/integracion/farmacentral-backend/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/integracion/farmacentral-backend/.venv/bin/python -m scripts.sell_surplus --execute --interval-seconds 120
+Restart=on-failure
+RestartSec=60
+TimeoutStopSec=30
+StateDirectory=farmacentral
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+UMask=0077
+
+[Install]
+WantedBy=farmacentral-workers.target

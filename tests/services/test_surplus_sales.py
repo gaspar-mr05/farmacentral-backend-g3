@@ -13,16 +13,18 @@ from app.models import (
     OrderItem,
     OrderSource,
     OrderStatus,
+    ProcurementRequest,
 )
 from app.schemas.surplus import SurplusPolicy
 from app.services.inventory.sync import EntityChanges, InventorySyncResult
 from app.services.trades.surplus import SurplusSalesService
-from tests.services.test_procurement_planning import product
+from tests.services.test_procurement_planning import demand, product
 from tests.services.test_trade_custody import (
     TradesStub,
     add_market_stock,
     official_offer,
 )
+from tests.support.orders import make_external_order
 
 
 def setup_sales(session, monkeypatch, *, quantity=10, buffer=1):
@@ -78,6 +80,36 @@ def setup_sales(session, monkeypatch, *, quantity=10, buffer=1):
         Mock(return_value=Mock(synchronize=AsyncMock())),
     )
     return service, units, storage, dispatch
+
+
+@pytest.mark.anyio
+async def test_sales_snapshot_counts_customer_replenishment_once(
+    db_session, monkeypatch
+):
+    service, units, _, _ = setup_sales(db_session, monkeypatch)
+    sku = units[0].lot.product.sku
+    db_session.add(
+        make_external_order(
+            status=OrderStatus.ACCEPTED,
+            items=[OrderItem(sku=sku, quantity=3, unit_price=5)],
+        )
+    )
+    need = demand(sku=sku, quantity=3, includes_committed=True)
+    db_session.add(
+        ProcurementRequest(
+            period_id=service.period.id,
+            request_key="same-customer-order",
+            demand=need.model_dump(mode="json"),
+            status="waiting",
+        )
+    )
+    db_session.flush()
+    result = await service.cycle()
+    quote = result["quotes"][0]
+    assert quote["protected"] == 4  # Three committed units plus one raw buffer.
+    assert quote["quantity"] == 3
+    service.trades.create_offer.assert_not_awaited()
+    service.trades.accept_offer.assert_not_awaited()
 
 
 @pytest.mark.anyio
