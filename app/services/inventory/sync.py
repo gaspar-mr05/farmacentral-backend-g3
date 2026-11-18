@@ -37,6 +37,7 @@ class InventorySyncResult:
     inventory_complete: bool = False
     created_unit_ids: tuple[str, ...] = ()
     missing_unit_ids: tuple[str, ...] = ()
+    complete_skus: frozenset[str] = frozenset()
 
 
 class InventorySyncService:
@@ -122,6 +123,7 @@ def sync_inventory(
     _delete_empty_unreported_lots(session)
     session.flush()
 
+    incomplete_skus = {sku for _, sku in (incomplete_groups or ())}
     return InventorySyncResult(
         products=EntityChanges(products.created, products.updated),
         locations=EntityChanges(locations.created, locations.updated),
@@ -132,6 +134,11 @@ def sync_inventory(
         ),
         created_unit_ids=tuple(unit.external_unit_id for unit in units.created_units),
         missing_unit_ids=tuple(unit.external_unit_id for unit in units.missing_units),
+        complete_skus=frozenset(
+            product.sku
+            for product in data.products
+            if data.locations and product.sku not in incomplete_skus
+        ),
     )
 
 

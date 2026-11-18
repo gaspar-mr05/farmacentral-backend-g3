@@ -22,6 +22,7 @@ from app.models import (
     Unit,
 )
 from app.schemas.units import UnitData
+from app.services.inventory.collection import InventoryCollector
 from app.services.inventory.sync import InventorySyncService
 
 
@@ -367,6 +368,35 @@ def test_incomplete_inventory_group_does_not_hide_unseen_units(db_session) -> No
     )
 
     assert unit.status == "available"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("partial_target", [False, True])
+async def test_sync_reports_completeness_by_sku(
+    db_session, monkeypatch, partial_target
+):
+    client = FakeInventorySource()
+    original = InventoryCollector.collect
+    other_sku = client.sku + "-OTHER"
+
+    async def partial_collect(collector):
+        catalog, spaces, units, _ = await original(collector)
+        catalog.append(catalog[0].model_copy(update={"sku": other_sku}))
+        return (
+            catalog,
+            spaces,
+            units,
+            {(client.store_1, client.sku if partial_target else other_sku)},
+        )
+
+    monkeypatch.setattr(InventoryCollector, "collect", partial_collect)
+    result = await InventorySyncService(client, db_session).synchronize(
+        tolerate_changes=True
+    )
+    assert not result.inventory_complete
+    assert result.complete_skus == frozenset(
+        {other_sku if partial_target else client.sku}
+    )
 
 
 def _count(db_session, model, criterion) -> int:

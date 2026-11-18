@@ -5,7 +5,14 @@ import pytest
 from sqlalchemy import select
 
 from app.clients.trades import TradesHTTPError
-from app.models import BillingTask, CustodyEvent, MarketOffer, MarketRole, MarketTrade
+from app.models import (
+    BillingTask,
+    CustodyEvent,
+    CustodyEventType,
+    MarketOffer,
+    MarketRole,
+    MarketTrade,
+)
 from app.schemas.trades import TradeOfferCreate
 from app.services.inventory.sync import EntityChanges, InventorySyncResult
 from app.services.trades.reconciliation import TradeReconciliationService
@@ -204,6 +211,76 @@ async def test_lost_acceptance_closed_by_another_group_releases_our_reservation(
     assert result["released"] == 1
     assert all(u.status == "available" for u in units[:2])
     assert db_session.scalar(select(MarketTrade)) is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("sku_complete", [True, False])
+@pytest.mark.parametrize("extra_receipt", [True, False])
+async def test_buy_recovers_retained_receipts_when_only_its_sku_is_complete(
+    db_session, monkeypatch, sku_complete, extra_receipt
+):
+    period, dispatch, units, closed = await published_sale(db_session)
+    offer = db_session.scalar(select(MarketOffer))
+    offer.publisher_group_id = 5
+    offer.status = "acceptance_uncertain"
+    bought = closed.model_copy(update={"publisher_group": 5, "counterparty_group": 3})
+    for unit in units[: 3 if extra_receipt else 2]:
+        db_session.add(
+            CustodyEvent(
+                unit_id=unit.id,
+                event_type=CustodyEventType.RECEIVED,
+                to_location_id=unit.current_location_id,
+                occurred_at=bought.closed_at + timedelta(seconds=2),
+            )
+        )
+    db_session.commit()
+    snapshot = InventorySyncResult(
+        products=EntityChanges(),
+        locations=EntityChanges(),
+        lots=EntityChanges(),
+        units=EntityChanges(),
+        inventory_complete=False,
+        complete_skus=frozenset({bought.sku} if sku_complete else {"OTHER-SKU"}),
+    )
+    monkeypatch.setattr(
+        "app.services.trades.reconciliation.InventorySyncService",
+        Mock(return_value=Mock(synchronize=AsyncMock(return_value=snapshot))),
+    )
+    service = reconciler(db_session, period, dispatch, bought)
+    result = await service.poll()
+    can_link = sku_complete and not extra_receipt
+    assert result["closed"] == int(can_link)
+    assert result["custody_pending"] == int(not can_link)
+    trade = db_session.scalar(select(MarketTrade))
+    recorded = db_session.scalars(
+        select(CustodyEvent).where(CustodyEvent.market_trade_id == trade.id)
+    ).all()
+    assert len(recorded) == (2 if can_link else 0)
+
+
+@pytest.mark.anyio
+async def test_partial_global_inventory_does_not_confirm_seller_custody(
+    db_session, monkeypatch
+):
+    period, dispatch, units, closed = await published_sale(db_session)
+    snapshot = InventorySyncResult(
+        products=EntityChanges(),
+        locations=EntityChanges(),
+        lots=EntityChanges(),
+        units=EntityChanges(),
+        inventory_complete=False,
+        complete_skus=frozenset({closed.sku}),
+        missing_unit_ids=tuple(u.external_unit_id for u in units[:2]),
+    )
+    monkeypatch.setattr(
+        "app.services.trades.reconciliation.InventorySyncService",
+        Mock(return_value=Mock(synchronize=AsyncMock(return_value=snapshot))),
+    )
+    result = await reconciler(
+        db_session, period, dispatch, closed, order_source=OwnSaleOrders(closed)
+    ).poll()
+    assert result["closed"] == 0
+    assert result["custody_pending"] == 1
 
 
 @pytest.mark.anyio

@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -36,6 +37,8 @@ from app.services.custody.events import record_move
 
 if TYPE_CHECKING:
     from app.services.inventory.sync import InventorySyncResult
+
+logger = logging.getLogger(__name__)
 
 
 class InvalidTradeStateError(Exception):
@@ -426,7 +429,19 @@ class TradeCustodyService:
         )
         if recorded:
             return recorded == trade.quantity
-        if sync is None or getattr(sync, "inventory_complete", False) is not True:
+        if sync is None:
+            return False
+        complete = getattr(sync, "inventory_complete", False) is True
+        if not complete and not (
+            trade.role == MarketRole.BUYER
+            and trade.sku in getattr(sync, "complete_skus", frozenset())
+        ):
+            logger.info(
+                "Market custody deferred: order_id=%s sku=%s "
+                "reason=incomplete_inventory",
+                trade.external_order_id,
+                trade.sku,
+            )
             return False
 
         if trade.role == MarketRole.SELLER:
@@ -437,8 +452,21 @@ class TradeCustodyService:
                 candidate_ids = self._unlinked_receipt_ids(trade)
 
         if len(candidate_ids) != trade.quantity:
+            logger.info(
+                "Market custody deferred: order_id=%s reason=ambiguous_units "
+                "expected=%s candidates=%s",
+                trade.external_order_id,
+                trade.quantity,
+                len(candidate_ids),
+            )
             return False
         self.record_trade_units(trade.id, candidate_ids)
+        logger.info(
+            "Market custody recorded: order_id=%s sku=%s units=%s",
+            trade.external_order_id,
+            trade.sku,
+            len(candidate_ids),
+        )
         return True
 
     def _trade_sku_unit_ids(

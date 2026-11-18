@@ -133,6 +133,13 @@ y presupuesto siguen aplicándose aunque exista una oferta disponible.
 Una oferta buy necesaria se conserva si el nuevo plan todavía pide comprar ese
 SKU mediante otra oferta buy; encontrar una venta de otro insumo no la reemplaza.
 
+Para compras con custodia pendiente, la sincronización informa qué SKU se leyó
+completamente. El conciliador puede recuperar recepciones históricas sin vincular
+si coinciden inequívocamente con la compra y ese SKU está completo, aunque otro
+SKU cambie durante la lectura. Mantiene el requisito de inventario global completo
+para ventas y comprobaciones de ausencia de recall. Los logs distinguen
+`incomplete_inventory`, `ambiguous_units` y `Market custody recorded`.
+
 ### Ventas de excedentes y contraste del conteo
 
 El stock protegido combina pedidos y buffer con los objetivos del reabastecedor
