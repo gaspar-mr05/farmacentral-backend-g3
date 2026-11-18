@@ -213,6 +213,28 @@ la época nueva: **no reactivar la DB/período anterior**. En versiones sin
 
 ## 26. Monitorear, registrar incidentes y cerrar
 
+Si siguen aumentando los rechazos, obtener una fotografía coherente de la base
+activa antes de ajustar políticas. Después de desplegar el script, ejecutar en
+el servidor:
+
+```bash
+cd /home/integracion/farmacentral-backend
+APP_ENV_FILE="$PWD/.env" .venv/bin/python -m scripts.diagnose_e3_orders \
+  --output "/tmp/e3-diagnosis-$(date -u +%Y%m%dT%H%M%SZ).json"
+```
+
+Cruza pedidos pendientes y rechazos recientes, capacidad por plazo, stock por
+ubicación, reposición/presupuestos, producción incompleta, compras/custodia y
+entregas de mensajería del período configurado. No llama APIs ni LLM; PostgreSQL
+impone una transacción de sólo lectura con timeout de 15 s por consulta. No
+exporta payloads, teléfonos ni texto de mensajes. Conserva el JSON privado
+(permisos `600`, sin sobrescribir archivos); incluye importes operativos.
+Por defecto limita a 30 los detalles de cada sección, priorizando pedidos
+activos; `truncated` indica recortes y `--limit 100` permite ampliarlos. Los
+conteos cubren todo el período. El estado local puede estar atrasado respecto del
+portal: contrastar IDs antes de concluir que faltan compras o alterar registros.
+Si falla, devuelve 1 e informa sólo el tipo de error.
+
 Configurar en `.env` las URLs públicas canónicas (pueden tener hosts distintos),
 con HTTPS y sin credenciales/query; luego activar el timer:
 
