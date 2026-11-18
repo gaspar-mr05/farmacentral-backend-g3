@@ -236,7 +236,7 @@ async def test_ready_recipe_stage_does_not_replace_a_planned_intermediate_purcha
     opened = offer("MID", 1, 1)
     trades = Mock(
         list_offers=AsyncMock(
-            side_effect=lambda **kw: [opened] if kw["sku"] == "MID" else []
+            side_effect=lambda **kw: [opened] if kw.get("sku") in {None, "MID"} else []
         ),
         get_offer=AsyncMock(return_value=opened),
         accept_offer=AsyncMock(side_effect=TradesHTTPError(429)),
@@ -291,6 +291,12 @@ async def test_rejected_order_goal_does_not_block_next_order_with_same_quantity(
     pharmacy = Pharmacy()
     with Session(migration_database, expire_on_commit=False) as session:
         service = setup(session, pharmacy)
+        usual_prices = service.prices.get_current_prices.return_value
+        # Neither this OC nor a speculative buffer can fund the recipe yet.
+        service.prices.get_current_prices.return_value = [
+            {"sku": sku, "price": Decimal("2.5") if sku.startswith("KIT") else 1}
+            for sku in pharmacy.catalog
+        ]
         old = make_external_order(
             items=[OrderItem(sku="KIT-A", quantity=1, unit_price=1)],
             delivery_deadline=datetime.now(UTC) + timedelta(minutes=40),
@@ -299,6 +305,7 @@ async def test_rejected_order_goal_does_not_block_next_order_with_same_quantity(
         session.commit()
         first = await service.poll()
         assert first["supplied"] == first["produced"] == 0
+        service.prices.get_current_prices.return_value = usual_prices
         old.status = OrderStatus.REJECTED
         if new_order:
             new = make_external_order(
@@ -566,7 +573,9 @@ async def test_purchase_of_finished_kit_uses_original_batch_without_fake_manufac
     )
     trades = Mock(
         list_offers=AsyncMock(
-            side_effect=lambda **kw: [opened] if kw["sku"] == "KIT-A" else []
+            side_effect=lambda **kw: (
+                [opened] if kw.get("sku") in {None, "KIT-A"} else []
+            )
         ),
         get_offer=AsyncMock(side_effect=[opened, closed]),
     )
@@ -668,7 +677,9 @@ async def test_infeasible_waiting_order_does_not_block_later_viable_demand(
         assert state.goal["deadline"] == later.delivery_deadline.isoformat()
         assert old.status == later.status == OrderStatus.RECEIVED
         assert pharmacy.posts == []  # Selection itself must not cause a remote effect.
-        assert service.sourcing.trades.list_offers.await_count == len(pharmacy.catalog)
+        service.sourcing.trades.list_offers.assert_awaited_once_with(
+            side="sell", state="open"
+        )
         period_id, old_id, later_id = service.period.id, old.id, later.id
         next_turn(session)
 
@@ -803,6 +814,10 @@ async def test_later_demand_search_is_bounded_and_keeps_budget_constraints(
     now = datetime.now(UTC)
     with Session(migration_database, expire_on_commit=False) as session:
         service = setup(session, pharmacy)
+        service.prices.get_current_prices.return_value = [
+            {"sku": sku, "price": Decimal("2.5") if sku.startswith("KIT") else 1}
+            for sku in pharmacy.catalog
+        ]
         for index in range(5):
             session.add(
                 make_external_order(
@@ -816,8 +831,8 @@ async def test_later_demand_search_is_bounded_and_keeps_budget_constraints(
         result = await service.poll()
         assert result["failed"] == 0
         assert (
-            service.sourcing.preview.await_count == 4
-        )  # Current + three alternatives.
+            service.sourcing.preview.await_count == 5
+        )  # Current + three alternatives + one buffer recovery preview.
         for call in service.sourcing.preview.await_args_list:
             assert call.args[0].maximum_loss_fraction == 0
             assert call.args[0].max_outlay <= 10

@@ -181,6 +181,7 @@ async def test_customer_kit_bid_yields_to_feasible_waiting_recipe(db_session):
     source.trades.cancel_offer.assert_awaited_once_with(opened.id)
     assert row.market_offer_id is None
     source.trades.accept_offer.assert_not_awaited()
+    assert row.decision["latest_preview"]["actions"][0]["sku"] == RAW
 
 
 @pytest.mark.anyio
@@ -303,6 +304,53 @@ async def test_preview_does_not_spend_reserved_quarantined_or_committed_stock(
     assert quote.actions[0].kind == "direct"
     assert quote.actions[0].quantity == 2
     source.trades.create_offer.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("full_book", [False, True])
+async def test_recipe_quotes_use_one_book_without_losing_capped_offers(
+    db_session, full_book
+):
+    from app.schemas.farma_central import FarmaCentralSpace
+    from tests.services.test_procurement_planning import KIT, catalog
+    from tests.support.billing import make_period
+
+    period = make_period()
+    db_session.add(period)
+    db_session.commit()
+    useful = offer(RAW, 4, 2)
+    book = [offer("UNRELATED", 1, 1)] * 200 if full_book else [useful]
+
+    async def listed(**filters):
+        if "sku" not in filters:
+            return book
+        return [useful] if filters["sku"] == RAW else []
+
+    trades = Mock(list_offers=AsyncMock(side_effect=listed))
+    source = ScarcityProcurementService(
+        Mock(), trades, Mock(), Mock(), db_session, period
+    )
+    snapshot = (
+        catalog(),
+        [
+            FarmaCentralSpace.model_validate(
+                {"_id": "STORE", "totalSpace": 100, "usedSpace": 0}
+            )
+        ],
+        {},
+    )
+    cache = {}
+    first = await source.preview(demand(), snapshot=snapshot, offer_cache=cache)
+    assert any(a.offer_id == useful.id for a in first.actions)
+    calls = trades.list_offers.await_count
+    assert calls == (1 + len(catalog()) if full_book else 1)
+    trades.list_offers.assert_any_await(side="sell", state="open")
+    # The same decision can test a later order against these quotes. A new
+    # decision must read again; execution still performs its normal preflight.
+    await source.preview(demand(sku=KIT), snapshot=snapshot, offer_cache=cache)
+    assert trades.list_offers.await_count == calls
+    await source.preview(demand(), snapshot=snapshot)
+    assert trades.list_offers.await_count == calls * 2
 
 
 @pytest.mark.anyio

@@ -177,6 +177,10 @@ def build_report(session, settings, *, limit=30):
             "http_status": row.http_status,
             "next_retry_at": row.next_retry_at,
             "selected_input": (row.decision or {}).get("next_action_sku"),
+            "latest_plan": pick(
+                (row.decision or {}).get("latest_preview") or row.decision,
+                ("status", "cost", "consumed_cost", "seconds", "reason", "actions"),
+            ),
         }
         for row in rows(
             "sourcing",

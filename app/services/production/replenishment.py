@@ -444,7 +444,11 @@ class E3ReplenishmentService:
                     raise ReplenishmentDeferred(
                         "Selected a viable later order; revalidate next cycle"
                     )
-                if self._needs_buffer_recovery(plan, state.sku):
+                if (
+                    goal.get("priority") == 1
+                    and prices.get(state.sku, Decimal(0)) > 0
+                    and self._needs_buffer_recovery(plan, state.sku)
+                ):
                     recovery_goal = self._buffer_recovery_goal(
                         state, goal, catalog[state.sku], prices[state.sku]
                     )

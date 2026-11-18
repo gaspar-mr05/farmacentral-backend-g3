@@ -317,7 +317,21 @@ class ScarcityProcurementService:
 
         visit(demand.sku)
         offers = {}
+        # One public book usually covers the whole recipe. The API caps lists at
+        # 200; a full page needs per-SKU reads so older useful offers are not lost.
+        missing_skus = skus - (offer_cache or {}).keys()
+        if missing_skus:
+            listed = await self.trades.list_offers(side="sell", state="open")
+            if len(listed) < 200:
+                offers = {
+                    sku: [offer for offer in listed if offer.sku == sku]
+                    for sku in missing_skus
+                }
+                if offer_cache is not None:
+                    offer_cache.update(offers)
         for sku in sorted(skus):
+            if sku in offers:
+                continue
             if offer_cache is None or sku not in offer_cache:
                 listed = await self.trades.list_offers(
                     sku=sku, side="sell", state="open"
@@ -665,6 +679,10 @@ class ScarcityProcurementService:
                     if expired or retire
                     else await self.preview(demand, replacing_offer_id=local.id)
                 )
+                if plan is not None:
+                    row.decision = (row.decision or {}) | {
+                        "latest_preview": plan.model_dump(mode="json")
+                    }
                 still_needs_bid = plan is not None and any(
                     a.kind == "bid" and a.sku == local.sku for a in plan.actions
                 )

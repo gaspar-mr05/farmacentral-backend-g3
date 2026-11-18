@@ -240,6 +240,9 @@ async def test_reprocessing_an_order_does_not_send_a_second_decision(db_session)
         (0, 300, 3600, False),
         (0, -1, 3600, False),
         (0, 7200, 0, False),
+        (7201, 93600, 172800, True),
+        (93299, 93600, 172800, True),
+        (93300, 93600, 172800, False),
     ],
 )
 async def test_stock_wait_is_bounded_by_age_and_dispatch_margin(

@@ -73,6 +73,11 @@ class ProcurementPlanner:
                 reason="; ".join(dict.fromkeys(self.blockers))
                 or f"{demand.sku}: no route with known cost, capacity and deadline",
             )
+        if self.blockers and any(
+            action.kind == "bid" and action.sku == demand.sku for action in plan.actions
+        ):
+            rejected = "; ".join(dict.fromkeys(self.blockers))
+            plan.reason += f"; Rejected alternatives: {rejected}"
         return plan
 
     def _unit_cost(self, sku):

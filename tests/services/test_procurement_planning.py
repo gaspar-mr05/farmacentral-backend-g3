@@ -106,6 +106,25 @@ def test_compares_raw_conditioned_and_finished_kit_without_disassembly():
     assert not any(a.sku == RAW for a in result.actions)
 
 
+def test_finished_kit_fallback_keeps_reasons_for_rejected_recipe():
+    products = catalog()
+    products[MID].cost = Decimal(100)
+    p = planner(catalog=products, stock={RAW: 4})
+    p.prices[KIT] = Decimal(10)
+    result = p.plan(
+        demand(
+            quantity=1,
+            expected_revenue=20,
+            max_outlay=100,
+            includes_committed=True,
+            priority=1,
+        )
+    )
+    assert [(a.kind, a.sku) for a in result.actions] == [("bid", KIT)]
+    assert "Rejected alternatives" in result.reason
+    assert MID in result.reason and "consumption cost" in result.reason
+
+
 def test_net_shortage_uses_stock_buffer_and_confirmed_production():
     result = planner(stock={KIT: 2}).plan(demand(buffer=1))
     # One missing kit -> only two paper units, not the complete three-kit demand.

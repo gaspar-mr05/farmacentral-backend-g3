@@ -235,6 +235,22 @@ conteos cubren todo el período. El estado local puede estar atrasado respecto d
 portal: contrastar IDs antes de concluir que faltan compras o alterar registros.
 Si falla, devuelve 1 e informa sólo el tipo de error.
 
+Para pedidos con entrega al día siguiente, configurar
+`EXTERNAL_ORDER_STOCK_WAIT_SECONDS=172800` en el `.env` del servidor y reiniciar
+`farmacentral-worker@fulfill_external_orders.service`. La espera sigue terminando antes
+del plazo menos el margen de despacho; no permite aceptar sin capacidad real.
+Cambiar `.env.example` no actualiza la configuración de producción.
+
+La planificación consulta un libro de ventas por decisión; si llega al máximo
+de 200 resultados, consulta por SKU para no perder ofertas anteriores. Las
+cotizaciones compartidas sólo duran esa decisión; la ejecución mantiene su
+verificación previa. Cuando termina ofreciendo comprar el kit, el diagnóstico
+incluye en `sourcing[].latest_plan.reason` las alternativas descartadas por costo,
+capacidad o plazo. Las ofertas abiertas existentes actualizan esa explicación
+al revisarse, sin republicarse. Tras desplegar, dejar pasar un ciclo de reposición
+y repetir el diagnóstico para ver la causa actual; esto no garantiza que exista
+una ruta de fabricación viable.
+
 Configurar en `.env` las URLs públicas canónicas (pueden tener hosts distintos),
 con HTTPS y sin credenciales/query; luego activar el timer:
 
