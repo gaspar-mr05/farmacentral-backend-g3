@@ -14,6 +14,7 @@ from app.models import (
     Lot,
     MarketOffer,
     MarketOfferReservation,
+    Order,
     OrderItem,
     OrderStatus,
     ProcurementRequest,
@@ -637,6 +638,134 @@ async def test_partial_component_stock_is_completed_instead_of_restarting_recipe
             ("MID", 1),
             ("KIT-A", 2),
         ], totals
+
+
+@pytest.mark.anyio
+async def test_infeasible_waiting_order_does_not_block_later_viable_demand(
+    migration_database,
+):
+    run_migration(migration_database, "upgrade", "head")
+    pharmacy = Pharmacy()
+    pharmacy.catalog["RAW"].production.time = 20
+    now = datetime.now(UTC)
+    with Session(migration_database, expire_on_commit=False) as session:
+        service = setup(session, pharmacy)
+        old = make_external_order(
+            items=[OrderItem(sku="KIT-A", quantity=1, unit_price=10)],
+            delivery_deadline=now + timedelta(minutes=10),
+        )
+        later = make_external_order(
+            external_order_id="e" * 24,
+            items=[OrderItem(sku="KIT-A", quantity=2, unit_price=10)],
+            delivery_deadline=now + timedelta(hours=2),
+        )
+        session.add_all([old, later])
+        session.commit()
+        result = await service.poll()
+        state = session.scalar(select(ReplenishmentState))
+        assert result["failed"] == 0
+        assert state.goal["order_id"] == str(later.id)
+        assert state.goal["deadline"] == later.delivery_deadline.isoformat()
+        assert old.status == later.status == OrderStatus.RECEIVED
+        assert pharmacy.posts == []  # Selection itself must not cause a remote effect.
+        assert service.sourcing.trades.list_offers.await_count == len(pharmacy.catalog)
+        period_id, old_id, later_id = service.period.id, old.id, later.id
+        next_turn(session)
+
+    # A new process must keep the viable choice rather than returning to the
+    # older blocked order and cancelling/recreating its procurement.
+    with Session(migration_database, expire_on_commit=False) as session:
+        restarted = E3ReplenishmentService(
+            pharmacy,
+            service.sourcing.trades,
+            Mock(),
+            service.prices,
+            session,
+            session.get(BusinessPeriod, period_id),
+            settings=service.settings,
+        )
+        result = await restarted.poll()
+        state = session.scalar(select(ReplenishmentState))
+        assert result["supplied"] == 1, result
+        assert state.goal["order_id"] == str(later_id)
+        assert pharmacy.posts == [("RAW", 2)]
+        assert session.get(Order, old_id).status == OrderStatus.RECEIVED
+        # A finished/withdrawn choice must not stay pinned forever.
+        session.get(Order, later_id).status = OrderStatus.REJECTED
+        session.commit()
+        assert (
+            restarted._demand(
+                "KIT-A", Decimal(10), now, preferred_order_id=str(later_id)
+            )[1]
+            == old.delivery_deadline
+        )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", [OrderStatus.ACCEPTED, OrderStatus.PAID])
+async def test_later_waiting_order_never_replaces_an_accepted_commitment(
+    migration_database,
+    status,
+):
+    run_migration(migration_database, "upgrade", "head")
+    pharmacy = Pharmacy()
+    pharmacy.catalog["RAW"].production.time = 20
+    now = datetime.now(UTC)
+    with Session(migration_database, expire_on_commit=False) as session:
+        service = setup(session, pharmacy)
+        old = make_external_order(
+            status=status,
+            items=[OrderItem(sku="KIT-A", quantity=1, unit_price=10)],
+            delivery_deadline=now + timedelta(minutes=10),
+        )
+        session.add_all(
+            [
+                old,
+                make_external_order(
+                    external_order_id="e" * 24,
+                    items=[OrderItem(sku="KIT-A", quantity=2, unit_price=10)],
+                    delivery_deadline=now + timedelta(hours=2),
+                ),
+            ]
+        )
+        session.commit()
+        await service.poll()
+        state = session.scalar(select(ReplenishmentState))
+        assert state.goal["priority"] == 0
+        assert state.goal["deadline"] == old.delivery_deadline.isoformat()
+        assert pharmacy.posts == []
+
+
+@pytest.mark.anyio
+async def test_later_demand_search_is_bounded_and_keeps_budget_constraints(
+    migration_database,
+):
+    run_migration(migration_database, "upgrade", "head")
+    pharmacy = Pharmacy()
+    pharmacy.catalog["RAW"].production.time = 100
+    now = datetime.now(UTC)
+    with Session(migration_database, expire_on_commit=False) as session:
+        service = setup(session, pharmacy)
+        for index in range(5):
+            session.add(
+                make_external_order(
+                    external_order_id=f"{index:024x}",
+                    items=[OrderItem(sku="KIT-A", quantity=1, unit_price=1)],
+                    delivery_deadline=now + timedelta(minutes=10 * (index + 1)),
+                )
+            )
+        session.commit()
+        service.sourcing.preview = AsyncMock(wraps=service.sourcing.preview)
+        result = await service.poll()
+        assert result["failed"] == 0
+        assert (
+            service.sourcing.preview.await_count == 4
+        )  # Current + three alternatives.
+        for call in service.sourcing.preview.await_args_list:
+            assert call.args[0].maximum_loss_fraction == 0
+            assert call.args[0].max_outlay <= 10
+        assert "order_id" not in session.scalar(select(ReplenishmentState)).goal
+        assert pharmacy.posts == []
 
 
 @pytest.mark.anyio

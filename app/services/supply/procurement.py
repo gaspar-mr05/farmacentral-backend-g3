@@ -92,7 +92,12 @@ class ScarcityProcurementService:
         )
 
     async def preview(
-        self, demand: ProcurementDemand, *, replacing_offer_id=None, snapshot=None
+        self,
+        demand: ProcurementDemand,
+        *,
+        replacing_offer_id=None,
+        snapshot=None,
+        offer_cache=None,
     ) -> ProcurementPlan:
         if snapshot is not None:
             catalog, spaces, prices = snapshot
@@ -313,9 +318,15 @@ class ScarcityProcurementService:
         visit(demand.sku)
         offers = {}
         for sku in sorted(skus):
-            offers[sku] = await self.trades.list_offers(
-                sku=sku, side="sell", state="open"
-            )
+            if offer_cache is None or sku not in offer_cache:
+                listed = await self.trades.list_offers(
+                    sku=sku, side="sell", state="open"
+                )
+                if offer_cache is not None:
+                    offer_cache[sku] = listed
+            else:
+                listed = offer_cache[sku]
+            offers[sku] = listed
         self.session.commit()
         # Estimates for already received stock; these never replace invoices.
         # Known purchases are a reference estimate, not an inferred unit-to-trade

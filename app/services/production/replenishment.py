@@ -180,7 +180,10 @@ class E3ReplenishmentService:
                 price=prices.get(kit.sku),
             )
             quantity, deadline, revenue, priority = self._demand(
-                kit.sku, prices.get(kit.sku), now
+                kit.sku,
+                prices.get(kit.sku),
+                now,
+                preferred_order_id=(state.goal or {}).get("order_id"),
             )
             producer = self._producer(state, catalog, spaces)
             lifetime = self.settings.replenishment_minimum_lifetime_seconds
@@ -395,46 +398,35 @@ class E3ReplenishmentService:
                 room, budget_details = spending_room(
                     self.session, self.period, self.settings, catalog, prices
                 )
-                spent = state.estimated_spend - Decimal(goal.get("spend_started", "0"))
-                # Bound one replenishment to the value of one useful target
-                # basket, and all replenishments to the shared period envelope.
-                loss_limit = (
-                    self.settings.replenishment_order_loss_limit
-                    if goal.get("priority", priority) < 2
-                    else Decimal(0)
-                )
-                goal_limit = max(
-                    Decimal(goal["revenue"]) * (1 + loss_limit),
-                    prices.get(state.sku, Decimal(0))
-                    * max(state.target, goal["quantity"]),
-                )
-                max_outlay = spent + min(room, max(Decimal(0), goal_limit - spent))
-                demand = ProcurementDemand(
-                    sku=state.sku,
-                    quantity=goal["quantity"],
-                    deadline=goal["deadline"],
-                    expected_revenue=goal["revenue"],
-                    other_costs=spent,
-                    max_outlay=max_outlay,
-                    minimum_margin=0
-                    if goal.get("priority", priority) < 2
-                    else Decimal("0.10"),
-                    maximum_loss_fraction=loss_limit,
-                    includes_committed=True,
-                    priority=goal.get("priority", priority),
-                )
+                demand = self._procurement_demand(state, goal, room, prices)
                 # Reuse this cycle's catalog/prices and synchronized unit ledger;
                 # movements require only a fresh capacity reading. Market execution
                 # still performs its own preflight before any mutation.
                 current_spaces = TypeAdapter(list[FarmaCentralSpace]).validate_python(
                     await self.client.get_spaces()
                 )
+                # Compare alternatives for this one decision against the same
+                # quotes, without multiplying remote reads. Execution is fresh.
+                offer_cache = {}
                 plan = await self.sourcing.preview(
-                    demand, snapshot=(catalog, current_spaces, prices)
+                    demand,
+                    snapshot=(catalog, current_spaces, prices),
+                    offer_cache=offer_cache,
                 )
+                if (
+                    plan.status == "waiting"
+                    and not plan.actions
+                    and plan.consumed_cost is None
+                    and await self._select_later_order(
+                        state, room, (catalog, current_spaces, prices), offer_cache
+                    )
+                ):
+                    raise ReplenishmentDeferred(
+                        "Selected a viable later order; revalidate next cycle"
+                    )
                 state.goal = goal | {
                     "budget": budget_details,
-                    "max_outlay": str(max_outlay),
+                    "max_outlay": str(demand.max_outlay),
                     "planned_outlay": str(plan.cost),
                     "estimated_consumption": str(plan.consumed_cost)
                     if plan.consumed_cost is not None
@@ -660,7 +652,86 @@ class E3ReplenishmentService:
             self.session.commit()
         return True
 
-    def _demand(self, sku, price, now):
+    def _procurement_demand(self, state, goal, room, prices):
+        spent = state.estimated_spend - Decimal(goal.get("spend_started", "0"))
+        priority = goal.get("priority", 2)
+        loss_limit = (
+            self.settings.replenishment_order_loss_limit if priority < 2 else Decimal(0)
+        )
+        goal_limit = max(
+            Decimal(goal["revenue"]) * (1 + loss_limit),
+            prices.get(state.sku, Decimal(0)) * max(state.target, goal["quantity"]),
+        )
+        return ProcurementDemand(
+            sku=state.sku,
+            quantity=goal["quantity"],
+            deadline=goal["deadline"],
+            expected_revenue=goal["revenue"],
+            other_costs=spent,
+            max_outlay=spent + min(room, max(Decimal(0), goal_limit - spent)),
+            minimum_margin=0 if priority < 2 else Decimal("0.10"),
+            maximum_loss_fraction=loss_limit,
+            includes_committed=True,
+            priority=priority,
+        )
+
+    async def _select_later_order(self, state, room, snapshot, offer_cache):
+        goal = state.goal
+        if goal.get("priority") != 1 or state.pending_operation or state.procurement_id:
+            return False  # Do not abandon accepted or unresolved remote work.
+        _, _, prices = snapshot
+        tried = 0
+        for item, quantity in self._order_demands(state.sku, datetime.now(UTC)):
+            if (
+                item.order.status != OrderStatus.RECEIVED
+                or item.order.delivery_deadline is None
+            ):
+                continue
+            deadline = item.order.delivery_deadline
+            if self.period.ends_at:
+                deadline = min(deadline, self.period.ends_at)
+            if deadline <= datetime.fromisoformat(goal["deadline"]):
+                continue
+            candidate = goal | {
+                "order_id": str(item.order_id),
+                "quantity": min(200, quantity),
+                "deadline": deadline.isoformat(),
+                "revenue": str(item.unit_price * min(200, quantity)),
+            }
+            demand = self._procurement_demand(state, candidate, room, prices)
+            plan = await self.sourcing.preview(
+                demand, snapshot=snapshot, offer_cache=offer_cache
+            )
+            tried += 1
+            if (
+                plan.status != "waiting"
+                or plan.actions
+                or plan.consumed_cost is not None
+            ):
+                # Persist the choice across cycles/restarts. No acceptance or
+                # purchasing here: the next cycle revalidates before execution.
+                state.goal = candidate | {
+                    "planned_outlay": str(plan.cost),
+                    "estimated_consumption": str(plan.consumed_cost)
+                    if plan.consumed_cost is not None
+                    else None,
+                    "max_outlay": str(demand.max_outlay),
+                    "budget": {"remaining": str(room)},
+                }
+                self.session.commit()
+                logger.info(
+                    "Replenishment selected later order: "
+                    "sku=%s order_id=%s deadline=%s",
+                    state.sku,
+                    item.order.external_order_id,
+                    deadline.isoformat(),
+                )
+                return True
+            if tried >= 3:
+                break
+        return False
+
+    def _order_demands(self, sku, now):
         items = self.session.scalars(
             select(OrderItem)
             .join(Order)
@@ -683,20 +754,38 @@ class E3ReplenishmentService:
             if q and item.order.status in {OrderStatus.ACCEPTED, OrderStatus.PAID}
         ]
         selected = accepted or [(item, q) for item, q in work if q]
+        return sorted(
+            selected,
+            key=lambda pair: (
+                pair[0].order.delivery_deadline or datetime.max.replace(tzinfo=UTC),
+                pair[0].order.created_at,
+                str(pair[0].order_id),
+            ),
+        )
+
+    def _demand(self, sku, price, now, *, preferred_order_id=None):
+        selected = self._order_demands(sku, now)
         if selected:
-            selected.sort(
-                key=lambda pair: (
-                    pair[0].order.delivery_deadline or datetime.max.replace(tzinfo=UTC)
-                )
-            )
-            # Use the earliest outstanding order's fixed price and deadline.
+            if (
+                selected[0][0].order.status == OrderStatus.RECEIVED
+                and preferred_order_id
+            ):
+                preferred = [
+                    pair
+                    for pair in selected
+                    if str(pair[0].order_id) == preferred_order_id
+                ]
+                if preferred:
+                    selected = preferred
+            # Keep the selected order's own price and deadline; never extend
+            # another customer's promise to justify a purchase.
             item, quantity = selected[0]
             quantity = min(quantity, 200)
             return (
                 quantity,
                 item.order.delivery_deadline,
                 item.unit_price * quantity,
-                0 if accepted else 1,
+                1 if item.order.status == OrderStatus.RECEIVED else 0,
             )
         return (
             0,

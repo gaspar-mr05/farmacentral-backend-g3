@@ -134,6 +134,14 @@ El presupuesto de consumo se reparte a través de las recetas según la fracció
 del lote intermedio que requiere el pedido; el desembolso conserva el costo del
 lote completo. Así un lote grande no se compara prematuramente con el ingreso
 de un solo kit. El plan final sigue comprobando margen, desembolso y plazo.
+Si el pedido recibido elegido no tiene ruta viable, el reabastecedor evalúa hasta
+tres pedidos posteriores del mismo SKU. Guarda el ID de la alternativa viable
+para continuar tras reinicios, sin extender el plazo de la OC anterior ni cambiar
+su estado. Los aceptados conservan prioridad; no cambia de objetivo mientras hay
+operaciones o compras pendientes de resolver. El log de selección es
+`Replenishment selected later order`; la ejecución revalida el plan en el siguiente ciclo.
+Las alternativas de una misma decisión reutilizan las cotizaciones leídas para
+no multiplicar consultas al mercado; esa caché no se comparte con la ejecución.
 Una oferta buy necesaria se conserva si el nuevo plan todavía pide comprar ese
 SKU mediante otra oferta buy; encontrar una venta de otro insumo no la reemplaza.
 
