@@ -773,6 +773,71 @@ async def test_infeasible_customer_bid_builds_future_buffer_instead(
 
 
 @pytest.mark.anyio
+async def test_existing_final_kit_bid_is_retired_for_feasible_buffer_recovery(
+    migration_database,
+):
+    run_migration(migration_database, "upgrade", "head")
+    pharmacy = Pharmacy()
+    pharmacy.catalog["RAW"].production.time = 130
+    pharmacy.catalog["MID"].production.time = 70
+    pharmacy.catalog["KIT-A"].production.time = 70
+    opened = {}
+    trades = Mock(list_offers=AsyncMock(return_value=[]))
+
+    async def create(request, **kwargs):
+        now = datetime.now(UTC)
+        offer = TradeOffer(
+            id=f"{len(opened) + 1:024x}",
+            state="open",
+            side="buy",
+            sku=request.sku,
+            quantity=request.quantity,
+            unitPrice=request.unit_price,
+            publisher="3",
+            createdAt=now,
+            expiresAt=now + timedelta(hours=1),
+        )
+        opened[offer.id] = offer
+        return offer
+
+    async def cancel(identity):
+        opened[identity] = opened[identity].model_copy(update={"status": "cancelled"})
+
+    trades.create_offer = AsyncMock(side_effect=create)
+    trades.get_offer = AsyncMock(side_effect=lambda identity: opened[identity])
+    trades.cancel_offer = AsyncMock(side_effect=cancel)
+    now = datetime.now(UTC)
+    with Session(migration_database, expire_on_commit=False) as session:
+        service = setup(session, pharmacy, trades=trades)
+        session.add(
+            make_external_order(
+                items=[OrderItem(sku="KIT-A", quantity=1, unit_price=10)],
+                delivery_deadline=now + timedelta(hours=2),
+            )
+        )
+        session.commit()
+
+        first = await service.poll()
+        state = session.scalar(select(ReplenishmentState))
+        request = session.get(ProcurementRequest, state.procurement_id)
+        assert first["supplied"] == 0
+        assert trades.create_offer.call_args.args[0].sku == "KIT-A"
+
+        pharmacy.catalog["RAW"].production.time = 70
+        pharmacy.catalog["MID"].production.time = 30
+        pharmacy.catalog["KIT-A"].production.time = 30
+        request.next_retry_at = datetime.now(UTC) - timedelta(seconds=1)
+        next_turn(session)
+
+        result = await service.poll()
+
+        assert result["supplied"] == 1, result
+        assert pharmacy.posts == [("RAW", 1)]
+        trades.cancel_offer.assert_awaited_once()
+        assert state.goal["buffer_recovery"] is True
+
+
+@pytest.mark.anyio
 async def test_rejected_customer_demand_still_increases_future_stock_target(
     migration_database,
 ):

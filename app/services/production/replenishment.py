@@ -276,6 +276,7 @@ class E3ReplenishmentService:
                 if state.procurement_id:
                     request = self.session.get(ProcurementRequest, state.procurement_id)
                     saved_demand = ProcurementDemand.model_validate(request.demand)
+                    recovery_goal = None
                     retarget = saved_demand.priority != priority or (
                         priority < 2
                         and (
@@ -286,6 +287,36 @@ class E3ReplenishmentService:
                             != self.settings.replenishment_order_loss_limit
                         )
                     )
+                    if (
+                        not retarget
+                        and priority == 1
+                        and state.goal
+                        and self._request_has_final_kit_bid(request, state.sku)
+                        and prices.get(state.sku, Decimal(0)) > 0
+                    ):
+                        room, _ = spending_room(
+                            self.session, self.period, self.settings, catalog, prices
+                        )
+                        replacement_room = room + Decimal(
+                            str((request.decision or {}).get("cost", 0))
+                        )
+                        candidate = self._buffer_recovery_goal(
+                            state,
+                            state.goal,
+                            catalog[state.sku],
+                            prices[state.sku],
+                        )
+                        recovery_plan = await self.sourcing.preview(
+                            self._procurement_demand(
+                                state, candidate, replacement_room, prices
+                            ),
+                            replacing_offer_id=request.market_offer_id,
+                            snapshot=(catalog, spaces, prices),
+                            offer_cache={},
+                        )
+                        if not self._needs_buffer_recovery(recovery_plan, state.sku):
+                            recovery_goal = candidate
+                            retarget = True
                     request = await self.sourcing.ensure(
                         request.request_key,
                         saved_demand,
@@ -310,6 +341,12 @@ class E3ReplenishmentService:
                         if request.status == "expired":
                             state.goal = None
                         state.procurement_id = None
+                        if recovery_goal is not None:
+                            state.goal = recovery_goal
+                            quantity = recovery_goal["quantity"]
+                            deadline = datetime.fromisoformat(recovery_goal["deadline"])
+                            revenue = Decimal(recovery_goal["revenue"])
+                            priority = recovery_goal["priority"]
                         self.session.commit()
                     else:
                         if request.http_status in {401, 403, 429}:
@@ -737,6 +774,14 @@ class E3ReplenishmentService:
             return True
         return len(plan.actions) == 1 and (
             plan.actions[0].kind == "bid" and plan.actions[0].sku == sku
+        )
+
+    @staticmethod
+    def _request_has_final_kit_bid(request, sku):
+        decision = request.decision or {}
+        return any(
+            action.get("kind") == "bid" and action.get("sku") == sku
+            for action in decision.get("actions", [])
         )
 
     def _buffer_recovery_goal(self, state, goal, product, price):
