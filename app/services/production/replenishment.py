@@ -511,6 +511,39 @@ class E3ReplenishmentService:
                     snapshot=(catalog, current_spaces, prices),
                     offer_cache=offer_cache,
                 )
+                execution_quantity = goal["quantity"]
+                partial = False
+                producer.protected_stock = plan.protected_stock
+                ready_quantity = producer.ready_final_quantity(execution_quantity)
+                waiting_orders = self._order_demands(state.sku, datetime.now(UTC))
+                if (
+                    ready_quantity is not None
+                    and waiting_orders
+                    and waiting_orders[0][1] <= ready_quantity
+                ):
+                    partial_demand = demand.model_copy(
+                        update={
+                            "quantity": ready_quantity,
+                            "expected_revenue": demand.expected_revenue
+                            * ready_quantity
+                            / demand.quantity,
+                        }
+                    )
+                    partial_plan = await self.sourcing.preview(
+                        partial_demand,
+                        snapshot=(catalog, current_spaces, prices),
+                        offer_cache=offer_cache,
+                    )
+                    if partial_plan.status == "produce" and not partial_plan.actions:
+                        execution_quantity = ready_quantity
+                        plan = partial_plan
+                        partial = True
+                        logger.info(
+                            "Partial kit selected: sku=%s quantity=%s goal=%s",
+                            state.sku,
+                            ready_quantity,
+                            goal["quantity"],
+                        )
                 if using_pending_custody and (
                     not self._can_advance_with_pending_custody(plan)
                 ):
@@ -574,7 +607,12 @@ class E3ReplenishmentService:
                     # Advance the recipe before buying ingredients for later stages.
                     # This may start one manufacture, or identify its first shortage.
                     try:
-                        await producer.advance(state.sku, goal["quantity"])
+                        if partial:
+                            await producer.advance(
+                                state.sku, execution_quantity, ready_only=True
+                            )
+                        else:
+                            await producer.advance(state.sku, goal["quantity"])
                     except SupplyNeeded as exc:
                         action = next(
                             (a for a in plan.actions if a.sku == exc.sku), None

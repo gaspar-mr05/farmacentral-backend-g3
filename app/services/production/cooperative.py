@@ -197,7 +197,23 @@ class CooperativeKitProduction(KitProductionService):
                 return True
         return False
 
-    async def advance(self, sku, quantity):
+    def ready_final_quantity(self, quantity):
+        product = self._catalog[self.state.sku]
+        available = len(self._available_units(product.sku))
+        missing = quantity - available
+        if missing <= 0 or not product.sellable or not product.components:
+            return None
+        ready = min(
+            self._maximum_chunk_size(product),
+            *(
+                len(self._available_units(c.sku)) // c.required_per_unit
+                for c in product.components
+            ),
+        )
+        ready -= ready % product.production.batch
+        return available + ready if 0 < ready < missing else None
+
+    async def advance(self, sku, quantity, *, ready_only=False):
         with production_lock(self._session):
             await self._synchronize()
             if self._unknown_production() or self._session.scalar(
@@ -210,10 +226,12 @@ class CooperativeKitProduction(KitProductionService):
                 )
             await self._clear_packaging()
             await self._produce_quantity(
-                self._catalog[sku], quantity, dependency_path=()
+                self._catalog[sku], quantity, dependency_path=(), ready_only=ready_only
             )
 
-    async def _produce_quantity(self, product, quantity, *, dependency_path):
+    async def _produce_quantity(
+        self, product, quantity, *, dependency_path, ready_only=False
+    ):
         if product.sku in dependency_path or not product.components:
             raise ProductionCatalogError("Missing or cyclic production recipe")
         available = len(self._available_units(product.sku))
@@ -248,6 +266,13 @@ class CooperativeKitProduction(KitProductionService):
         if incoming:
             raise ReplenishmentDeferred(
                 "Reconcile the incoming purchase before manufacturing this SKU"
+            )
+        if ready_only and any(
+            len(self._available_units(c.sku)) < c.required_per_unit * chunk
+            for c in product.components
+        ):
+            raise ReplenishmentDeferred(
+                "Partial kit stock changed; revalidate next turn"
             )
         for component in product.components:
             await self._ensure_available(

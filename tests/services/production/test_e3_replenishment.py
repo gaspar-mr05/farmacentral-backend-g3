@@ -28,7 +28,11 @@ from app.schemas.purchase_orders import PurchaseOrder
 from app.schemas.trades import TradeOffer
 from app.services.inventory.sync import InventorySyncService
 from app.services.orders.processing import OrderProcessingService
-from app.services.production.cooperative import CooperativeKitProduction, SupplyNeeded
+from app.services.production.cooperative import (
+    CooperativeKitProduction,
+    ReplenishmentDeferred,
+    SupplyNeeded,
+)
 from app.services.production.locking import production_lock
 from app.services.production.orchestration import ProductionInputsUnavailableError
 from app.services.production.replenishment import E3ReplenishmentService
@@ -1035,6 +1039,99 @@ async def test_partial_component_stock_is_completed_instead_of_restarting_recipe
             ("MID", 1),
             ("KIT-A", 2),
         ], totals
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("batch,raw,expected", [(1, 8, 4), (2, 6, 2), (1, 8, 0)])
+async def test_ready_partial_final_kits_precede_missing_components(
+    db_session, batch, raw, expected
+):
+    pharmacy = Pharmacy()
+    pharmacy.catalog["KIT-A"] = product(
+        "KIT-A", components=[("MID", 1), ("RAW", 2)], batch=batch, time=0
+    )
+    pharmacy.receive("MID", 4, store="STORE")
+    pharmacy.receive("RAW", raw, store="STORE")
+    service = setup(db_session, pharmacy)
+    if expected == 0:
+        pharmacy.catalog["KIT-A"].cost = Decimal(100)
+        service.prices.get_current_prices.return_value = [{"sku": "RAW", "price": 1}]
+    now = datetime.now(UTC)
+    db_session.add_all(
+        [
+            make_external_order(
+                external_order_id="a" * 24,
+                items=[OrderItem(sku="KIT-A", quantity=2, unit_price=10)],
+                delivery_deadline=now + timedelta(hours=2),
+            ),
+            make_external_order(
+                external_order_id="b" * 24,
+                items=[OrderItem(sku="KIT-A", quantity=3, unit_price=10)],
+                delivery_deadline=now + timedelta(hours=3),
+            ),
+        ]
+    )
+    db_session.commit()
+    result = await service.poll()
+    state = db_session.scalar(select(ReplenishmentState))
+    assert result["produced"] == (1 if expected else 0)
+    assert result["supplied"] == result["purchased"] == result["failed"] == 0
+    assert pharmacy.posts == ([("KIT-A", expected)] if expected else [])
+    assert state.goal["quantity"] == 5
+    if expected:
+        assert state.pending_operation["quantity"] == expected
+    else:
+        assert state.pending_operation is None
+    assert (
+        len([u for u in pharmacy.units.values() if u["sku"] == "MID"]) == 4 - expected
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "blocker", ["protected", "changed", "pending", "incoming", "batch"]
+)
+async def test_ready_only_turn_never_acquires_or_replays_work(db_session, blocker):
+    from app.schemas.farma_central import FarmaCentralSpace
+
+    pharmacy = Pharmacy()
+    pharmacy.receive("MID", 4, store="STORE")
+    if blocker == "batch":
+        pharmacy.catalog["KIT-A"].production.batch = 3
+    service = setup(db_session, pharmacy)
+    await InventorySyncService(pharmacy, db_session).synchronize()
+    state = ReplenishmentState(
+        period_id=service.period.id, sku="KIT-A", minimum=1, target=5
+    )
+    db_session.add(state)
+    db_session.commit()
+    spaces = [FarmaCentralSpace.model_validate(v) for v in await pharmacy.get_spaces()]
+    producer = service._producer(state, pharmacy.catalog, spaces)
+    if blocker == "protected":
+        producer.protected_stock = {"MID": 3}
+    elif blocker in {"changed", "batch"}:
+        for unit in db_session.scalars(select(Unit)).all()[1:]:
+            unit.status = "consumed"
+    elif blocker == "pending":
+        state.pending_operation = {"kind": "produce", "status": "uncertain"}
+    else:
+        db_session.add(
+            MarketOffer(
+                period_id=service.period.id,
+                sku="KIT-A",
+                quantity=2,
+                unit_price=10,
+                publisher_group_id=3,
+                side="buy",
+                status="open",
+            )
+        )
+    db_session.commit()
+    with pytest.raises(ReplenishmentDeferred):
+        await producer.advance("KIT-A", 2, ready_only=True)
+    assert pharmacy.posts == []
+    if blocker == "batch":
+        assert producer.ready_final_quantity(5) is None
 
 
 @pytest.mark.anyio
