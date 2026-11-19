@@ -425,6 +425,7 @@ class SurplusSalesService:
             if (
                 requested <= 0
                 or cost > room
+                or (state and state.goal and state.goal.get("kind") != "market_stock")
                 or (state and state.next_retry_at and state.next_retry_at > now)
             ):
                 continue

@@ -672,3 +672,46 @@ async def test_sellable_kits_remain_protected_for_customer_fulfillment(
     assert result["published"] == 0
     assert result["quotes"][0]["quantity"] == 0
     service.trades.create_offer.assert_not_awaited()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("other_goal", [False, True])
+async def test_market_stocking_reuses_idle_state_and_preserves_other_goals(
+    db_session, monkeypatch, other_goal
+):
+    service, units, _, _ = setup_sales(db_session, monkeypatch, quantity=1, buffer=1)
+    sku = units[0].lot.product.sku
+    service.policy = service.policy.model_copy(update={"stock_market": True})
+    service.settings = make_settings(replenishment_spending_limit=Decimal("1000"))
+    state = ReplenishmentState(
+        period_id=service.period.id,
+        sku=sku,
+        estimated_spend=Decimal(7),
+        goal={"kind": "customer", "quantity": 1} if other_goal else None,
+    )
+    db_session.add(state)
+    db_session.commit()
+    identity = state.id
+    supply = Mock(
+        request=AsyncMock(
+            return_value=SupplyResponse(
+                sku=sku,
+                quantity=3,
+                available_at=datetime.now(UTC) + timedelta(minutes=1),
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "app.services.trades.surplus.SupplyRequestService", Mock(return_value=supply)
+    )
+    result = await service.cycle(execute=True)
+    rows = db_session.scalars(select(ReplenishmentState)).all()
+    assert len(rows) == 1 and rows[0].id == identity
+    assert rows[0].estimated_spend == Decimal(7)
+    assert result["failed"] == 0
+    assert result["supplied"] == (0 if other_goal else 1)
+    if other_goal:
+        assert rows[0].goal == {"kind": "customer", "quantity": 1}
+        supply.request.assert_not_awaited()
+    else:
+        assert rows[0].pending_operation["status"] == "confirmed"
