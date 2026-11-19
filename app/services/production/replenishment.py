@@ -272,6 +272,8 @@ class E3ReplenishmentService:
             self.session.commit()
             producer = self._producer(state, catalog, spaces)
             previous_operation_key = (state.pending_operation or {}).get("key")
+            offer_cache = {}
+            using_pending_custody = False
             try:
                 if await self._resume_operation(state, producer):
                     raise ReplenishmentDeferred(
@@ -298,11 +300,13 @@ class E3ReplenishmentService:
                         and self._request_has_final_kit_bid(request, state.sku)
                         and prices.get(state.sku, Decimal(0)) > 0
                     ):
-                        room, _ = spending_room(
-                            self.session, self.period, self.settings, catalog, prices
-                        )
-                        replacement_room = room + Decimal(
-                            str((request.decision or {}).get("cost", 0))
+                        replacement_room, _ = spending_room(
+                            self.session,
+                            self.period,
+                            self.settings,
+                            catalog,
+                            prices,
+                            replacing_offer_id=request.market_offer_id,
                         )
                         candidate = self._buffer_recovery_goal(
                             state,
@@ -316,7 +320,7 @@ class E3ReplenishmentService:
                             ),
                             replacing_offer_id=request.market_offer_id,
                             snapshot=(catalog, spaces, prices),
-                            offer_cache={},
+                            offer_cache=offer_cache,
                         )
                         if not self._needs_buffer_recovery(recovery_plan, state.sku):
                             recovery_goal = candidate
@@ -352,6 +356,29 @@ class E3ReplenishmentService:
                             revenue = Decimal(recovery_goal["revenue"])
                             priority = recovery_goal["priority"]
                         self.session.commit()
+                    elif (
+                        request.status == "custody_pending"
+                        and request.http_status is None
+                        and await self._can_use_verified_stock(
+                            state,
+                            (catalog, spaces, prices),
+                            offer_cache,
+                            quantity=quantity,
+                            deadline=deadline,
+                            revenue=revenue,
+                            priority=priority,
+                        )
+                    ):
+                        # Preserve both the procurement link and its committed
+                        # cost. Custody reconciliation continues independently;
+                        # manufacturing uses only the verified stock ledger.
+                        using_pending_custody = True
+                        logger.info(
+                            "Replenishment using verified stock: kit=%s "
+                            "procurement_id=%s custody_pending=True",
+                            state.sku,
+                            request.id,
+                        )
                     else:
                         if request.http_status in {401, 403, 429}:
                             raise TradesHTTPError(
@@ -413,35 +440,9 @@ class E3ReplenishmentService:
                     }
                     self.session.commit()
                 if not state.goal:
-                    if revenue is None or revenue <= 0:
-                        raise ReplenishmentDeferred(
-                            "No current sale value to justify procurement"
-                        )
-                    shelf_hours = catalog[state.sku].obsolescence
-                    shelf_horizon = (
-                        timedelta(hours=shelf_hours / 2)
-                        if shelf_hours
-                        else timedelta(0)
+                    state.goal = self._new_goal(
+                        state, catalog, prices, quantity, deadline, revenue, priority
                     )
-                    deadline = deadline or datetime.now(UTC) + max(
-                        timedelta(hours=2),
-                        timedelta(
-                            seconds=self.settings.replenishment_minimum_lifetime_seconds
-                        ),
-                        shelf_horizon,
-                    )
-                    if self.period.ends_at:
-                        deadline = min(deadline, self.period.ends_at)
-                    if priority == 2:
-                        revenue = prices[state.sku] * quantity
-                    state.goal = {
-                        "sku": state.sku,
-                        "quantity": quantity,
-                        "deadline": deadline.isoformat(),
-                        "revenue": str(revenue),
-                        "priority": priority,
-                        "spend_started": str(state.estimated_spend),
-                    }
                     self.session.commit()
                 goal = state.goal
                 if datetime.fromisoformat(goal["deadline"]) <= datetime.now(UTC):
@@ -480,12 +481,17 @@ class E3ReplenishmentService:
                 )
                 # Compare alternatives for this one decision against the same
                 # quotes, without multiplying remote reads. Execution is fresh.
-                offer_cache = {}
                 plan = await self.sourcing.preview(
                     demand,
                     snapshot=(catalog, current_spaces, prices),
                     offer_cache=offer_cache,
                 )
+                if using_pending_custody and (
+                    plan.status not in {"ready", "produce"} or plan.actions
+                ):
+                    raise ReplenishmentDeferred(
+                        "Verified stock changed; keep custody and budget pending"
+                    )
                 if self._needs_buffer_recovery(
                     plan, state.sku
                 ) and await self._select_later_order(
@@ -722,6 +728,66 @@ class E3ReplenishmentService:
             ):
                 break
         return result
+
+    def _new_goal(self, state, catalog, prices, quantity, deadline, revenue, priority):
+        if revenue is None or revenue <= 0:
+            raise ReplenishmentDeferred("No current sale value to justify procurement")
+        shelf_hours = catalog[state.sku].obsolescence
+        deadline = deadline or datetime.now(UTC) + max(
+            timedelta(hours=2),
+            timedelta(seconds=self.settings.replenishment_minimum_lifetime_seconds),
+            timedelta(hours=shelf_hours / 2) if shelf_hours else timedelta(0),
+        )
+        if self.period.ends_at:
+            deadline = min(deadline, self.period.ends_at)
+        return {
+            "sku": state.sku,
+            "quantity": quantity,
+            "deadline": deadline.isoformat(),
+            "revenue": str(prices[state.sku] * quantity if priority == 2 else revenue),
+            "priority": priority,
+            "spend_started": str(state.estimated_spend),
+        }
+
+    async def _can_use_verified_stock(
+        self, state, snapshot, offer_cache, *, quantity, deadline, revenue, priority
+    ):
+        catalog, _, prices = snapshot
+        goal = state.goal
+        # An unresolved trade must not pin manufacturing to an expired order,
+        # nor prevent a new goal after the previous kit was completed.
+        if (
+            not goal
+            or datetime.fromisoformat(goal["deadline"]) <= datetime.now(UTC)
+            or goal.get("priority", 2) != priority
+            or (
+                priority < 2
+                and (
+                    goal["quantity"] != quantity
+                    or Decimal(goal["revenue"]) != revenue
+                    or (
+                        deadline
+                        and datetime.fromisoformat(goal["deadline"]) != deadline
+                    )
+                )
+            )
+        ):
+            goal = self._new_goal(
+                state, catalog, prices, quantity, deadline, revenue, priority
+            )
+        room, _ = spending_room(
+            self.session, self.period, self.settings, catalog, prices
+        )
+        plan = await self.sourcing.preview(
+            self._procurement_demand(state, goal, room, prices),
+            snapshot=snapshot,
+            offer_cache=offer_cache,
+        )
+        if plan.status not in {"ready", "produce"} or plan.actions:
+            return False
+        state.goal = goal
+        self.session.commit()
+        return True
 
     def _operation_ready(self, state, producer, now):
         op = state.pending_operation or {}

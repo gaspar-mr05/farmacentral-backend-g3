@@ -12,7 +12,9 @@ from app.models import (
 from app.services.billing.metrics import BusinessMetricsService
 
 
-def spending_room(session, period, settings, catalog, prices):
+def spending_room(
+    session, period, settings, catalog, prices, *, replacing_offer_id=None
+):
     metrics = BusinessMetricsService(session, period).calculate()
     initial = settings.replenishment_spending_limit
     if initial is None:
@@ -56,6 +58,16 @@ def spending_room(session, period, settings, catalog, prices):
             ),
         )
     ):
+        # Preview only: actual spending still counts this reservation until the
+        # official cancellation is confirmed. Closed/uncertain purchases stay.
+        if (
+            offer.id == replacing_offer_id
+            and offer.external_offer_id
+            and offer.status == "open"
+            and offer.side == MarketOfferSide.BUY
+            and offer.publisher_group_id == period.group_id
+        ):
+            continue
         pending += offer.quantity * offer.unit_price
     # Apply the accrued-loss guard separately: subtracting both estimated spend
     # and the invoices for those same purchases would charge the lot twice.

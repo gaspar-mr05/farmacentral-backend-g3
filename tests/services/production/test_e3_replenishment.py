@@ -11,6 +11,7 @@ from app.clients.farma_central import FarmaCentralHTTPError, FarmaCentralTimeout
 from app.models import (
     BillingSyncState,
     BusinessPeriod,
+    CustodyEvent,
     Lot,
     MarketOffer,
     MarketOfferReservation,
@@ -586,6 +587,124 @@ async def test_manufacturing_does_not_relocate_unrelated_receiving_stock(db_sess
     assert pharmacy.move_product.await_count < 10
     kits = [u for u in pharmacy.units.values() if u["sku"] == "KIT-A"]
     assert len(kits) == 1 and kits[0]["store"] in {"STORE", "BUFFER"}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "blocked",
+    [
+        None,
+        "no_goal",
+        "expired_goal",
+        "missing_stock",
+        "quarantine",
+        "budget",
+        "stock_changed",
+    ],
+)
+async def test_verified_recipe_can_proceed_without_fabricating_trade_custody(
+    db_session, blocked
+):
+    pharmacy = Pharmacy()
+    if blocked != "missing_stock":
+        pharmacy.receive("RAW", 1, store="STORE")
+    service = setup(db_session, pharmacy)
+    if blocked == "budget":
+        service.settings.replenishment_spending_limit = Decimal(1)
+    await InventorySyncService(pharmacy, db_session).synchronize()
+    if blocked == "quarantine":
+        db_session.scalar(select(Unit)).status = "quarantined"
+    now = datetime.now(UTC)
+    deadline = now + timedelta(hours=4)
+    offer = MarketOffer(
+        period_id=service.period.id,
+        external_offer_id="a" * 24,
+        side="buy",
+        publisher_group_id=3,
+        sku="RAW",
+        quantity=1,
+        unit_price=1,
+        status="closed",
+    )
+    db_session.add(offer)
+    db_session.flush()
+    request = ProcurementRequest(
+        period_id=service.period.id,
+        request_key="closed-purchase-with-unresolved-custody",
+        status="custody_pending",
+        market_offer_id=offer.id,
+        demand=ProcurementDemand(
+            sku="KIT-A", quantity=1, deadline=deadline, expected_revenue=10
+        ).model_dump(mode="json"),
+        last_error="Transferred unit IDs are not unambiguous yet",
+    )
+    db_session.add(request)
+    db_session.flush()
+    state = ReplenishmentState(
+        period_id=service.period.id,
+        sku="KIT-A",
+        minimum=1,
+        target=1,
+        procurement_id=request.id,
+        goal={
+            "sku": "KIT-A",
+            "quantity": 1,
+            "deadline": deadline.isoformat(),
+            "priority": 2,
+            "revenue": "10",
+            "spend_started": "0",
+        },
+    )
+    if blocked == "no_goal":
+        state.goal = None
+    elif blocked == "expired_goal":
+        state.goal = state.goal | {"deadline": (now - timedelta(minutes=1)).isoformat()}
+    db_session.add(state)
+    db_session.commit()
+    service.sourcing.ensure = AsyncMock(return_value=request)
+    if blocked == "stock_changed":
+        preview = service.sourcing.preview
+        calls = 0
+
+        async def consume_after_preview(*args, **kwargs):
+            nonlocal calls
+            plan = await preview(*args, **kwargs)
+            calls += 1
+            if calls == 1:
+                # Another worker consumes the component after the first check.
+                db_session.scalar(select(Unit)).status = "consumed"
+                db_session.commit()
+                pharmacy.units.clear()
+            return plan
+
+        service.sourcing.preview = AsyncMock(side_effect=consume_after_preview)
+
+    first = await service.poll()
+    if blocked in {None, "no_goal", "expired_goal"}:
+        assert first["produced"] == 1
+        next_turn(db_session)
+        second = await service.poll()
+        assert second["produced"] == 1
+        next_turn(db_session)
+        await service.poll()
+        assert pharmacy.posts == [("MID", 1), ("KIT-A", 1)]
+        assert state.estimated_spend == 2  # Manufacturing only; purchase still held.
+        assert any(u["sku"] == "KIT-A" for u in pharmacy.units.values())
+    else:
+        assert first["produced"] == first["supplied"] == 0
+        assert pharmacy.posts == []
+        assert state.estimated_spend == 0
+    assert state.procurement_id == request.id
+    assert request.status == "custody_pending"
+    assert offer.reconciled_at is None
+    assert (
+        db_session.scalar(
+            select(CustodyEvent).where(CustodyEvent.market_trade_id.is_not(None))
+        )
+        is None
+    )
+    service.sourcing.trades.create_offer.assert_not_awaited()
+    service.sourcing.trades.accept_offer.assert_not_called()
 
 
 @pytest.mark.anyio

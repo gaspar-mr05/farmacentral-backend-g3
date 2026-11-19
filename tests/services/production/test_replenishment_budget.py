@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 
 from app.models import (
     BillingSyncState,
@@ -38,13 +39,14 @@ def setup(session):
     return period
 
 
-def room(session, period, *, limit=100):
+def room(session, period, *, limit=100, replacing_offer_id=None):
     return spending_room(
         session,
         period,
         make_settings(replenishment_spending_limit=limit),
         {"KIT-A": product("KIT-A", components=[("RAW", 1)])},
         {"KIT-A": Decimal(10)},
+        replacing_offer_id=replacing_offer_id,
     )
 
 
@@ -54,6 +56,40 @@ def test_full_past_and_pending_costs_reduce_period_budget(db_session):
     assert amount == 45
     assert detail["period_spent"] == "30"
     assert detail["pending_outlay"] == "25"
+
+
+def test_replacement_preview_releases_only_the_known_open_bid(db_session):
+    period = setup(db_session)
+    offer = db_session.scalar(select(MarketOffer))
+    offer.external_offer_id = "a" * 24
+    db_session.commit()
+
+    assert room(db_session, period, replacing_offer_id=offer.id)[0] == 60
+    # A hypothetical cancellation does not change the actual budget or offer.
+    assert room(db_session, period)[0] == 45
+    assert offer.status == "open" and offer.reconciled_at is None
+
+
+def test_replacement_cannot_restore_budget_already_spent(db_session):
+    period = setup(db_session)
+    offer = db_session.scalar(select(MarketOffer))
+    offer.external_offer_id = "a" * 24
+    state = db_session.scalar(select(ReplenishmentState))
+    state.estimated_spend = 110
+    db_session.commit()
+
+    assert room(db_session, period)[0] == 0
+    assert room(db_session, period, replacing_offer_id=offer.id)[0] == 0
+
+
+@pytest.mark.parametrize("status", ["closed", "closing", "creation_uncertain"])
+def test_replacement_keeps_closed_or_uncertain_purchase_costs(db_session, status):
+    period = setup(db_session)
+    offer = db_session.scalar(select(MarketOffer))
+    offer.external_offer_id = "a" * 24
+    offer.status = status
+    db_session.commit()
+    assert room(db_session, period, replacing_offer_id=offer.id)[0] == 45
 
 
 def test_whole_invoices_and_interest_still_count_in_business_margin(db_session):
