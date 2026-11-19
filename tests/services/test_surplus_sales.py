@@ -156,6 +156,66 @@ async def test_market_stocking_supplies_once_then_publishes_after_receipt(
 
 
 @pytest.mark.anyio
+async def test_market_stocking_releases_partial_receipt_after_grace(
+    db_session, monkeypatch
+):
+    service, units, storage, _ = setup_sales(
+        db_session, monkeypatch, quantity=1, buffer=1
+    )
+    service.policy = service.policy.model_copy(update={"stock_market": True})
+    service.settings = make_settings(replenishment_spending_limit=Decimal("1000"))
+    supply = Mock(
+        request=AsyncMock(
+            return_value=SupplyResponse(
+                sku=units[0].lot.product.sku,
+                quantity=3,
+                available_at=datetime.now(UTC) - timedelta(minutes=3),
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "app.services.trades.surplus.SupplyRequestService",
+        Mock(return_value=supply),
+    )
+    await service.cycle(execute=True)
+    state = db_session.scalar(
+        select(ReplenishmentState).where(
+            ReplenishmentState.sku == units[0].lot.product.sku
+        )
+    )
+    lot = Lot(
+        external_lot_id="partial-market-stocking-receipt",
+        product_id=units[0].lot.product_id,
+        expires_at=datetime.now(UTC) + timedelta(days=90),
+        origin=LotOrigin.FARMA_CENTRAL,
+    )
+    db_session.add(lot)
+    db_session.flush()
+    db_session.add_all(
+        [
+            Unit(
+                external_unit_id=f"partial-market-stocking-unit-{index}",
+                lot_id=lot.id,
+                current_location_id=storage.id,
+                status="available",
+                effective_expires_at=datetime.now(UTC) + timedelta(days=90),
+            )
+            for index in range(2)
+        ]
+    )
+    db_session.commit()
+
+    result = {"stock_received": 0}
+    service._resume_market_stocking(result)
+
+    assert result["stock_received"] == 1
+    db_session.refresh(state)
+    assert state.pending_operation is None
+    assert state.estimated_spend == 4
+    assert state.last_error == "Partial market stocking receipt: 2/3"
+
+
+@pytest.mark.anyio
 async def test_market_stocking_never_exceeds_remaining_spending_room(
     db_session, monkeypatch
 ):

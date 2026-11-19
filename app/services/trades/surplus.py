@@ -58,6 +58,7 @@ from .surplus_planning import (
 
 STRATEGY = "surplus"
 TERMINAL = {"cancelled", "expired", "closed", "failed"}
+PARTIAL_RECEIPT_GRACE = timedelta(minutes=2)
 
 
 class SurplusSalesService:
@@ -341,13 +342,26 @@ class SurplusSalesService:
             operation = state.pending_operation or {}
             if not operation:
                 continue
-            if self._received_stocking_units(state.sku, operation) >= int(
-                operation["quantity"]
-            ):
-                state.estimated_spend += Decimal(operation["cost"])
+            expected = int(operation["quantity"])
+            received = self._received_stocking_units(state.sku, operation)
+            available_at = operation.get("available_at")
+            partial_settled = (
+                received > 0
+                and available_at is not None
+                and now >= datetime.fromisoformat(available_at) + PARTIAL_RECEIPT_GRACE
+            )
+            if received >= expected or partial_settled:
+                received = min(received, expected)
+                state.estimated_spend += (
+                    Decimal(operation["cost"]) * received / expected
+                )
                 state.pending_operation = None
                 state.goal = None
-                state.last_error = None
+                state.last_error = (
+                    None
+                    if received >= expected
+                    else f"Partial market stocking receipt: {received}/{expected}"
+                )
                 state.http_status = None
                 state.next_retry_at = None
                 result["stock_received"] += 1
