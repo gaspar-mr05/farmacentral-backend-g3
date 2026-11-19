@@ -154,6 +154,25 @@ para ventas y comprobaciones de ausencia de recall. Los logs distinguen
 
 ### Ventas de excedentes y contraste del conteo
 
+Si una recepción confirmada deja la reposición pendiente, revisar primero el
+worker de reposición. Tras desplegar la recuperación de suministros, buscar:
+
+```bash
+sudo journalctl -u farmacentral-worker@replenish_inventory.service \
+  --since "15 minutes ago" -o short-iso --no-pager \
+  --grep 'Replenishment supply resumed'
+```
+
+`basis=usable_stock` permite continuar con unidades utilizables existentes; no
+atribuye su origen a esa entrega. Las operaciones antiguas exigen al menos la
+cantidad solicitada, sin exigir conservar además todo el stock previo. Las nuevas
+guardan la cantidad útil necesaria y, con inventario inicialmente completo y sin
+recepciones competidoras, pueden reconocer unidades recibidas aunque luego se
+consuman (`basis=receipt_ledger`). Antes del tiempo de disponibilidad o sin respuesta
+confirmada siguen pendientes. El costo se contabiliza una vez al cerrar la
+operación; el diagnóstico expone `goal.last_supply` y sus datos de referencia.
+No requiere migraciones ni editar estados con SQL, y no libera inventario incierto.
+
 El stock protegido combina pedidos y buffer con los objetivos del reabastecedor
 sin sumar dos veces solicitudes que ya incluyen esos compromisos. Las solicitudes
 independientes sí se suman; se conservan buffers, reservas, margen y vida útil.

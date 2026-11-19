@@ -130,6 +130,7 @@ def build_report(session, settings, *, limit=30):
                         "estimated_consumption",
                         "max_outlay",
                         "budget",
+                        "last_supply",
                     ),
                 ),
                 "pending_operation": pick(
@@ -139,6 +140,9 @@ def build_report(session, settings, *, limit=30):
                         "sku",
                         "quantity",
                         "required",
+                        "needed",
+                        "received_before",
+                        "market_receipts_before",
                         "status",
                         "available_at",
                         "cost",
