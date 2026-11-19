@@ -51,6 +51,23 @@ def completed_sync(units):
 
 
 @pytest.mark.anyio
+async def test_unexpected_sourcing_error_logs_location_without_private_data(
+    db_session, caplog
+):
+    period, _, _, _ = add_market_stock(db_session)
+    source = service(db_session, period)
+    source.preview.side_effect = KeyError("PRIVATE_SECRET_IN_EXCEPTION")
+
+    request = await source.ensure("unexpected-error", demand())
+
+    assert request.status == "waiting"
+    assert request.last_error == "KeyError"
+    assert "error_type=KeyError location=" in caplog.text
+    assert "PRIVATE_SECRET_IN_EXCEPTION" not in caplog.text
+    source.trades.create_offer.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_lost_creation_keeps_durable_intent_without_republishing(db_session):
     period, _, _, _ = add_market_stock(db_session)
     source = service(db_session, period)
