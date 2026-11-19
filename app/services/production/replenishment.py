@@ -1062,7 +1062,12 @@ class E3ReplenishmentService:
         )
         if self.period.ends_at:
             deadline = min(deadline, self.period.ends_at)
-        quantity = min(200, max(state.target, goal["quantity"]))
+        # Recover one demand-sized lot first. Expanding a customer order to the
+        # full stock target can make minimum input lots look unaffordable and
+        # send the planner back to an unconfirmed final-kit bid. The producer
+        # already rounds each manufacturing step to its official batch size;
+        # any surplus inputs remain available for the next replenishment turn.
+        quantity = min(200, goal["quantity"])
         recovery_for = goal.get("buffer_recovery_for") or {
             "quantity": goal["quantity"],
             "deadline": goal["deadline"],
@@ -1072,7 +1077,11 @@ class E3ReplenishmentService:
             "sku": state.sku,
             "quantity": quantity,
             "deadline": deadline.isoformat(),
-            "revenue": str(price * quantity),
+            # Keep whichever valuation is stronger: the real customer revenue
+            # that justified this recovery, or the reference value of the
+            # future stock. Replacing a high-value order with the lower buffer
+            # price can incorrectly reject an otherwise profitable recipe.
+            "revenue": str(max(Decimal(goal["revenue"]), price * quantity)),
             # Customer urgency keeps recipes ahead of speculative final-kit bids,
             # while the longer horizon lets those recipes actually complete.
             "priority": 1,

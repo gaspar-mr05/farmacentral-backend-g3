@@ -1317,6 +1317,46 @@ async def test_infeasible_customer_bid_builds_future_buffer_instead(
 
 
 @pytest.mark.anyio
+async def test_buffer_recovery_keeps_customer_sized_profitable_recipe(
+    migration_database,
+):
+    run_migration(migration_database, "upgrade", "head")
+    pharmacy = Pharmacy()
+    pharmacy.catalog["RAW"].cost = Decimal(2)
+    pharmacy.catalog["RAW"].production.batch = 10
+    pharmacy.catalog["RAW"].production.time = 70
+    pharmacy.catalog["MID"].production.time = 30
+    pharmacy.catalog["KIT-A"].production.time = 30
+    now = datetime.now(UTC)
+    with Session(migration_database, expire_on_commit=False) as session:
+        service = setup(session, pharmacy)
+        service.settings.replenishment_minimum_stock = 8
+        service.settings.replenishment_target_stock = 8
+        service.prices.get_current_prices.return_value = [
+            {"sku": sku, "price": Decimal(3) if sku == "KIT-A" else 2}
+            for sku in pharmacy.catalog
+        ]
+        session.add(
+            make_external_order(
+                items=[OrderItem(sku="KIT-A", quantity=1, unit_price=30)],
+                delivery_deadline=now + timedelta(hours=2),
+            )
+        )
+        session.commit()
+
+        result = await service.poll()
+
+        state = session.scalar(select(ReplenishmentState))
+        assert result["supplied"] == 1, result
+        assert pharmacy.posts == [("RAW", 10)]
+        assert service.sourcing.trades.create_offer.await_count == 0
+        assert state.target == 8
+        assert state.goal["buffer_recovery"] is True
+        assert state.goal["quantity"] == 1
+        assert state.goal["revenue"] == "30"
+
+
+@pytest.mark.anyio
 async def test_existing_final_kit_bid_is_retired_for_feasible_buffer_recovery(
     migration_database,
 ):
