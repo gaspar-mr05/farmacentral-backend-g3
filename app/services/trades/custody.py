@@ -723,7 +723,6 @@ class TradeCustodyService:
     ) -> MarketTrade:
         if official.status != "closed" or official.closed_at is None:
             raise InvalidTradeStateError("Official closure time and state are required")
-        order = await self._purchase_orders.get_order(offer.external_order_id)
         seller = (
             official.publisher_group
             if official.side == "sell"
@@ -745,6 +744,28 @@ class TradeCustodyService:
             )
         ):
             raise InvalidTradeStateError("Market closure outside group/period scope")
+        existing = self._session.scalar(
+            select(MarketTrade).where(
+                MarketTrade.period_id == self._period.id,
+                MarketTrade.external_offer_id == offer.external_offer_id,
+            )
+        )
+        if existing is not None:
+            counterparty = seller if role == MarketRole.BUYER else buyer
+            if (
+                existing.external_order_id != offer.external_order_id
+                or existing.role != role
+                or existing.counterparty_id != str(counterparty)
+                or existing.sku != offer.sku
+                or existing.quantity > offer.quantity
+                or existing.unit_price != offer.unit_price
+                or existing.closed_at != official.closed_at
+            ):
+                raise InvalidTradeStateError(
+                    "Stored trade does not match market closure"
+                )
+            return existing
+        order = await self._purchase_orders.get_order(offer.external_order_id)
         if (
             order.id != offer.external_order_id
             or order.state != PurchaseOrderState.FULFILLED

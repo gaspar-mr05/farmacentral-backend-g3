@@ -124,8 +124,10 @@ async def test_closed_trade_with_ambiguous_unit_delta_remains_retryable(
     db_session, monkeypatch
 ):
     period, dispatch, units, closed = await published_sale(db_session)
+    order_source = OwnSaleOrders(closed)
+    order_source.get_order = AsyncMock(wraps=order_source.get_order)
     service = reconciler(
-        db_session, period, dispatch, closed, order_source=OwnSaleOrders(closed)
+        db_session, period, dispatch, closed, order_source=order_source
     )
     synchronize = AsyncMock(
         return_value=inventory_sync(missing=[units[0].external_unit_id])
@@ -144,6 +146,7 @@ async def test_closed_trade_with_ambiguous_unit_delta_remains_retryable(
     assert first["custody_pending"] == second["custody_pending"] == 1
     assert db_session.scalar(select(MarketOffer)).reconciled_at is None
     assert synchronize.await_count == 2
+    order_source.get_order.assert_awaited_once()
 
 
 @pytest.mark.anyio

@@ -3,10 +3,10 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import case, exists, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.models import CustodyEvent, MarketOffer, MarketTrade
+from app.models import CustodyEvent, MarketOffer, MarketRole, MarketTrade
 from app.services.inventory.sync import InventorySyncService
 
 from .custody import TradeCustodyService
@@ -41,6 +41,12 @@ class TradeReconciliationService:
             MarketTrade.external_offer_id == MarketOffer.external_offer_id,
             evidence_count != MarketTrade.quantity,
         )
+        pending_purchase = exists().where(
+            MarketTrade.period_id == self.period.id,
+            MarketTrade.external_offer_id == MarketOffer.external_offer_id,
+            MarketTrade.role == MarketRole.BUYER,
+            evidence_count != MarketTrade.quantity,
+        )
         cooldown = self.session.scalar(
             select(func.max(MarketOffer.next_retry_at)).where(
                 MarketOffer.period_id == self.period.id,
@@ -61,7 +67,11 @@ class TradeReconciliationService:
                     MarketOffer.next_retry_at <= now,
                 ),
             )
-            .order_by(MarketOffer.last_checked_at.asc().nullsfirst(), MarketOffer.id)
+            .order_by(
+                case((pending_purchase, 0), else_=1),
+                MarketOffer.last_checked_at.asc().nullsfirst(),
+                MarketOffer.id,
+            )
             .limit(self.batch_size)
         ).all()
         ids = [offer.id for offer in due]
