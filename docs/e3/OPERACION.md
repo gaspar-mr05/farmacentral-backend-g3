@@ -176,8 +176,17 @@ La unidad habilitada acompaña el target de workers en reinicios y paradas. No
 ejecutar otro vendedor manual en paralelo. Para detenerla:
 `sudo systemctl disable --now farmacentral-surplus.service`.
 Si `quantity` sigue en cero, no hay excedente bajo la política actual: revisar
-buffers, pedidos, lotes y espacio; la corrección no genera inventario ni compra
-insumos automáticamente para vender. No desproteger pedidos para sumar operaciones.
+buffers, pedidos, lotes y espacio. Sin la opción explícita descrita abajo, el
+vendedor no genera inventario ni compra insumos. No desproteger pedidos para
+sumar operaciones.
+
+En producción, la unidad incluye `--stock-market`. Cuando no queda ningún lote
+vendible, esta opción solicita a Farma Central uno de los tres insumos de acceso
+directo del grupo hasta cubrir primero toda la demanda protegida y, por encima de
+ella, un lote de venta. La solicitud queda registrada en `ReplenishmentState`, se
+limita por el presupuesto compartido y no se repite mientras su recepción esté
+pendiente o incierta. Sólo después de observar las unidades recibidas se publica
+la oferta. La previsualización sin `--execute` nunca solicita inventario.
 
 El total local cuenta cierres de `MarketTrade`, no unidades. Si difiere del portal,
 contrastar ofertas por ID antes de ajustar métricas. Por ejemplo, consultar una

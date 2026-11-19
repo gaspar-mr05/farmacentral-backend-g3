@@ -49,6 +49,7 @@ async def run(*, period_id=None, execute=False, once=False, interval=60, policy=
                         session,
                         period,
                         policy=policy,
+                        settings=settings,
                     ).cycle(execute=execute)
                     print(
                         json.dumps(result, ensure_ascii=False, indent=2, default=str),
@@ -87,6 +88,11 @@ def main():
     )
     parser.add_argument("--raw-buffer-batches", type=int, default=1)
     parser.add_argument("--minimum-margin", type=Decimal, default=Decimal("0.10"))
+    parser.add_argument(
+        "--stock-market",
+        action="store_true",
+        help="Request profitable direct-access inputs until one sale lot is free",
+    )
     parser.add_argument("--interval-seconds", type=int, default=60)
     args = parser.parse_args()
     if args.interval_seconds < 30:
@@ -97,6 +103,7 @@ def main():
             kit_buffer=args.kit_buffer,
             raw_buffer_batches=args.raw_buffer_batches,
             minimum_margin=args.minimum_margin,
+            stock_market=args.stock_market,
             minimum_lifetime_seconds=max(
                 3660, settings.replenishment_minimum_lifetime_seconds
             ),

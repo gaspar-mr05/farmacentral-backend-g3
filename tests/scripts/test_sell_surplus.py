@@ -19,6 +19,18 @@ def test_cli_is_preview_only_by_default(monkeypatch):
         "EXC-SUERO-FISIO",
         "LAM-BLISTER-PVC",
     )
+    assert args["policy"].stock_market is False
+
+
+def test_market_stocking_requires_explicit_flag(monkeypatch):
+    monkeypatch.setattr(module, "get_settings", lambda: make_settings())
+    runner = AsyncMock()
+    monkeypatch.setattr(module, "run", runner)
+    monkeypatch.setattr("sys.argv", ["sell_surplus", "--stock-market"])
+
+    module.main()
+
+    assert runner.await_args.kwargs["policy"].stock_market is True
 
 
 def test_policy_cannot_disable_operational_buffers(monkeypatch):

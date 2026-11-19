@@ -14,7 +14,7 @@ WorkingDirectory=/home/integracion/farmacentral-backend
 EnvironmentFile=/home/integracion/farmacentral-backend/.env
 Environment=APP_ENV_FILE=/home/integracion/farmacentral-backend/.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/integracion/farmacentral-backend/.venv/bin/python -m scripts.sell_surplus --execute --interval-seconds 120
+ExecStart=/home/integracion/farmacentral-backend/.venv/bin/python -m scripts.sell_surplus --execute --stock-market --interval-seconds 120
 Restart=on-failure
 RestartSec=60
 TimeoutStopSec=30

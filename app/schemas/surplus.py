@@ -14,6 +14,7 @@ class SurplusPolicy(BaseModel):
         default=Decimal("0.10"), ge=0, lt=1, allow_inf_nan=False
     )
     minimum_lifetime_seconds: float = Field(default=14400, ge=3660, allow_inf_nan=False)
+    stock_market: bool = False
 
 
 class SurplusQuote(BaseModel):

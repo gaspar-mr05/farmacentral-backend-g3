@@ -7,6 +7,8 @@ from sqlalchemy import select
 
 from app.models import (
     CustodyEvent,
+    Lot,
+    LotOrigin,
     MarketOffer,
     MarketTrade,
     Order,
@@ -14,7 +16,10 @@ from app.models import (
     OrderSource,
     OrderStatus,
     ProcurementRequest,
+    ReplenishmentState,
+    Unit,
 )
+from app.schemas.supply import SupplyResponse
 from app.schemas.surplus import SurplusPolicy
 from app.services.inventory.sync import EntityChanges, InventorySyncResult
 from app.services.trades.surplus import SurplusSalesService
@@ -24,6 +29,7 @@ from tests.services.test_trade_custody import (
     add_market_stock,
     official_offer,
 )
+from tests.support.farma_central import make_settings
 from tests.support.orders import make_external_order
 
 
@@ -80,6 +86,94 @@ def setup_sales(session, monkeypatch, *, quantity=10, buffer=1):
         Mock(return_value=Mock(synchronize=AsyncMock())),
     )
     return service, units, storage, dispatch
+
+
+@pytest.mark.anyio
+async def test_market_stocking_supplies_once_then_publishes_after_receipt(
+    db_session, monkeypatch
+):
+    service, units, storage, _ = setup_sales(
+        db_session, monkeypatch, quantity=1, buffer=1
+    )
+    service.policy = service.policy.model_copy(update={"stock_market": True})
+    service.settings = make_settings(replenishment_spending_limit=Decimal("1000"))
+    available_at = datetime.now(UTC) + timedelta(minutes=1)
+    supply = Mock(
+        request=AsyncMock(
+            return_value=SupplyResponse(
+                sku=units[0].lot.product.sku,
+                quantity=3,
+                available_at=available_at,
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "app.services.trades.surplus.SupplyRequestService",
+        Mock(return_value=supply),
+    )
+
+    first = await service.cycle(execute=True)
+
+    assert first["supplied"] == 1
+    assert first["published"] == 0
+    supply.request.assert_awaited_once_with(sku=units[0].lot.product.sku, quantity=3)
+    state = db_session.scalar(
+        select(ReplenishmentState).where(
+            ReplenishmentState.sku == units[0].lot.product.sku
+        )
+    )
+    assert state.pending_operation["status"] == "confirmed"
+
+    lot = Lot(
+        external_lot_id="market-stocking-receipt",
+        product_id=units[0].lot.product_id,
+        expires_at=datetime.now(UTC) + timedelta(days=90),
+        origin=LotOrigin.FARMA_CENTRAL,
+    )
+    db_session.add(lot)
+    db_session.flush()
+    received = [
+        Unit(
+            external_unit_id=f"market-stocking-unit-{index}",
+            lot_id=lot.id,
+            current_location_id=storage.id,
+            status="available",
+            effective_expires_at=datetime.now(UTC) + timedelta(days=90),
+        )
+        for index in range(3)
+    ]
+    db_session.add_all(received)
+    db_session.commit()
+
+    second = await service.cycle(execute=True)
+
+    assert second["stock_received"] == 1
+    assert second["published"] == 1
+    assert supply.request.await_count == 1
+    db_session.refresh(state)
+    assert state.pending_operation is None
+    assert state.estimated_spend == 6
+
+
+@pytest.mark.anyio
+async def test_market_stocking_never_exceeds_remaining_spending_room(
+    db_session, monkeypatch
+):
+    service, units, _, _ = setup_sales(db_session, monkeypatch, quantity=1, buffer=1)
+    service.policy = service.policy.model_copy(update={"stock_market": True})
+    service.settings = make_settings(replenishment_spending_limit=Decimal("1"))
+    supply = Mock(request=AsyncMock())
+    monkeypatch.setattr(
+        "app.services.trades.surplus.SupplyRequestService",
+        Mock(return_value=supply),
+    )
+
+    result = await service.cycle(execute=True)
+
+    assert result["supplied"] == 0
+    assert result["published"] == 0
+    supply.request.assert_not_awaited()
+    assert db_session.scalar(select(ReplenishmentState)) is None
 
 
 @pytest.mark.anyio

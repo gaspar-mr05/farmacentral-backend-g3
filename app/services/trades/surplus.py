@@ -4,11 +4,13 @@ import asyncio
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from math import ceil
 
 from pydantic import TypeAdapter
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.clients.farma_central import FarmaCentralHTTPError
 from app.clients.trades import TradesHTTPError
 from app.models import (
     Invoice,
@@ -26,6 +28,7 @@ from app.models import (
     ProcurementRequest,
     Product,
     ProductionRun,
+    ReplenishmentState,
     Unit,
 )
 from app.queries.recalls import blocked_lots
@@ -36,6 +39,14 @@ from app.schemas.trades import TradeOfferCreate
 from app.services.inventory.movements import ProductMovementService
 from app.services.inventory.sync import InventorySyncService
 from app.services.production.locking import ProductionBusyError, production_lock
+from app.services.production.replenishment_budget import spending_room
+from app.services.supply.planning import direct_allowed
+from app.services.supply.requests import (
+    ChallengeExpiredError,
+    InvalidSupplyRequestError,
+    SupplyProductNotFoundError,
+    SupplyRequestService,
+)
 
 from .custody import ReservationGuard, TradeCustodyService
 from .surplus_planning import (
@@ -51,11 +62,21 @@ TERMINAL = {"cancelled", "expired", "closed", "failed"}
 
 class SurplusSalesService:
     def __init__(
-        self, inventory, trades, orders, prices, session, period, *, policy=None
+        self,
+        inventory,
+        trades,
+        orders,
+        prices,
+        session,
+        period,
+        *,
+        policy=None,
+        settings=None,
     ):
         self.inventory, self.trades, self.prices = inventory, trades, prices
         self.session, self.period = session, period
         self.policy = policy or SurplusPolicy()
+        self.settings = settings
         self.custody = TradeCustodyService(
             session,
             farma_central=inventory,
@@ -239,7 +260,7 @@ class SurplusSalesService:
                             )
             quotes.append(quote)
         self.session.commit()
-        return quotes, free
+        return quotes, free, catalog, prices
 
     def participation(self):
         roles = self.session.scalars(
@@ -274,6 +295,204 @@ class SurplusSalesService:
             "sales_invoiced": invoiced,
             "sales_paid": paid,
         }
+
+    def _stocking_states(self):
+        rows = self.session.scalars(
+            select(ReplenishmentState).where(
+                ReplenishmentState.period_id == self.period.id,
+                ReplenishmentState.sku.in_(self.policy.skus),
+            )
+        ).all()
+        return {
+            row.sku: row
+            for row in rows
+            if (row.goal or {}).get("kind") == "market_stock"
+        }
+
+    def _stocking_unit_ids(self, sku):
+        return list(
+            self.session.scalars(
+                select(Unit.external_unit_id)
+                .join(Lot)
+                .join(Product)
+                .where(Product.sku == sku)
+            )
+        )
+
+    def _received_stocking_units(self, sku, operation):
+        statement = (
+            select(func.count(Unit.id))
+            .join(Lot)
+            .join(Product)
+            .where(Product.sku == sku)
+        )
+        baseline = operation.get("baseline_unit_ids")
+        if baseline is not None:
+            statement = statement.where(Unit.external_unit_id.not_in(baseline))
+        else:
+            statement = statement.where(
+                Unit.created_at >= datetime.fromisoformat(operation["requested_at"])
+            )
+        return self.session.scalar(statement) or 0
+
+    def _resume_market_stocking(self, result):
+        now = datetime.now(UTC)
+        for state in self._stocking_states().values():
+            operation = state.pending_operation or {}
+            if not operation:
+                continue
+            if self._received_stocking_units(state.sku, operation) >= int(
+                operation["quantity"]
+            ):
+                state.estimated_spend += Decimal(operation["cost"])
+                state.pending_operation = None
+                state.goal = None
+                state.last_error = None
+                state.http_status = None
+                state.next_retry_at = None
+                result["stock_received"] += 1
+                continue
+            if operation.get("status") == "in_flight":
+                state.pending_operation = operation | {"status": "uncertain"}
+                state.last_error = "Market stocking request outcome is uncertain"
+                state.next_retry_at = now + timedelta(minutes=10)
+        self.session.commit()
+
+    async def _ensure_market_stock(self, quotes, catalog, prices, managed, result):
+        if not self.policy.stock_market or self.settings is None:
+            return False
+        states = self._stocking_states()
+        if any(state.pending_operation for state in states.values()):
+            result["deferred"] += 1
+            result["reason"] = "Market stocking receipt pending"
+            return True
+        if self.participation()["sales"] >= 30:
+            return False
+
+        now = datetime.now(UTC)
+        room, _ = spending_room(
+            self.session, self.period, self.settings, catalog, prices
+        )
+        candidates = []
+        for quote in quotes:
+            product = catalog.get(quote.sku)
+            if (
+                product is None
+                or quote.quantity
+                or quote.unit_price is None
+                or product.cost is None
+                or not direct_allowed(product, self.period.group_id)
+                or any(
+                    offer.sku == quote.sku and offer.status not in TERMINAL
+                    for offer in managed
+                )
+            ):
+                continue
+            target = quote.protected + self.policy.lot_size
+            if quote.available >= target:
+                # Stock exists but dispatch has no capacity; more stock would
+                # only increase buffer cost without enabling a sale.
+                continue
+            batch = product.production.batch
+            requested = ceil((target - quote.available) / batch) * batch
+            requested = min(requested, (5000 // batch) * batch)
+            cost = product.cost * requested
+            state = states.get(quote.sku)
+            if (
+                requested <= 0
+                or cost > room
+                or (state and state.next_retry_at and state.next_retry_at > now)
+            ):
+                continue
+            candidates.append(
+                (
+                    state.last_attempt_at
+                    if state and state.last_attempt_at
+                    else datetime.min.replace(tzinfo=UTC),
+                    quote.sku,
+                    quote,
+                    product,
+                    requested,
+                    cost,
+                    state,
+                    target,
+                )
+            )
+        if not candidates:
+            return False
+
+        _, sku, quote, product, quantity, cost, state, target = min(candidates)
+        if state is None:
+            state = ReplenishmentState(period_id=self.period.id, sku=sku)
+            self.session.add(state)
+            self.session.flush()
+        requested_at = datetime.now(UTC)
+        state.minimum = quote.protected
+        state.target = target
+        state.goal = {
+            "kind": "market_stock",
+            "quantity": quantity,
+            "target": target,
+            "unit_cost": str(product.cost),
+            "unit_price": str(quote.unit_price),
+        }
+        state.pending_operation = {
+            "kind": "supply",
+            "status": "in_flight",
+            "sku": sku,
+            "quantity": quantity,
+            "cost": str(cost),
+            "requested_at": requested_at.isoformat(),
+            "baseline_unit_ids": self._stocking_unit_ids(sku),
+        }
+        state.last_attempt_at = requested_at
+        state.next_retry_at = requested_at + timedelta(minutes=10)
+        state.last_error = None
+        state.http_status = None
+        self.session.commit()
+        try:
+            response = await SupplyRequestService(self.inventory, self.session).request(
+                sku=sku, quantity=quantity
+            )
+        except Exception as exc:
+            self.session.rollback()
+            state = self.session.get(ReplenishmentState, state.id)
+            status = getattr(exc, "status_code", None)
+            definite = isinstance(
+                exc,
+                (
+                    ChallengeExpiredError,
+                    FarmaCentralHTTPError,
+                    InvalidSupplyRequestError,
+                    SupplyProductNotFoundError,
+                ),
+            )
+            if definite:
+                state.pending_operation = None
+                state.goal = None
+            else:
+                state.pending_operation = state.pending_operation | {
+                    "status": "uncertain"
+                }
+            state.last_error = type(exc).__name__
+            state.http_status = status
+            state.next_retry_at = datetime.now(UTC) + timedelta(
+                seconds=max(60, getattr(exc, "retry_after_seconds", None) or 0)
+            )
+            self.session.commit()
+            result["failed"] += 1
+            return True
+
+        state.pending_operation = state.pending_operation | {
+            "status": "confirmed",
+            "available_at": response.available_at.isoformat(),
+        }
+        state.next_retry_at = response.available_at
+        state.last_error = "Market stocking supply confirmed"
+        self.session.commit()
+        result["supplied"] += 1
+        result["reason"] = "Market stocking supply confirmed"
+        return True
 
     async def _refresh_managed(self):
         now = datetime.now(UTC)
@@ -400,12 +619,14 @@ class SurplusSalesService:
             "published": 0,
             "accepted": 0,
             "cancelled": 0,
+            "supplied": 0,
+            "stock_received": 0,
             "deferred": 0,
             "failed": 0,
             "quotes": [],
         }
         if not execute:
-            quotes, _ = await self._snapshot()
+            quotes, _, _, _ = await self._snapshot()
             return result | {
                 "quotes": [q.model_dump(mode="json") for q in quotes],
                 "participation": self.participation(),
@@ -439,8 +660,9 @@ class SurplusSalesService:
                     }
                 await InventorySyncService(self.inventory, self.session).synchronize()
                 result["failed"] += await self._restore_released()
-                quotes, free = await self._snapshot(synchronize=False)
+                quotes, free, catalog, prices = await self._snapshot(synchronize=False)
                 result["quotes"] = [q.model_dump(mode="json") for q in quotes]
+                self._resume_market_stocking(result)
                 managed = self._managed()
                 now = datetime.now(UTC)
                 in_period = self.period.starts_at <= now and (
@@ -511,6 +733,12 @@ class SurplusSalesService:
                         "deferred": 1,
                         "participation": self.participation(),
                     }
+                if not any(
+                    quote.quantity for quote in quotes
+                ) and await self._ensure_market_stock(
+                    quotes, catalog, prices, managed, result
+                ):
+                    return result | {"participation": self.participation()}
                 # One new lot per cycle bounds staging and gives the producer its turn.
                 last_publication = {
                     sku: max(
