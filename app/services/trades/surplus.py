@@ -98,7 +98,9 @@ class SurplusSalesService:
 
     async def _snapshot(self, *, synchronize=True):
         if synchronize:
-            await InventorySyncService(self.inventory, self.session).synchronize()
+            await InventorySyncService(self.inventory, self.session).synchronize(
+                tolerate_changes=True
+            )
         catalog_payload, spaces_payload, price_payload = await asyncio.gather(
             self.inventory.get_available_products(),
             self.inventory.get_spaces(),
@@ -536,7 +538,7 @@ class SurplusSalesService:
                 if trade is not None:
                     synchronized = await InventorySyncService(
                         self.inventory, self.session
-                    ).synchronize()
+                    ).synchronize(tolerate_changes=True)
                     custody_complete = self.custody.record_synchronized_trade_units(
                         trade, synchronized
                     )
@@ -679,7 +681,9 @@ class SurplusSalesService:
                         "reason": "Production recovery pending",
                         "participation": self.participation(),
                     }
-                await InventorySyncService(self.inventory, self.session).synchronize()
+                await InventorySyncService(self.inventory, self.session).synchronize(
+                    tolerate_changes=True
+                )
                 result["failed"] += await self._restore_released()
                 quotes, free, catalog, prices = await self._snapshot(synchronize=False)
                 result["quotes"] = [q.model_dump(mode="json") for q in quotes]
@@ -810,7 +814,7 @@ class SurplusSalesService:
                             )
                             synchronized = await InventorySyncService(
                                 self.inventory, self.session
-                            ).synchronize()
+                            ).synchronize(tolerate_changes=True)
                             self.custody.record_synchronized_trade_units(
                                 trade, synchronized
                             )

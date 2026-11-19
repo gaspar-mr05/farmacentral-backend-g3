@@ -560,7 +560,48 @@ class E3ReplenishmentService:
                             (a for a in plan.actions if a.sku == exc.sku), None
                         )
                         if action is None:
-                            raise
+                            # Stock can change between preview and staging. Re-read
+                            # and replan once rather than repeating an obsolete plan.
+                            await InventorySyncService(
+                                self.client, self.session
+                            ).synchronize(tolerate_changes=True)
+                            room, budget_details = spending_room(
+                                self.session,
+                                self.period,
+                                self.settings,
+                                catalog,
+                                prices,
+                            )
+                            demand = self._procurement_demand(state, goal, room, prices)
+                            current_spaces = TypeAdapter(
+                                list[FarmaCentralSpace]
+                            ).validate_python(await self.client.get_spaces())
+                            plan = await self.sourcing.preview(
+                                demand,
+                                snapshot=(catalog, current_spaces, prices),
+                                offer_cache=offer_cache,
+                            )
+                            state.goal = goal | {
+                                "budget": budget_details,
+                                "planned_outlay": str(plan.cost),
+                                "estimated_consumption": str(plan.consumed_cost)
+                                if plan.consumed_cost is not None
+                                else None,
+                            }
+                            self.session.commit()
+                            if using_pending_custody:
+                                raise ReplenishmentDeferred(
+                                    "Verified stock changed; "
+                                    "keep custody and budget pending"
+                                ) from exc
+                            action = next(
+                                (a for a in plan.actions if a.sku == exc.sku), None
+                            )
+                            if action is None:
+                                raise ReplenishmentDeferred(
+                                    f"Stock changed for {exc.sku}; refreshed plan: "
+                                    f"{plan.reason or plan.status}"
+                                ) from exc
                     else:
                         continue
                 logger.info(

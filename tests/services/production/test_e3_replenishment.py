@@ -28,6 +28,7 @@ from app.schemas.purchase_orders import PurchaseOrder
 from app.schemas.trades import TradeOffer
 from app.services.inventory.sync import InventorySyncService
 from app.services.orders.processing import OrderProcessingService
+from app.services.production.cooperative import CooperativeKitProduction, SupplyNeeded
 from app.services.production.locking import production_lock
 from app.services.production.orchestration import ProductionInputsUnavailableError
 from app.services.production.replenishment import E3ReplenishmentService
@@ -200,6 +201,31 @@ async def test_missing_staged_inputs_are_deferred_without_inventing_production(
     assert state.next_retry_at >= datetime.now(UTC) + timedelta(seconds=55)
     assert pharmacy.posts == []
     producing.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_unplanned_shortage_refreshes_recipe_before_acquiring_input(
+    db_session, monkeypatch
+):
+    pharmacy = Pharmacy()
+    pharmacy.receive("RAW", 1, store="STORE")
+    service = setup(db_session, pharmacy)
+    original = CooperativeKitProduction.advance
+    attempts = []
+
+    async def stock_changed(producer, sku, quantity):
+        attempts.append(sku)
+        if len(attempts) == 1:
+            pharmacy.units.clear()
+            raise SupplyNeeded("RAW")
+        return await original(producer, sku, quantity)
+
+    monkeypatch.setattr(CooperativeKitProduction, "advance", stock_changed)
+    result = await service.poll()
+    assert result["supplied"] == 1
+    assert result["failed"] == 0
+    assert pharmacy.posts == [("RAW", 1)]
+    assert attempts == ["KIT-A"]
 
 
 @pytest.mark.anyio

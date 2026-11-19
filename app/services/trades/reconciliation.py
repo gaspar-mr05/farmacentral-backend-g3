@@ -86,7 +86,7 @@ class TradeReconciliationService:
                 if trade and not custody_complete:
                     sync = await InventorySyncService(
                         self.inventory, self.session
-                    ).synchronize()
+                    ).synchronize(tolerate_changes=True)
                     custody_complete = self.custody.record_synchronized_trade_units(
                         trade, sync
                     )
