@@ -336,6 +336,20 @@ class SurplusSalesService:
             )
         return self.session.scalar(statement) or 0
 
+    def _production_recovery_pending(self, now):
+        return (
+            self.session.scalar(
+                select(ProductionRun.id)
+                .where(
+                    ProductionRun.completed_at.is_(None),
+                    (ProductionRun.available_at.is_(None))
+                    | (ProductionRun.available_at <= now),
+                )
+                .limit(1)
+            )
+            is not None
+        )
+
     def _resume_market_stocking(self, result):
         now = datetime.now(UTC)
         for state in self._stocking_states().values():
@@ -662,11 +676,7 @@ class SurplusSalesService:
                 }
             await self._refresh_managed()
             with production_lock(self.session):
-                if self.session.scalar(
-                    select(ProductionRun.id)
-                    .where(ProductionRun.completed_at.is_(None))
-                    .limit(1)
-                ):
+                if self._production_recovery_pending(datetime.now(UTC)):
                     return result | {
                         "deferred": 1,
                         "reason": "Production recovery pending",

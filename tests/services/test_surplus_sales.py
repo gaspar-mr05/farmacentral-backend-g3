@@ -16,6 +16,7 @@ from app.models import (
     OrderSource,
     OrderStatus,
     ProcurementRequest,
+    ProductionRun,
     ReplenishmentState,
     Unit,
 )
@@ -86,6 +87,26 @@ def setup_sales(session, monkeypatch, *, quantity=10, buffer=1):
         Mock(return_value=Mock(synchronize=AsyncMock())),
     )
     return service, units, storage, dispatch
+
+
+def test_only_overdue_production_blocks_market_sales(db_session, monkeypatch):
+    service, units, _, _ = setup_sales(db_session, monkeypatch)
+    now = datetime.now(UTC)
+    run = ProductionRun(
+        requested_at=now,
+        expected_sku=units[0].lot.product.sku,
+        expected_quantity=1,
+        available_at=now + timedelta(minutes=1),
+    )
+    db_session.add(run)
+    db_session.commit()
+
+    assert service._production_recovery_pending(now) is False
+
+    run.available_at = now - timedelta(seconds=1)
+    db_session.commit()
+
+    assert service._production_recovery_pending(now) is True
 
 
 @pytest.mark.anyio
