@@ -39,6 +39,7 @@ from app.services.supply.requests import (
 from .cooperative import CooperativeKitProduction, ReplenishmentDeferred, SupplyNeeded
 from .replenishment_budget import spending_room
 from .replenishment_policy import schedule_key, stock_targets
+from .supply_receipts import supply_receipt_baseline, supply_resume_basis
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +122,9 @@ class E3ReplenishmentService:
         self.session.commit()
         if cooldown and cooldown > now:
             return result | {"deferred": 1}
-        await InventorySyncService(self.client, self.session).synchronize(
-            tolerate_changes=True
-        )
+        synchronized = await InventorySyncService(
+            self.client, self.session
+        ).synchronize(tolerate_changes=True)
         catalog_data, spaces_data, prices_data = await asyncio.gather(
             self.client.get_available_products(),
             self.client.get_spaces(),
@@ -596,10 +597,15 @@ class E3ReplenishmentService:
                         "key": str(uuid4()),
                         "sku": action.sku,
                         "quantity": action.quantity,
-                        "required": len(producer._available_units(action.sku))
-                        + action.useful_quantity,
+                        "needed": action.useful_quantity,
                         "cost": str(action.cost),
                         "status": "in_flight",
+                        **supply_receipt_baseline(
+                            self.session,
+                            self.period,
+                            action.sku,
+                            inventory_complete=action.sku in synchronized.complete_skus,
+                        ),
                     }
                     self.session.commit()
                     response = await SupplyRequestService(
@@ -731,15 +737,35 @@ class E3ReplenishmentService:
                 }
                 self.session.commit()
                 return True
-        elif (
-            op["status"] == "confirmed"
-            and datetime.fromisoformat(op["available_at"]) <= datetime.now(UTC)
-            and len(producer._available_units(op["sku"])) >= op["required"]
-        ):
-            state.estimated_spend += Decimal(op["cost"])
-            state.pending_operation = None
-            self.session.commit()
-            return False
+        elif op["status"] == "confirmed" and datetime.fromisoformat(
+            op["available_at"]
+        ) <= datetime.now(UTC):
+            usable = len(producer._available_units(op["sku"]))
+            basis = supply_resume_basis(
+                self.session, self.period, op, usable_count=usable
+            )
+            if basis:
+                state.estimated_spend += Decimal(op["cost"])
+                if state.goal:
+                    state.goal = state.goal | {
+                        "last_supply": {
+                            "key": op["key"],
+                            "sku": op["sku"],
+                            "quantity": op["quantity"],
+                            "basis": basis,
+                            "usable": usable,
+                        }
+                    }
+                state.pending_operation = None
+                self.session.commit()
+                logger.info(
+                    "Replenishment supply resumed: kit=%s sku=%s basis=%s usable=%s",
+                    state.sku,
+                    op["sku"],
+                    basis,
+                    usable,
+                )
+                return False
         if op["status"] == "in_flight":
             state.pending_operation = op | {"status": "uncertain"}
             self.session.commit()
