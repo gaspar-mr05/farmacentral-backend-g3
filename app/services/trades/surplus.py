@@ -304,11 +304,7 @@ class SurplusSalesService:
                 ReplenishmentState.sku.in_(self.policy.skus),
             )
         ).all()
-        return {
-            row.sku: row
-            for row in rows
-            if (row.goal or {}).get("kind") == "market_stock"
-        }
+        return {row.sku: row for row in rows}
 
     def _stocking_unit_ids(self, sku):
         return list(
@@ -354,7 +350,7 @@ class SurplusSalesService:
         now = datetime.now(UTC)
         for state in self._stocking_states().values():
             operation = state.pending_operation or {}
-            if not operation:
+            if (state.goal or {}).get("kind") != "market_stock" or not operation:
                 continue
             expected = int(operation["quantity"])
             received = self._received_stocking_units(state.sku, operation)

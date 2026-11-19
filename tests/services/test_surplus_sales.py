@@ -258,6 +258,39 @@ async def test_market_stocking_never_exceeds_remaining_spending_room(
 
 
 @pytest.mark.anyio
+async def test_market_stocking_reuses_an_idle_replenishment_state(
+    db_session, monkeypatch
+):
+    service, units, _, _ = setup_sales(db_session, monkeypatch, quantity=1, buffer=1)
+    service.policy = service.policy.model_copy(update={"stock_market": True})
+    service.settings = make_settings(replenishment_spending_limit=Decimal("1000"))
+    sku = units[0].lot.product.sku
+    state = ReplenishmentState(period_id=service.period.id, sku=sku)
+    db_session.add(state)
+    db_session.commit()
+    supply = Mock(
+        request=AsyncMock(
+            return_value=SupplyResponse(
+                sku=sku,
+                quantity=3,
+                available_at=datetime.now(UTC) + timedelta(minutes=1),
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "app.services.trades.surplus.SupplyRequestService",
+        Mock(return_value=supply),
+    )
+
+    result = await service.cycle(execute=True)
+
+    assert result["supplied"] == 1
+    assert db_session.scalars(select(ReplenishmentState)).all() == [state]
+    db_session.refresh(state)
+    assert (state.goal or {})["kind"] == "market_stock"
+
+
+@pytest.mark.anyio
 async def test_sales_snapshot_counts_customer_replenishment_once(
     db_session, monkeypatch
 ):
