@@ -1,6 +1,10 @@
 import asyncio
 import logging
+import math
+import time
 from contextlib import suppress
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -38,6 +42,9 @@ class PurchaseOrdersClient:
         self._secret = config.farma_central_api_secret.get_secret_value()
         self._token: str | None = None
         self._auth_lock = asyncio.Lock()
+        self._request_lock = asyncio.Lock()
+        self._request_interval = config.purchase_orders_min_request_interval_seconds
+        self._next_request_at = 0.0
         self._owns_http_client = http_client is None
         self._http_client = http_client or httpx.AsyncClient(
             base_url=f"{config.effective_purchase_orders_base_url.rstrip('/')}/",
@@ -128,6 +135,25 @@ class PurchaseOrdersClient:
         return token
 
     async def _send(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        # Authentication, GETs, decisions and token refreshes share one queue.
+        # Never replay a POST on 429: the caller reconciles state on its next turn.
+        async with self._request_lock:
+            delay = self._next_request_at - time.monotonic()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            try:
+                response = await self._send_unpaced(method, path, **kwargs)
+            finally:
+                self._next_request_at = time.monotonic() + self._request_interval
+            if response.status_code == 429:
+                self._next_request_at = time.monotonic() + max(
+                    self._request_interval, self._retry_after(response) or 60
+                )
+            return response
+
+    async def _send_unpaced(
+        self, method: str, path: str, **kwargs: Any
+    ) -> httpx.Response:
         try:
             return await self._http_client.request(method, path, **kwargs)
         except httpx.TimeoutException as exc:
@@ -157,13 +183,29 @@ class PurchaseOrdersClient:
             authenticating and response.status_code in (400, 403)
         ):
             raise PurchaseOrdersAuthenticationError(response.status_code)
-        retry_after = None
-        if response.status_code == 429:
-            with suppress(KeyError, ValueError):
-                retry_after = max(float(response.headers["Retry-After"]), 0)
+        retry_after = (
+            PurchaseOrdersClient._retry_after(response)
+            if response.status_code == 429
+            else None
+        )
         raise PurchaseOrdersHTTPError(
             response.status_code, retry_after_seconds=retry_after
         )
+
+    @staticmethod
+    def _retry_after(response: httpx.Response) -> float | None:
+        value = response.headers.get("Retry-After")
+        if value is None:
+            return None
+        with suppress(ValueError):
+            seconds = float(value)
+            return max(seconds, 0) if math.isfinite(seconds) else None
+        with suppress(ValueError, TypeError, OverflowError):
+            until = parsedate_to_datetime(value)
+            if until.tzinfo is None:
+                until = until.replace(tzinfo=UTC)
+            return max(0, (until - datetime.now(UTC)).total_seconds())
+        return None
 
     @staticmethod
     def _expect_status(response: httpx.Response, expected: int) -> None:

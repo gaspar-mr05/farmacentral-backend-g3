@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     farma_central_timeout_seconds: float = Field(default=10, gt=0)
     purchase_orders_base_url: AnyHttpUrl | None = None
     purchase_orders_timeout_seconds: float = Field(default=10, gt=0)
+    purchase_orders_min_request_interval_seconds: float = Field(default=1.1, ge=0)
     trades_base_url: AnyHttpUrl | None = None
     trades_timeout_seconds: float = Field(default=10, gt=0)
     billing_url: AnyHttpUrl | None = None

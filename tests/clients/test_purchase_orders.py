@@ -20,6 +20,124 @@ from tests.support.farma_central import make_settings
 ORDER_ID = "64abc123def456789012abcd"
 
 
+def test_retry_after_supports_http_dates_and_rejects_non_finite_delays():
+    from datetime import UTC, datetime, timedelta
+    from email.utils import format_datetime
+
+    until = format_datetime(datetime.now(UTC) + timedelta(seconds=30), usegmt=True)
+    response = httpx.Response(429, headers={"Retry-After": until})
+    assert 28 <= PurchaseOrdersClient._retry_after(response) <= 30
+    for value in ("nan", "inf", "invalid"):
+        assert (
+            PurchaseOrdersClient._retry_after(
+                httpx.Response(429, headers={"Retry-After": value})
+            )
+            is None
+        )
+
+
+@pytest.fixture
+def paced_clock(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.clients.purchase_orders import client as module
+
+    now = [0.0]
+
+    async def sleep(delay):
+        now[0] += delay
+
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    monkeypatch.setattr(
+        module, "asyncio", SimpleNamespace(Lock=asyncio.Lock, sleep=sleep)
+    )
+    return now
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("refresh", [False, True])
+async def test_get_to_decision_and_auth_refresh_are_spaced(paced_clock, refresh):
+    calls = []
+    auths = 0
+
+    def handler(request):
+        nonlocal auths
+        calls.append((request.method, request.url.path, paced_clock[0]))
+        paced_clock[0] += 0.2
+        if request.url.path.endswith("autenticar"):
+            auths += 1
+            return httpx.Response(200, json={"token": f"token-{auths}"})
+        if request.method == "GET":
+            if refresh and auths == 1:
+                return httpx.Response(401)
+            return httpx.Response(200, json=order_payload())
+        return httpx.Response(204)
+
+    async with (
+        httpx.AsyncClient(
+            base_url="https://orders.test/", transport=httpx.MockTransport(handler)
+        ) as http,
+        PurchaseOrdersClient(settings=make_settings(), http_client=http) as client,
+    ):
+        await client.get_order(ORDER_ID)
+        await client.update_order_state(ORDER_ID, "aceptada")
+    assert len(calls) == (5 if refresh else 3)
+    assert all(
+        b[2] - a[2] >= 1.3 - 1e-9 for a, b in zip(calls, calls[1:], strict=False)
+    )
+
+
+@pytest.mark.anyio
+async def test_429_does_not_replay_post_and_delays_next_request(paced_clock):
+    calls = []
+
+    def handler(request):
+        calls.append((request.method, request.url.path, paced_clock[0]))
+        if request.url.path.endswith("autenticar"):
+            return httpx.Response(200, json={"token": "token"})
+        if request.method == "POST":
+            return httpx.Response(429, headers={"Retry-After": "5"})
+        return httpx.Response(200, json=order_payload())
+
+    async with (
+        httpx.AsyncClient(
+            base_url="https://orders.test/", transport=httpx.MockTransport(handler)
+        ) as http,
+        PurchaseOrdersClient(settings=make_settings(), http_client=http) as client,
+    ):
+        await client.get_order(ORDER_ID)
+        with pytest.raises(PurchaseOrdersHTTPError) as error:
+            await client.update_order_state(ORDER_ID, "aceptada")
+        assert error.value.retry_after_seconds == 5
+        await client.get_order(ORDER_ID)
+    assert len(calls) == 4
+    assert calls[-1][2] - calls[-2][2] >= 5
+
+
+@pytest.mark.anyio
+async def test_concurrent_calls_share_pacing_queue(paced_clock):
+    times = []
+
+    def handler(request):
+        times.append(paced_clock[0])
+        return httpx.Response(
+            200,
+            json={"token": "token"}
+            if request.url.path.endswith("autenticar")
+            else order_payload(),
+        )
+
+    async with (
+        httpx.AsyncClient(
+            base_url="https://orders.test/", transport=httpx.MockTransport(handler)
+        ) as http,
+        PurchaseOrdersClient(settings=make_settings(), http_client=http) as client,
+    ):
+        await asyncio.gather(*(client.get_order(ORDER_ID) for _ in range(3)))
+    assert len(times) == 4
+    assert all(b - a >= 1.1 - 1e-9 for a, b in zip(times, times[1:], strict=False))
+
+
 def order_payload():
     return {
         "id": ORDER_ID,
@@ -116,19 +234,13 @@ async def test_invalid_id_or_system_managed_state_never_sends_a_request():
 @pytest.mark.anyio
 async def test_concurrent_requests_share_authentication_and_refresh_once():
     auth_count = 0
-    expired_requests = 0
-    both_expired = asyncio.Event()
 
     async def handler(request):
-        nonlocal auth_count, expired_requests
+        nonlocal auth_count
         if request.url.path.endswith("/autenticar"):
             auth_count += 1
             return httpx.Response(200, json={"token": f"token-{auth_count}"})
         if request.headers["Authorization"] == "Bearer token-1":
-            expired_requests += 1
-            if expired_requests == 2:
-                both_expired.set()
-            await asyncio.wait_for(both_expired.wait(), timeout=2)
             return httpx.Response(401)
         return httpx.Response(200, json=order_payload())
 
