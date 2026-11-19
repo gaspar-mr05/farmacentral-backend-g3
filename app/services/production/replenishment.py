@@ -3,9 +3,11 @@
 import asyncio
 import hashlib
 import logging
+import traceback
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID, uuid4
 
 from pydantic import TypeAdapter
@@ -649,6 +651,15 @@ class E3ReplenishmentService:
                 self.session.rollback()
                 raise
             except Exception as exc:
+                frame = traceback.extract_tb(exc.__traceback__)[-1]
+                logger.error(
+                    "Replenishment failed: kit=%s error_type=%s location=%s:%s:%s",
+                    state.sku,
+                    type(exc).__name__,
+                    Path(frame.filename).name,
+                    frame.name,
+                    frame.lineno,
+                )
                 self.session.rollback()
                 op = state.pending_operation
                 if op and op.get("status") == "in_flight":

@@ -175,6 +175,29 @@ def next_turn(session):
 
 
 @pytest.mark.anyio
+async def test_unexpected_error_logs_location_without_private_exception_data(
+    db_session, caplog
+):
+    pharmacy = Pharmacy()
+    service = setup(db_session, pharmacy)
+    service.sourcing.preview = AsyncMock(
+        side_effect=KeyError("PRIVATE_SECRET_IN_EXCEPTION")
+    )
+
+    result = await service.poll()
+
+    assert result["failed"] == 1
+    assert result["kits"][0]["last_error"] == "KeyError"
+    messages = [r.getMessage() for r in caplog.records]
+    assert any(
+        "Replenishment failed: kit=KIT-A error_type=KeyError location=" in m
+        for m in messages
+    )
+    assert "PRIVATE_SECRET_IN_EXCEPTION" not in caplog.text
+    assert pharmacy.posts == []
+
+
+@pytest.mark.anyio
 async def test_initial_zero_accounting_balance_allows_budgeted_startup(
     migration_database,
 ):

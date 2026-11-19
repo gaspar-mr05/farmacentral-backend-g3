@@ -2,10 +2,13 @@
 
 import asyncio
 import hashlib
+import logging
+import traceback
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 from pydantic import TypeAdapter
 from sqlalchemy import and_, func, or_, select, text
@@ -37,6 +40,8 @@ from app.services.trades.custody import TradeCustodyService
 from app.services.trades.surplus_planning import protected_stock, replacement_cost
 
 from .planning import ProcurementPlanner
+
+logger = logging.getLogger(__name__)
 
 
 class ProcurementBusyError(Exception):
@@ -605,6 +610,15 @@ class ScarcityProcurementService:
                 self.session.rollback()
                 raise
             except Exception as exc:
+                frame = traceback.extract_tb(exc.__traceback__)[-1]
+                logger.error(
+                    "Procurement failed: sku=%s error_type=%s location=%s:%s:%s",
+                    demand.sku,
+                    type(exc).__name__,
+                    Path(frame.filename).name,
+                    frame.name,
+                    frame.lineno,
+                )
                 self.session.rollback()
                 if (
                     isinstance(exc, TradesHTTPError)
