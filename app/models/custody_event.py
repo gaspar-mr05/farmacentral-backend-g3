@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -41,7 +41,12 @@ class CustodyEvent(Base):
         Enum(CustodyEventType), nullable=False
     )
     occurred_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        DateTime(timezone=True),
+        # ORM events must use observation time, not transaction start. Explicit
+        # historical timestamps (e.g. official trade closure) remain untouched.
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+        nullable=False,
     )
 
     from_location_id: Mapped[uuid.UUID | None] = mapped_column(

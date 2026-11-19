@@ -20,6 +20,35 @@ class FakeMovementClient:
 
 
 @pytest.mark.anyio
+async def test_repeated_moves_use_current_location_with_production_session_settings(
+    db_session,
+):
+    scenario = create_movement_scenario(db_session)
+    product_id, origin, destination = (
+        scenario.product_id,
+        scenario.origin_code,
+        scenario.destination_code,
+    )
+    db_session.commit()
+    client = FakeMovementClient()
+    with Session(db_session.get_bind(), expire_on_commit=False) as session:
+        unit = session.scalar(select(Unit).where(Unit.external_unit_id == product_id))
+        assert unit.current_location.code == origin
+        service = ProductMovementService(client, session)
+        first = await service.move(product_id=product_id, destination_store=destination)
+        second = await service.move(product_id=product_id, destination_store=origin)
+        third = await service.move(product_id=product_id, destination_store=destination)
+        assert first.moved and second.moved and third.moved
+        unit = session.scalar(select(Unit).where(Unit.external_unit_id == product_id))
+        assert unit.current_location_id == scenario.destination.id
+    assert client.calls == [
+        (product_id, destination),
+        (product_id, origin),
+        (product_id, destination),
+    ]
+
+
+@pytest.mark.anyio
 async def test_move_updates_location_and_records_custody_event(
     db_session: Session,
 ) -> None:

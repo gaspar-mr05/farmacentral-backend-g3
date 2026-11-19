@@ -49,6 +49,7 @@ class InventorySyncService:
         self._session = session
 
     async def synchronize(self, *, tolerate_changes=False) -> InventorySyncResult:
+        snapshot_started_at = datetime.now(UTC)
         collector = (
             InventoryCollector(self._client, tolerate_changes=True)
             if tolerate_changes
@@ -81,6 +82,7 @@ class InventorySyncService:
                 data,
                 incomplete_groups=incomplete_groups,
                 uncertain_missing=tolerate_changes,
+                snapshot_started_at=snapshot_started_at,
             )
             self._session.commit()
             return result
@@ -95,6 +97,7 @@ def sync_inventory(
     *,
     incomplete_groups: set[tuple[str, str]] | None = None,
     uncertain_missing: bool = False,
+    snapshot_started_at: datetime | None = None,
 ) -> InventorySyncResult:
     products = upsert_products(session, data.products)
     locations = upsert_locations(session, data.locations)
@@ -115,6 +118,7 @@ def sync_inventory(
         locations.by_code,
         incomplete_groups=incomplete_groups,
         uncertain_missing=uncertain_missing,
+        snapshot_started_at=snapshot_started_at,
     )
     _link_new_production_outputs(session, units.created_units)
     session.flush()

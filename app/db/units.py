@@ -1,11 +1,14 @@
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    CustodyEvent,
+    CustodyEventType,
     Location,
     Lot,
     ProductionInputUnit,
@@ -43,7 +46,11 @@ def get_unit_by_external_id(
 ) -> Unit | None:
     statement = select(Unit).where(Unit.external_unit_id == external_unit_id)
     if for_update:
-        statement = statement.with_for_update()
+        # Long-lived production sessions retain units and their old location
+        # relationship after commits. Refresh both before deciding a move is a noop.
+        statement = statement.with_for_update().execution_options(
+            populate_existing=True
+        )
     return session.scalar(statement)
 
 
@@ -55,6 +62,7 @@ def upsert_units(
     *,
     incomplete_groups: set[tuple[str, str]] | None = None,
     uncertain_missing: bool = False,
+    snapshot_started_at: datetime | None = None,
 ) -> UnitUpsertResult:
     records = tuple(records)
     units = {
@@ -67,6 +75,21 @@ def upsert_units(
         )
     }
     consumed_unit_ids = set(session.scalars(select(ProductionInputUnit.unit_id)))
+    # Unit locks above serialize persistence with confirmed local movements.
+    # A warehouse scan begun before a move cannot undo that newer location or
+    # mark the moved unit missing while walking between warehouses.
+    moved_since_snapshot = (
+        set(
+            session.scalars(
+                select(CustodyEvent.unit_id).where(
+                    CustodyEvent.event_type == CustodyEventType.MOVED,
+                    CustodyEvent.occurred_at >= snapshot_started_at,
+                )
+            )
+        )
+        if snapshot_started_at is not None
+        else set()
+    )
     affected = blocked_lots()
     blocked_lot_ids = set(session.scalars(select(affected.c.lot_id)))
     location_changes: list[UnitLocationChange] = []
@@ -97,6 +120,8 @@ def upsert_units(
             created += 1
             continue
 
+        if unit.id in moved_since_snapshot:
+            continue
         lot = (
             unit.lot
             if record.lot_external_id.startswith("unreported:")
@@ -143,6 +168,8 @@ def upsert_units(
     visible_ids = {record.external_unit_id for record in records}
     incomplete_groups = incomplete_groups or set()
     for external_id, unit in units.items():
+        if unit.id in moved_since_snapshot:
+            continue
         group = (unit.current_location.code, unit.lot.product.sku)
         if external_id not in visible_ids and group not in incomplete_groups:
             if unit.status in {

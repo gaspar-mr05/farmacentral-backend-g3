@@ -29,7 +29,10 @@ from app.schemas.farma_central import FarmaCentralProduct, FarmaCentralSpace
 from app.schemas.procurement import ProcurementDemand
 from app.services.inventory.sync import InventorySyncService
 from app.services.production.locking import ProductionBusyError, production_lock
-from app.services.production.orchestration import ProductionError
+from app.services.production.orchestration import (
+    ProductionError,
+    ProductionInputsUnavailableError,
+)
 from app.services.supply.procurement import ScarcityProcurementService
 from app.services.supply.requests import (
     ChallengeExpiredError,
@@ -656,6 +659,19 @@ class E3ReplenishmentService:
                 state.last_error = "Packaging busy; retry on the next turn"
                 result["deferred"] += 1
                 self.session.commit()
+            except ProductionInputsUnavailableError as exc:
+                self.session.rollback()
+                # This exception is raised before challenge/production requests.
+                state.pending_operation = None
+                state.last_error = str(exc)
+                state.next_retry_at = datetime.now(UTC) + timedelta(seconds=60)
+                self.session.commit()
+                result["deferred"] += 1
+                logger.warning(
+                    "Replenishment inputs unavailable: kit=%s missing=%s",
+                    state.sku,
+                    exc.missing_by_sku,
+                )
             except SQLAlchemyError:
                 self.session.rollback()
                 raise

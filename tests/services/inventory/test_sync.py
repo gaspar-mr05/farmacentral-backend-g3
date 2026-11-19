@@ -22,6 +22,7 @@ from app.models import (
     Unit,
 )
 from app.schemas.units import UnitData
+from app.services.custody.events import record_move
 from app.services.inventory.collection import InventoryCollector
 from app.services.inventory.sync import InventorySyncService
 
@@ -80,6 +81,51 @@ class FakeInventorySource:
         if self.include_batch:
             unit["batch"] = self.lot_id
         return [unit]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("missing_from_snapshot", [False, True])
+async def test_old_snapshot_cannot_undo_a_move_confirmed_during_collection(
+    db_session, missing_from_snapshot
+):
+    client = FakeInventorySource()
+    service = InventorySyncService(client, db_session)
+    await service.synchronize()
+    collect = service._collector.collect
+    # The movement worker can start its transaction before the snapshot starts.
+    with Session(db_session.get_bind()) as other:
+        unit = other.scalar(select(Unit).where(Unit.external_unit_id == client.unit_id))
+        destination = other.scalar(
+            select(Location).where(Location.code == client.store_2)
+        )
+        destination_id = destination.id
+        if missing_from_snapshot:
+            client.unit_store = None
+
+        async def collect_then_move():
+            snapshot = await collect()
+            record_move(other, unit=unit, to_location_id=destination_id)
+            other.commit()
+            client.unit_store = client.store_2
+            return snapshot
+
+        service._collector.collect = collect_then_move
+        result = await service.synchronize()
+
+    actual = db_session.scalar(
+        select(Unit).where(Unit.external_unit_id == client.unit_id)
+    )
+    assert actual.current_location_id == destination_id
+    assert actual.status == "available"
+    assert result.units.updated == 0
+    assert result.missing_unit_ids == ()
+
+    # A later, fresh inventory reading must still reconcile external moves.
+    service._collector.collect = collect
+    client.unit_store = client.store_1
+    await service.synchronize()
+    db_session.refresh(actual)
+    assert actual.current_location.code == client.store_1
 
 
 @pytest.mark.anyio

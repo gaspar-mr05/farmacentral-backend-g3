@@ -29,6 +29,7 @@ from app.schemas.trades import TradeOffer
 from app.services.inventory.sync import InventorySyncService
 from app.services.orders.processing import OrderProcessingService
 from app.services.production.locking import production_lock
+from app.services.production.orchestration import ProductionInputsUnavailableError
 from app.services.production.replenishment import E3ReplenishmentService
 from tests.models.test_e2_migration import migration_database as migration_database
 from tests.models.test_e2_migration import run_migration
@@ -173,6 +174,30 @@ def next_turn(session):
     for state in session.scalars(select(ReplenishmentState)):
         state.next_retry_at = None
     session.commit()
+
+
+@pytest.mark.anyio
+async def test_missing_staged_inputs_are_deferred_without_inventing_production(
+    db_session, monkeypatch, caplog
+):
+    pharmacy = Pharmacy()
+    pharmacy.receive("RAW", 1, store="STORE")
+    service = setup(db_session, pharmacy)
+    producing = AsyncMock(side_effect=ProductionInputsUnavailableError({"RAW": 1}))
+    monkeypatch.setattr("app.services.production.cooperative.produce", producing)
+
+    result = await service.poll()
+
+    state = db_session.scalar(select(ReplenishmentState))
+    assert result["failed"] == result["produced"] == 0
+    assert result["deferred"] == 1
+    assert state.pending_operation is None
+    assert state.estimated_spend == 0
+    assert "RAW: 1" in state.last_error
+    assert "kit=KIT-A missing={'RAW': 1}" in caplog.text
+    assert state.next_retry_at >= datetime.now(UTC) + timedelta(seconds=55)
+    assert pharmacy.posts == []
+    producing.assert_awaited_once()
 
 
 @pytest.mark.anyio
