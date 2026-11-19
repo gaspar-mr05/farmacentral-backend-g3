@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from app.clients.trades import TradesHTTPError
-from app.models import MarketOffer, ProcurementRequest
+from app.models import MarketOffer, ProcurementRequest, ReplenishmentState
 from app.schemas.procurement import ProcurementAction, ProcurementPlan
 from app.services.inventory.sync import EntityChanges, InventorySyncResult
 from app.services.supply.procurement import ScarcityProcurementService
@@ -509,6 +509,51 @@ async def test_accepted_unassigned_commitment_is_deducted_from_usable_stock(
     )
     quote = await source.preview(demand(sku=sku, quantity=3))
     assert quote.actions[0].quantity == 2
+
+
+@pytest.mark.anyio
+async def test_market_stocking_goal_is_not_a_customer_commitment(
+    db_session, monkeypatch
+):
+    period, storage, _, units = add_market_stock(db_session, quantity=3)
+    sku = units[0].lot.product.sku
+    db_session.add(
+        ReplenishmentState(
+            period_id=period.id,
+            sku="EXC-LACTOSA-DC",
+            goal={"kind": "market_stock", "quantity": 20},
+        )
+    )
+    db_session.commit()
+    inventory = Mock(
+        get_available_products=AsyncMock(
+            return_value=[product(sku).model_dump(by_alias=True)]
+        ),
+        get_spaces=AsyncMock(
+            return_value=[
+                {"_id": storage.code, "totalSpace": 100, "usedSpace": 3, "cold": True}
+            ]
+        ),
+    )
+    source = ScarcityProcurementService(
+        inventory,
+        Mock(list_offers=AsyncMock(return_value=[])),
+        Mock(),
+        Mock(get_current_prices=AsyncMock(return_value=[])),
+        db_session,
+        period,
+        tolerant_inventory=True,
+    )
+    monkeypatch.setattr(
+        "app.services.supply.procurement.InventorySyncService",
+        Mock(return_value=Mock(synchronize=AsyncMock())),
+    )
+
+    quote = await source.preview(
+        demand(sku=sku, quantity=3, includes_committed=True, priority=1)
+    )
+
+    assert quote.status == "ready"
 
 
 @pytest.mark.anyio

@@ -211,7 +211,7 @@ class ScarcityProcurementService:
                 )
             ):
                 goal = state.goal
-                if not goal:
+                if not goal or "deadline" not in goal or "quantity" not in goal:
                     continue
                 deadline = datetime.fromisoformat(goal["deadline"])
                 if (
