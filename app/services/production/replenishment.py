@@ -492,7 +492,7 @@ class E3ReplenishmentService:
                     offer_cache=offer_cache,
                 )
                 if using_pending_custody and (
-                    plan.status not in {"ready", "produce"} or plan.actions
+                    not self._can_advance_with_pending_custody(plan)
                 ):
                     raise ReplenishmentDeferred(
                         "Verified stock changed; keep custody and budget pending"
@@ -589,7 +589,10 @@ class E3ReplenishmentService:
                                 else None,
                             }
                             self.session.commit()
-                            if using_pending_custody:
+                            if (
+                                using_pending_custody
+                                and not self._can_advance_with_pending_custody(plan)
+                            ):
                                 raise ReplenishmentDeferred(
                                     "Verified stock changed; "
                                     "keep custody and budget pending"
@@ -842,11 +845,20 @@ class E3ReplenishmentService:
             snapshot=snapshot,
             offer_cache=offer_cache,
         )
-        if plan.status not in {"ready", "produce"} or plan.actions:
+        if not self._can_advance_with_pending_custody(plan):
             return False
         state.goal = goal
         self.session.commit()
         return True
+
+    @staticmethod
+    def _can_advance_with_pending_custody(plan):
+        # A closed purchase awaiting unit association must not block requesting
+        # other directly supplied ingredients. Keep its procurement link and
+        # cost reserved; a second market acquisition needs that same link.
+        return plan.status in {"ready", "produce"} and all(
+            action.kind == "direct" for action in plan.actions
+        )
 
     def _operation_ready(self, state, producer, now):
         op = state.pending_operation or {}

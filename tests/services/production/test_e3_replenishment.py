@@ -653,12 +653,18 @@ async def test_manufacturing_does_not_relocate_unrelated_receiving_stock(db_sess
         "quarantine",
         "budget",
         "stock_changed",
+        "other_input",
     ],
 )
 async def test_verified_recipe_can_proceed_without_fabricating_trade_custody(
     db_session, blocked
 ):
     pharmacy = Pharmacy()
+    if blocked == "other_input":
+        pharmacy.catalog["OTHER"] = product("OTHER", cost=1, time=0)
+        pharmacy.catalog["MID"] = product(
+            "MID", components=[("RAW", 1), ("OTHER", 1)], time=0
+        )
     if blocked != "missing_stock":
         pharmacy.receive("RAW", 1, store="STORE")
     service = setup(db_session, pharmacy)
@@ -743,6 +749,16 @@ async def test_verified_recipe_can_proceed_without_fabricating_trade_custody(
         assert pharmacy.posts == [("MID", 1), ("KIT-A", 1)]
         assert state.estimated_spend == 2  # Manufacturing only; purchase still held.
         assert any(u["sku"] == "KIT-A" for u in pharmacy.units.values())
+    elif blocked == "other_input":
+        assert first["supplied"] == 1
+        assert first["produced"] == first["failed"] == 0
+        assert pharmacy.posts == [("OTHER", 1)]
+        assert state.pending_operation["kind"] == "supply"
+        assert state.pending_operation["sku"] == "OTHER"
+        # Recovery and subsequent manufacturing preserve the original purchase.
+        next_turn(db_session)
+        await service.poll()
+        assert pharmacy.posts == [("OTHER", 1), ("MID", 1)]
     else:
         assert first["produced"] == first["supplied"] == 0
         assert pharmacy.posts == []
@@ -758,6 +774,14 @@ async def test_verified_recipe_can_proceed_without_fabricating_trade_custody(
     )
     service.sourcing.trades.create_offer.assert_not_awaited()
     service.sourcing.trades.accept_offer.assert_not_called()
+
+
+@pytest.mark.parametrize("kind", ["bid", "accept"])
+def test_pending_custody_does_not_allow_another_market_acquisition(kind):
+    plan = Mock(status="produce", actions=[Mock(kind=kind)])
+    assert not E3ReplenishmentService._can_advance_with_pending_custody(plan)
+    plan.actions = [Mock(kind="direct"), Mock(kind=kind)]
+    assert not E3ReplenishmentService._can_advance_with_pending_custody(plan)
 
 
 @pytest.mark.anyio
