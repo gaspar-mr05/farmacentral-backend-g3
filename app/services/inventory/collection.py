@@ -84,7 +84,7 @@ class InventoryCollector:
                 observed = _parse_list(payload, FarmaCentralUnit, "space products")
                 try:
                     _validate_units(space, item, observed)
-                    return observed, item.quantity > len(observed) or attempt > 0
+                    return observed, item.quantity > len(observed), attempt > 0
                 except InventorySnapshotChangedError:
                     if not self._tolerate_changes:
                         raise
@@ -94,7 +94,7 @@ class InventoryCollector:
                             item.sku,
                             space.external_id,
                         )
-                        return [], True
+                        return [], False, True
                     current = _parse_list(
                         await self._read(
                             self._client.get_space_inventory, space.external_id
@@ -113,15 +113,14 @@ class InventoryCollector:
         )
         units = []
         incomplete_groups = set()
-        for (space, item), (observed, incomplete) in zip(
+        for (space, item), (observed, truncated, unstable) in zip(
             requests, results, strict=True
         ):
             units.extend(observed)
-            if incomplete:
-                if self._tolerate_changes:
-                    incomplete_groups.update((s.external_id, item.sku) for s in spaces)
-                else:
-                    incomplete_groups.add((space.external_id, item.sku))
+            if unstable and self._tolerate_changes:
+                incomplete_groups.update((s.external_id, item.sku) for s in spaces)
+            elif truncated or unstable:
+                incomplete_groups.add((space.external_id, item.sku))
         by_id = {}
         ambiguous = set()
         for unit in units:

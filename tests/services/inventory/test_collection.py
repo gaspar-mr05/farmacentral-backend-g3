@@ -49,6 +49,25 @@ async def test_collection_marks_groups_larger_than_api_limit_as_incomplete() -> 
 
 
 @pytest.mark.anyio
+async def test_large_group_does_not_make_other_spaces_incomplete() -> None:
+    class MultipleSpaces(LargeInventoryClient):
+        async def get_spaces(self):
+            return [{"_id": "BUFFER", "buffer": True}, {"_id": "DISPATCH"}]
+
+        async def get_space_inventory(self, store_id):
+            if store_id == "DISPATCH":
+                return []
+            return await super().get_space_inventory(store_id)
+
+    _, _, units, incomplete_groups = await InventoryCollector(
+        MultipleSpaces(), tolerate_changes=True
+    ).collect()
+
+    assert len(units) == 200
+    assert incomplete_groups == {("BUFFER", "RAW-1")}
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("change", ["count", "sku", "space"])
 async def test_collection_distinguishes_changed_counts_from_invalid_origin(change):
     class ChangedInventory(LargeInventoryClient):

@@ -432,9 +432,12 @@ class TradeCustodyService:
         if sync is None:
             return False
         complete = getattr(sync, "inventory_complete", False) is True
-        if not complete and trade.sku not in getattr(
-            sync, "complete_skus", frozenset()
-        ):
+        sku_complete = trade.sku in getattr(sync, "complete_skus", frozenset())
+        reserved_origin_complete = (
+            trade.role == MarketRole.SELLER
+            and self._reserved_origin_groups_complete(trade, sync)
+        )
+        if not complete and not sku_complete and not reserved_origin_complete:
             logger.info(
                 "Market custody deferred: order_id=%s sku=%s "
                 "reason=incomplete_inventory",
@@ -474,6 +477,30 @@ class TradeCustodyService:
             len(candidate_ids),
         )
         return True
+
+    def _reserved_origin_groups_complete(
+        self, trade: MarketTrade, sync: "InventorySyncResult"
+    ) -> bool:
+        offer = self._get_offer(trade.external_offer_id)
+        active = [
+            reservation
+            for reservation in offer.reservations
+            if reservation.released_at is None
+        ]
+        if (
+            offer.sku != trade.sku
+            or offer.quantity != trade.quantity
+            or len(active) != trade.quantity
+            or any(
+                reservation.unit.status != "trade_reserved" for reservation in active
+            )
+        ):
+            return False
+        incomplete = getattr(sync, "incomplete_groups", frozenset())
+        return all(
+            (reservation.unit.current_location.code, trade.sku) not in incomplete
+            for reservation in active
+        )
 
     def _reserved_missing_unit_ids(
         self, trade: MarketTrade, missing_external_ids: Sequence[str]

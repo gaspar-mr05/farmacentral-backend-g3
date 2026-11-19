@@ -38,6 +38,7 @@ class InventorySyncResult:
     created_unit_ids: tuple[str, ...] = ()
     missing_unit_ids: tuple[str, ...] = ()
     complete_skus: frozenset[str] = frozenset()
+    incomplete_groups: frozenset[tuple[str, str]] = frozenset()
 
 
 class InventorySyncService:
@@ -143,6 +144,7 @@ def sync_inventory(
             for product in data.products
             if data.locations and product.sku not in incomplete_skus
         ),
+        incomplete_groups=frozenset(incomplete_groups or ()),
     )
 
 

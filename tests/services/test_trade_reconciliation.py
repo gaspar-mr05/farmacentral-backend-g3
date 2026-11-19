@@ -393,6 +393,35 @@ async def test_complete_sku_inventory_confirms_seller_custody(db_session, monkey
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("origin_incomplete", [False, True])
+async def test_seller_custody_uses_complete_dispatch_group_when_buffer_is_truncated(
+    db_session, monkeypatch, origin_incomplete
+):
+    period, dispatch, units, closed = await published_sale(db_session)
+    incomplete_code = dispatch.code if origin_incomplete else "OTHER-BUFFER"
+    snapshot = InventorySyncResult(
+        products=EntityChanges(),
+        locations=EntityChanges(),
+        lots=EntityChanges(),
+        units=EntityChanges(),
+        inventory_complete=False,
+        incomplete_groups=frozenset({(incomplete_code, closed.sku)}),
+        missing_unit_ids=tuple(u.external_unit_id for u in units[:2]),
+    )
+    monkeypatch.setattr(
+        "app.services.trades.reconciliation.InventorySyncService",
+        Mock(return_value=Mock(synchronize=AsyncMock(return_value=snapshot))),
+    )
+
+    result = await reconciler(
+        db_session, period, dispatch, closed, order_source=OwnSaleOrders(closed)
+    ).poll()
+
+    assert result["closed"] == int(not origin_incomplete)
+    assert result["custody_pending"] == int(origin_incomplete)
+
+
+@pytest.mark.anyio
 async def test_buy_receipt_does_not_wait_for_supplier_invoice(db_session, monkeypatch):
     period, dispatch, units, closed = await published_sale(db_session)
     offer = db_session.scalar(select(MarketOffer))
