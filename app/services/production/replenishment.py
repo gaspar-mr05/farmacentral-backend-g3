@@ -250,6 +250,7 @@ class E3ReplenishmentService:
                         state.last_attempt_at,
                         goal_quantity - stock,
                         kit.sku,
+                        resume_ready=self._operation_ready(state, producer, now),
                     ),
                     state,
                     desired_quantity,
@@ -449,7 +450,8 @@ class E3ReplenishmentService:
                     raise ReplenishmentDeferred(
                         "Previous replenishment goal expired; recompute demand"
                     )
-                # Put actual receipts/finished outputs into sellable storage first.
+                # Put finished kits into sellable storage; recipe inputs can
+                # move directly from reception to packaging when staged.
                 with production_lock(self.session):
                     pending_run = self.session.scalar(
                         select(ProductionRun.id)
@@ -458,7 +460,8 @@ class E3ReplenishmentService:
                     )
                     await producer.put_away(
                         include_packaging=pending_run is None
-                        and not producer._unknown_production()
+                        and not producer._unknown_production(),
+                        receiving_skus=(state.sku,),
                     )
                 if producer._usable_stock(state.sku, 0) >= goal["quantity"]:
                     state.goal = None
@@ -719,6 +722,30 @@ class E3ReplenishmentService:
             ):
                 break
         return result
+
+    def _operation_ready(self, state, producer, now):
+        op = state.pending_operation or {}
+        if op.get("status") != "confirmed":
+            return False
+        if op["kind"] == "produce":
+            run = self.session.scalar(
+                select(ProductionRun).where(
+                    ProductionRun.operation_key == UUID(op["key"])
+                )
+            )
+            return bool(
+                run and run.completed_at is not None and run.output_lot_id is not None
+            )
+        return (
+            datetime.fromisoformat(op["available_at"]) <= now
+            and supply_resume_basis(
+                self.session,
+                self.period,
+                op,
+                usable_count=len(producer._available_units(op["sku"])),
+            )
+            is not None
+        )
 
     async def _resume_operation(self, state, producer):
         op = state.pending_operation

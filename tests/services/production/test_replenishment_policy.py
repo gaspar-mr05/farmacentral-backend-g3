@@ -63,3 +63,12 @@ def test_same_priority_gives_other_kits_a_turn_without_overriding_urgent_orders(
     urgent = schedule_key(2, now + timedelta(minutes=5), now, 1, "KIT-C")
     accepted = schedule_key(0, deadline, now, 1, "KIT-D")
     assert accepted < urgent < untouched < recent
+
+
+def test_ready_operation_gets_a_turn_before_new_demand_but_after_accepted_orders():
+    now = datetime.now(UTC)
+    deadline = now + timedelta(hours=1)
+    confirmed = schedule_key(2, deadline, now, 1, "KIT-A", resume_ready=True)
+    waiting = schedule_key(1, deadline, None, 1, "KIT-B")
+    accepted = schedule_key(0, deadline, now, 1, "KIT-C")
+    assert accepted < confirmed < waiting

@@ -10,9 +10,11 @@ from sqlalchemy import and_, or_, select
 
 from app.models import (
     Location,
+    Lot,
     MarketOffer,
     MarketOfferReservation,
     MarketOfferSide,
+    Product,
     ProductionRun,
     ReplenishmentState,
     Unit,
@@ -92,9 +94,9 @@ class CooperativeKitProduction(KitProductionService):
             raise SupplyNeeded(sku)
 
     async def _clear_packaging(self):
-        await self.put_away(include_packaging=True)
+        await self.put_away(include_packaging=True, receiving_skus=())
 
-    async def put_away(self, *, include_packaging=False):
+    async def put_away(self, *, include_packaging=False, receiving_skus=None):
         # Remote capacities are refreshed; confirmed moves update the local ledger.
         spaces = TypeAdapter(list[FarmaCentralSpace]).validate_python(
             await self._client.get_spaces()
@@ -115,6 +117,15 @@ class CooperativeKitProduction(KitProductionService):
         free = {
             s.external_id: max(0, s.total_space - s.used_space) for s in destinations
         }
+        eligible_source = Location.code.in_(sources)
+        if receiving_skus is not None:
+            # Components can be staged directly from reception. Move finished
+            # kits into sellable storage and clear packaging, without relocating
+            # hundreds of unrelated inputs before a manufacturing turn.
+            eligible_source &= or_(
+                Location.code == self._packaging_code,
+                Unit.lot.has(Lot.product.has(Product.sku.in_(receiving_skus))),
+            )
         units = self._session.scalars(
             select(Unit)
             .join(Location)
@@ -125,7 +136,7 @@ class CooperativeKitProduction(KitProductionService):
                     MarketOfferReservation.released_at.is_(None)
                 ),
                 Unit.lot_id.not_in(select(blocked_lots().c.lot_id)),
-                Location.code.in_(sources),
+                eligible_source,
                 Unit.effective_expires_at > datetime.now(UTC),
             )
             .order_by(Unit.effective_expires_at, Unit.id)

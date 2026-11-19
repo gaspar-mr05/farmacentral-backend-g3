@@ -54,12 +54,14 @@ def stock_targets(
     return min(200, lower), min(200, upper)
 
 
-def schedule_key(priority, deadline, last_attempt, missing, sku):
+def schedule_key(priority, deadline, last_attempt, missing, sku, *, resume_ready=False):
     urgent = deadline is not None and deadline <= datetime.now(UTC) + timedelta(
         minutes=15
     )
     return (
-        priority,
+        # Accepted orders stay first. Recover ready operations before opening
+        # more procurement, including buffers already waiting on paid inputs.
+        0 if priority == 0 else 1 if resume_ready else priority + 1,
         not urgent,
         last_attempt or datetime.min.replace(tzinfo=UTC),
         deadline or datetime.max.replace(tzinfo=UTC),

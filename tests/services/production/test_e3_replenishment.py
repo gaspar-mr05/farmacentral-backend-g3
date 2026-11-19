@@ -497,6 +497,98 @@ async def test_multilevel_production_resumes_without_waiting_and_preserves_linea
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "supply_status,available_hours,ready",
+    [("confirmed", -1, True), ("confirmed", 1, False), ("uncertain", -1, False)],
+)
+async def test_ready_buffer_supply_is_resumed_despite_three_other_pending_orders(
+    db_session, supply_status, available_hours, ready
+):
+    pharmacy = Pharmacy()
+    pharmacy.catalog["OTHER-RAW"] = product("OTHER-RAW", cost=1, time=0)
+    for sku in ("KIT-B", "KIT-C", "KIT-D"):
+        pharmacy.catalog[sku] = product(sku, components=[("OTHER-RAW", 1)], time=0)
+    pharmacy.receive("RAW", 1, store="STORE")
+    service = setup(db_session, pharmacy)
+    now = datetime.now(UTC)
+    state = ReplenishmentState(
+        period_id=service.period.id,
+        sku="KIT-A",
+        minimum=1,
+        target=1,
+        goal={
+            "sku": "KIT-A",
+            "quantity": 1,
+            "deadline": (now + timedelta(hours=4)).isoformat(),
+            "priority": 2,
+            "revenue": "10",
+            "spend_started": "0",
+        },
+        pending_operation={
+            "kind": "supply",
+            "key": str(uuid4()),
+            "sku": "RAW",
+            "quantity": 1,
+            "needed": 1,
+            "status": supply_status,
+            "available_at": (now + timedelta(hours=available_hours)).isoformat(),
+            "cost": "1",
+        },
+    )
+    db_session.add(state)
+    for index, sku in enumerate(("KIT-B", "KIT-C", "KIT-D")):
+        db_session.add(
+            make_external_order(
+                external_order_id=f"{index:024x}",
+                items=[OrderItem(sku=sku, quantity=1, unit_price=10)],
+                delivery_deadline=now + timedelta(hours=1),
+            )
+        )
+    db_session.commit()
+
+    result = await service.poll()
+
+    if ready:
+        assert result["kits"][0]["sku"] == "KIT-A"
+        assert result["produced"] == 1
+        assert state.estimated_spend == 1
+        assert state.pending_operation["kind"] == "produce"
+        assert pharmacy.posts == [("MID", 1)]
+    else:
+        assert result["kits"][0]["sku"] != "KIT-A"
+        assert state.estimated_spend == 0
+        assert state.pending_operation["kind"] == "supply"
+        assert state.pending_operation["status"] == supply_status
+
+
+@pytest.mark.anyio
+async def test_manufacturing_does_not_relocate_unrelated_receiving_stock(db_session):
+    pharmacy = Pharmacy()
+    pharmacy.catalog["UNRELATED"] = product("UNRELATED", cost=1, time=0)
+    pharmacy.receive("UNRELATED", 200)
+    pharmacy.receive("RAW", 1)
+    service = setup(db_session, pharmacy)
+    pharmacy.move_product = AsyncMock(wraps=pharmacy.move_product)
+
+    first = await service.poll()
+    next_turn(db_session)
+    second = await service.poll()
+    next_turn(db_session)
+    await service.poll()
+
+    assert first["produced"] == second["produced"] == 1
+    assert pharmacy.posts == [("MID", 1), ("KIT-A", 1)]
+    assert all(
+        unit["store"] == "RECEIVE"
+        for unit in pharmacy.units.values()
+        if unit["sku"] == "UNRELATED"
+    )
+    assert pharmacy.move_product.await_count < 10
+    kits = [u for u in pharmacy.units.values() if u["sku"] == "KIT-A"]
+    assert len(kits) == 1 and kits[0]["store"] in {"STORE", "BUFFER"}
+
+
+@pytest.mark.anyio
 async def test_restricted_input_publishes_one_bid_without_direct_request(
     migration_database,
 ):
