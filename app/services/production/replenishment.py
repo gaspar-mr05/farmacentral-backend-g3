@@ -201,6 +201,7 @@ class E3ReplenishmentService:
                 prices.get(kit.sku),
                 now,
                 preferred_order_id=(state.goal or {}).get("order_id"),
+                preferred_order_ids=(state.goal or {}).get("order_ids"),
             )
             if (
                 state.goal
@@ -968,7 +969,8 @@ class E3ReplenishmentService:
             return False  # Do not abandon accepted or unresolved remote work.
         _, _, prices = snapshot
         tried = 0
-        for item, quantity in self._order_demands(state.sku, datetime.now(UTC)):
+        demands = self._order_demands(state.sku, datetime.now(UTC))
+        for index, (item, _) in enumerate(demands):
             if (
                 item.order.status != OrderStatus.RECEIVED
                 or item.order.delivery_deadline is None
@@ -979,11 +981,24 @@ class E3ReplenishmentService:
                 deadline = min(deadline, self.period.ends_at)
             if deadline <= datetime.fromisoformat(goal["deadline"]):
                 continue
+            quantity = 0
+            revenue = Decimal(0)
+            order_ids = []
+            for later_item, missing in demands[index:]:
+                if later_item.order.status != OrderStatus.RECEIVED:
+                    continue
+                take = min(missing, 200 - quantity)
+                if take <= 0:
+                    break
+                quantity += take
+                revenue += later_item.unit_price * take
+                order_ids.append(str(later_item.order_id))
             candidate = goal | {
                 "order_id": str(item.order_id),
-                "quantity": min(200, quantity),
+                "order_ids": order_ids,
+                "quantity": quantity,
                 "deadline": deadline.isoformat(),
-                "revenue": str(item.unit_price * min(200, quantity)),
+                "revenue": str(revenue),
             }
             demand = self._procurement_demand(state, candidate, room, prices)
             plan = await self.sourcing.preview(
@@ -1050,29 +1065,45 @@ class E3ReplenishmentService:
             ),
         )
 
-    def _demand(self, sku, price, now, *, preferred_order_id=None):
+    def _demand(
+        self,
+        sku,
+        price,
+        now,
+        *,
+        preferred_order_id=None,
+        preferred_order_ids=None,
+    ):
         selected = self._order_demands(sku, now)
         if selected:
-            if (
-                selected[0][0].order.status == OrderStatus.RECEIVED
-                and preferred_order_id
-            ):
+            if selected[0][0].order.status == OrderStatus.RECEIVED:
+                wanted = set(preferred_order_ids or [])
+                if not wanted and preferred_order_id:
+                    wanted.add(preferred_order_id)
                 preferred = [
-                    pair
-                    for pair in selected
-                    if str(pair[0].order_id) == preferred_order_id
+                    pair for pair in selected if str(pair[0].order_id) in wanted
                 ]
                 if preferred:
                     selected = preferred
-            # Keep the selected order's own price and deadline; never extend
-            # another customer's promise to justify a purchase.
-            item, quantity = selected[0]
-            quantity = min(quantity, 200)
+            # A production turn has a mostly fixed lead time. Consolidate all
+            # demand at the same priority so one recipe run can cover the
+            # waiting queue instead of rebuilding the same component chain for
+            # every individual order. The nearest deadline remains the bound;
+            # later promises never extend the earliest customer's deadline.
+            quantity = 0
+            revenue = Decimal(0)
+            for item, missing in selected:
+                take = min(missing, 200 - quantity)
+                if take <= 0:
+                    break
+                quantity += take
+                revenue += item.unit_price * take
+            first = selected[0][0]
             return (
                 quantity,
-                item.order.delivery_deadline,
-                item.unit_price * quantity,
-                1 if item.order.status == OrderStatus.RECEIVED else 0,
+                first.order.delivery_deadline,
+                revenue,
+                1 if first.order.status == OrderStatus.RECEIVED else 0,
             )
         return (
             0,

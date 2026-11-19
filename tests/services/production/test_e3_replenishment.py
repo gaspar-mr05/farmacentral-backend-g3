@@ -936,6 +936,37 @@ async def test_partial_component_stock_is_completed_instead_of_restarting_recipe
         ], totals
 
 
+def test_waiting_orders_for_one_sku_are_aggregated_into_one_demand(db_session):
+    pharmacy = Pharmacy()
+    now = datetime.now(UTC)
+    service = setup(db_session, pharmacy)
+    orders = []
+    for index, (quantity, hours) in enumerate(((1, 1), (2, 2), (1, 3))):
+        order = make_external_order(
+            external_order_id=f"{index:024x}",
+            items=[OrderItem(sku="KIT-A", quantity=quantity, unit_price=10)],
+            delivery_deadline=now + timedelta(hours=hours),
+        )
+        orders.append(order)
+        db_session.add(order)
+    db_session.commit()
+
+    quantity, deadline, revenue, priority = service._demand("KIT-A", Decimal(10), now)
+
+    assert quantity == 4
+    assert deadline == now + timedelta(hours=1)
+    assert revenue == 40
+    assert priority == 1
+
+    grouped = service._demand(
+        "KIT-A",
+        Decimal(10),
+        now,
+        preferred_order_ids=[str(orders[1].id), str(orders[2].id)],
+    )
+    assert grouped == (3, now + timedelta(hours=2), Decimal(30), 1)
+
+
 @pytest.mark.anyio
 async def test_infeasible_waiting_order_does_not_block_later_viable_demand(
     migration_database,
