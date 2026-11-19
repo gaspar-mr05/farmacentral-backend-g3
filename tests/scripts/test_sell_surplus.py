@@ -33,6 +33,17 @@ def test_market_stocking_requires_explicit_flag(monkeypatch):
     assert runner.await_args.kwargs["policy"].stock_market is True
 
 
+def test_production_lock_contention_retries_sooner():
+    assert (
+        module.next_delay(
+            120,
+            {"reason": "Producer currently holds the packaging lock"},
+        )
+        == 30
+    )
+    assert module.next_delay(120, {"reason": "Market stocking receipt pending"}) == 120
+
+
 def test_policy_cannot_disable_operational_buffers(monkeypatch):
     monkeypatch.setattr(module, "get_settings", lambda: make_settings())
     monkeypatch.setattr("sys.argv", ["sell_surplus", "--kit-buffer", "0"])

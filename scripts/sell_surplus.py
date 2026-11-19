@@ -22,6 +22,13 @@ from app.services.trades.periods import market_period
 from app.services.trades.surplus import SurplusSalesService
 
 logger = logging.getLogger(__name__)
+PRODUCTION_BUSY_REASON = "Producer currently holds the packaging lock"
+
+
+def next_delay(interval, result):
+    if result.get("reason") == PRODUCTION_BUSY_REASON:
+        return min(interval, 30)
+    return interval
 
 
 async def run(*, period_id=None, execute=False, once=False, interval=60, policy=None):
@@ -70,6 +77,7 @@ async def run(*, period_id=None, execute=False, once=False, interval=60, policy=
                         if result["failed"]:
                             raise SystemExit(1)
                         return
+                    delay = next_delay(interval, result)
             await asyncio.sleep(delay)
 
 
