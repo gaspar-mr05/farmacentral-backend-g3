@@ -328,12 +328,16 @@ class ScarcityProcurementService:
         if missing_skus:
             listed = await self.trades.list_offers(side="sell", state="open")
             if len(listed) < 200:
-                offers = {
-                    sku: [offer for offer in listed if offer.sku == sku]
-                    for sku in missing_skus
-                }
+                # A short unfiltered response is the complete public book. Cache
+                # empty entries too so other recipes in this replenishment cycle
+                # do not repeat the same remote read for different SKUs.
+                complete_book = {sku: [] for sku in catalog}
+                for offer in listed:
+                    if offer.sku in complete_book:
+                        complete_book[offer.sku].append(offer)
                 if offer_cache is not None:
-                    offer_cache.update(offers)
+                    offer_cache.update(complete_book)
+                offers = {sku: complete_book[sku] for sku in skus}
         for sku in sorted(skus):
             if sku in offers:
                 continue

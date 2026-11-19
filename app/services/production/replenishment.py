@@ -265,6 +265,10 @@ class E3ReplenishmentService:
                 )
             )
         self.session.commit()
+        # A complete public offer book and the inventory/catalog snapshot remain
+        # valid until this cycle performs a market or packaging mutation. Direct
+        # supplies do not change either, so later recipes can reuse the quotes.
+        offer_cache = {}
         for _, state, quantity, deadline, revenue, priority in sorted(
             candidates, key=lambda c: c[0]
         )[:3]:
@@ -277,7 +281,6 @@ class E3ReplenishmentService:
             self.session.commit()
             producer = self._producer(state, catalog, spaces)
             previous_operation_key = (state.pending_operation or {}).get("key")
-            offer_cache = {}
             using_pending_custody = False
             try:
                 if await self._resume_operation(state, producer):
@@ -781,7 +784,6 @@ class E3ReplenishmentService:
                 )
             if (
                 result["produced"]
-                or result["supplied"]
                 or result["purchased"]
                 or (
                     state.pending_operation

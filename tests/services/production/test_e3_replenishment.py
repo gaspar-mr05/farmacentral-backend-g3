@@ -1008,6 +1008,42 @@ async def test_poll_reuses_its_inventory_snapshot_before_production(db_session):
     assert pharmacy.inventory_reads == len(pharmacy.spaces)
 
 
+@pytest.mark.anyio
+async def test_poll_supplies_independent_recipes_in_one_cycle(db_session):
+    pharmacy = Pharmacy()
+    pharmacy.catalog.update(
+        {
+            "RAW-B": product("RAW-B", cost=1, time=0),
+            "MID-B": product("MID-B", components=[("RAW-B", 1)], time=0),
+            "KIT-B": product("KIT-B", components=[("MID-B", 1)], time=0),
+        }
+    )
+    service = setup(db_session, pharmacy)
+    db_session.add_all(
+        [
+            make_external_order(
+                external_order_id="a" * 24,
+                status=OrderStatus.ACCEPTED,
+                items=[OrderItem(sku="KIT-A", quantity=1, unit_price=10)],
+            ),
+            make_external_order(
+                external_order_id="b" * 24,
+                status=OrderStatus.ACCEPTED,
+                items=[OrderItem(sku="KIT-B", quantity=1, unit_price=10)],
+            ),
+        ]
+    )
+    db_session.commit()
+
+    result = await service.poll()
+
+    assert result["supplied"] == 2, result
+    assert sorted(pharmacy.posts) == [("RAW", 1), ("RAW-B", 1)]
+    service.sourcing.trades.list_offers.assert_awaited_once_with(
+        side="sell", state="open"
+    )
+
+
 def test_waiting_orders_for_one_sku_are_aggregated_into_one_demand(db_session):
     pharmacy = Pharmacy()
     now = datetime.now(UTC)
