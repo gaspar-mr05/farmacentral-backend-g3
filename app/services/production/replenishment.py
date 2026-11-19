@@ -971,7 +971,6 @@ class E3ReplenishmentService:
         return True
 
     def _procurement_demand(self, state, goal, room, prices):
-        spent = state.estimated_spend - Decimal(goal.get("spend_started", "0"))
         priority = goal.get("priority", 2)
         loss_limit = (
             self.settings.replenishment_order_loss_limit if priority < 2 else Decimal(0)
@@ -985,8 +984,11 @@ class E3ReplenishmentService:
             quantity=goal["quantity"],
             deadline=goal["deadline"],
             expected_revenue=goal["revenue"],
-            other_costs=spent,
-            max_outlay=spent + min(room, max(Decimal(0), goal_limit - spent)),
+            # This quote describes the remaining recipe, not its historical
+            # purchases. Owned inputs already carry their consumption cost in
+            # the planner; spending_room accounts for all past/pending outlay.
+            # Charging cumulative spend again pins later orders to old costs.
+            max_outlay=min(room, goal_limit),
             minimum_margin=0 if priority < 2 else Decimal("0.10"),
             maximum_loss_fraction=loss_limit,
             includes_committed=True,

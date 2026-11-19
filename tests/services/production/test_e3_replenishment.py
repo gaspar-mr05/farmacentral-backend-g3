@@ -330,6 +330,53 @@ async def test_ready_recipe_stage_does_not_replace_a_planned_intermediate_purcha
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("room", [0, 1, 20])
+async def test_old_goal_spending_does_not_charge_remaining_recipe_twice(
+    db_session, room
+):
+    pharmacy = Pharmacy()
+    service = setup(db_session, pharmacy)
+    service.settings.replenishment_spending_limit = Decimal(100 + room)
+    order = make_external_order(
+        items=[OrderItem(sku="KIT-A", quantity=1, unit_price=10)],
+    )
+    db_session.add(order)
+    db_session.flush()
+    state = ReplenishmentState(
+        period_id=service.period.id,
+        sku="KIT-A",
+        minimum=1,
+        target=1,
+        estimated_spend=100,
+        goal={
+            "sku": "KIT-A",
+            "quantity": 1,
+            "deadline": order.delivery_deadline.isoformat(),
+            "revenue": "10",
+            "priority": 1,
+            "spend_started": "0",
+        },
+    )
+    db_session.add(state)
+    db_session.commit()
+
+    result = await service.poll()
+
+    assert result["failed"] == 0
+    assert state.estimated_spend == 100  # Past expenses remain fully charged globally.
+    assert result["supplied"] == (1 if room == 20 else 0)
+    if room == 20:
+        assert pharmacy.posts == [("RAW", 1)]
+        assert state.pending_operation["cost"] == "1"
+        assert state.goal["budget"]["remaining"] == "20"
+    else:
+        assert pharmacy.posts == []
+        assert state.pending_operation is None
+    service.sourcing.trades.create_offer.assert_not_awaited()
+    service.sourcing.trades.accept_offer.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_ready_stage_is_not_manufactured_when_full_recipe_exceeds_budget(
     migration_database,
 ):
