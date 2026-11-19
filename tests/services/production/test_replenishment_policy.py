@@ -72,3 +72,30 @@ def test_ready_operation_gets_a_turn_before_new_demand_but_after_accepted_orders
     waiting = schedule_key(1, deadline, None, 1, "KIT-B")
     accepted = schedule_key(0, deadline, now, 1, "KIT-C")
     assert accepted < confirmed < waiting
+
+
+def test_long_waiting_recipe_gets_turn_ahead_of_repeated_urgent_new_orders():
+    now = datetime.now(UTC)
+    starved = schedule_key(
+        1, now + timedelta(hours=2), now - timedelta(minutes=20), 2, "ATB"
+    )
+    urgent = schedule_key(1, now + timedelta(minutes=5), now, 1, "OTHER")
+    accepted = schedule_key(0, now + timedelta(hours=2), now, 1, "ACCEPTED")
+    recovering = schedule_key(
+        2, now + timedelta(hours=2), now, 1, "READY", resume_ready=True
+    )
+    assert accepted < recovering < starved < urgent
+    # After receiving a turn it gives way to the urgent demand again.
+    retried = schedule_key(1, now + timedelta(hours=2), now, 2, "ATB")
+    assert urgent < retried
+    old_urgent = schedule_key(
+        1, now + timedelta(minutes=5), now - timedelta(minutes=12), 1, "OLD-URGENT"
+    )
+    assert starved < old_urgent
+
+
+def test_aging_does_not_reorder_accepted_order_deadlines():
+    now = datetime.now(UTC)
+    old = schedule_key(0, now + timedelta(hours=2), now - timedelta(minutes=30), 1, "A")
+    urgent = schedule_key(0, now + timedelta(minutes=5), now, 1, "B")
+    assert urgent < old
