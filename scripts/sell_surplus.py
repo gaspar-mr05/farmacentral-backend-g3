@@ -94,6 +94,7 @@ def main():
         "--sku", action="append", help="Override the three default direct-access inputs"
     )
     parser.add_argument("--lot-size", type=int, default=20)
+    parser.add_argument("--target-sales", type=int, default=30)
     parser.add_argument(
         "--kit-buffer", type=int, default=settings.replenishment_minimum_stock
     )
@@ -111,6 +112,7 @@ def main():
     try:
         options = dict(
             lot_size=args.lot_size,
+            target_sales=args.target_sales,
             kit_buffer=args.kit_buffer,
             raw_buffer_batches=args.raw_buffer_batches,
             minimum_margin=args.minimum_margin,

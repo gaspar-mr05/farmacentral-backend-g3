@@ -10,6 +10,7 @@ from app.models import (
     Lot,
     LotOrigin,
     MarketOffer,
+    MarketRole,
     MarketTrade,
     Order,
     OrderItem,
@@ -344,6 +345,76 @@ async def test_preview_and_publication_keep_buffer_and_never_duplicate_open_offe
     assert again["published"] == 0
     assert service.trades.create_offer.await_count == 1
     assert sum(u.status == "available" for u in units) == 7
+
+
+@pytest.mark.anyio
+async def test_sales_target_counts_pending_offer_before_publishing_another(
+    db_session, monkeypatch
+):
+    service, _, _, _ = setup_sales(db_session, monkeypatch)
+    service.policy = service.policy.model_copy(update={"target_sales": 1})
+    assert (await service.cycle(execute=True))["published"] == 1
+    local = db_session.scalar(select(MarketOffer))
+    service.trades.get_offer.return_value = official_offer(
+        sku=local.sku, quantity=local.quantity
+    ).model_copy(
+        update={
+            "id": local.external_offer_id,
+            "unit_price": local.unit_price,
+        }
+    )
+
+    result = await service.cycle(execute=True)
+
+    assert result["reason"] == "Sales participation target reached or pending"
+    assert result["participation"]["target_per_role"] == 1
+    assert service.trades.create_offer.await_count == 1
+
+
+@pytest.mark.anyio
+async def test_known_closed_trade_is_left_to_reconciler_without_extra_scan(
+    db_session, monkeypatch
+):
+    service, _, _, _ = setup_sales(db_session, monkeypatch)
+    service.policy = service.policy.model_copy(update={"target_sales": 1})
+    await service.cycle(execute=True)
+    local = db_session.scalar(select(MarketOffer))
+    now = datetime.now(UTC)
+    local.status = "closed"
+    local.external_order_id = "b" * 24
+    local.counterparty_group_id = 5
+    db_session.add(
+        MarketTrade(
+            period_id=service.period.id,
+            external_offer_id=local.external_offer_id,
+            external_order_id=local.external_order_id,
+            role=MarketRole.SELLER,
+            counterparty_id="5",
+            sku=local.sku,
+            quantity=local.quantity,
+            unit_price=local.unit_price,
+            closed_at=now,
+        )
+    )
+    db_session.commit()
+    synchronize = AsyncMock(
+        return_value=InventorySyncResult(
+            products=EntityChanges(),
+            locations=EntityChanges(),
+            lots=EntityChanges(),
+            units=EntityChanges(),
+        )
+    )
+    monkeypatch.setattr(
+        "app.services.trades.surplus.InventorySyncService",
+        Mock(return_value=Mock(synchronize=synchronize)),
+    )
+
+    result = await service.cycle(execute=True)
+
+    assert result["reason"] == "Sales participation target reached or pending"
+    service.trades.get_offer.assert_not_awaited()
+    synchronize.assert_awaited_once()
 
 
 @pytest.mark.anyio

@@ -7,6 +7,7 @@ from app.core.scarcity import GROUP3_DIRECT
 
 class SurplusPolicy(BaseModel):
     skus: tuple[str, ...] = tuple(sorted(GROUP3_DIRECT))
+    target_sales: int = Field(default=30, ge=1, le=100)
     kit_buffer: int = Field(default=2, ge=1)
     raw_buffer_batches: int = Field(default=1, ge=1)
     lot_size: int = Field(default=20, ge=1, le=100)

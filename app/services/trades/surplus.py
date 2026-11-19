@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.clients.farma_central import FarmaCentralHTTPError
 from app.clients.trades import TradesHTTPError
 from app.models import (
+    CustodyEvent,
     Invoice,
     InvoiceSide,
     InvoiceStatus,
@@ -294,10 +295,21 @@ class SurplusSalesService:
         return {
             "purchases": roles.count(MarketRole.BUYER),
             "sales": roles.count(MarketRole.SELLER),
-            "target_per_role": 30,
+            "target_per_role": self.policy.target_sales,
             "sales_invoiced": invoiced,
             "sales_paid": paid,
         }
+
+    def _pending_sales(self):
+        return self.session.scalar(
+            select(func.count())
+            .select_from(MarketOffer)
+            .where(
+                MarketOffer.period_id == self.period.id,
+                MarketOffer.strategy == STRATEGY,
+                MarketOffer.status.not_in(TERMINAL),
+            )
+        )
 
     def _stocking_states(self):
         rows = self.session.scalars(
@@ -392,7 +404,7 @@ class SurplusSalesService:
             result["deferred"] += 1
             result["reason"] = "Market stocking receipt pending"
             return True
-        if self.participation()["sales"] >= 30:
+        if self.participation()["sales"] >= self.policy.target_sales:
             return False
 
         now = datetime.now(UTC)
@@ -523,6 +535,7 @@ class SurplusSalesService:
 
     async def _refresh_managed(self):
         now = datetime.now(UTC)
+        pending_custody = []
         for local in self._managed():
             if (
                 local.status in {"expired", "cancelled", "failed"}
@@ -531,21 +544,34 @@ class SurplusSalesService:
                 or (local.next_retry_at and local.next_retry_at > now)
             ):
                 continue
+            if local.status == "closed" and self.session.scalar(
+                select(func.count())
+                .select_from(MarketTrade)
+                .where(
+                    MarketTrade.period_id == self.period.id,
+                    MarketTrade.external_offer_id == local.external_offer_id,
+                )
+            ):
+                # process_trades owns custody recovery for already-known closures.
+                continue
             try:
                 official = await self.trades.get_offer(local.external_offer_id)
                 trade = await self.custody.reconcile_offer(official)
-                custody_complete = trade is None
-                if trade is not None:
-                    synchronized = await InventorySyncService(
-                        self.inventory, self.session
-                    ).synchronize(tolerate_changes=True)
-                    custody_complete = self.custody.record_synchronized_trade_units(
-                        trade, synchronized
+                recorded = (
+                    0
+                    if trade is None
+                    else self.session.scalar(
+                        select(func.count(CustodyEvent.id)).where(
+                            CustodyEvent.market_trade_id == trade.id
+                        )
                     )
+                )
+                custody_complete = trade is None or recorded == trade.quantity
                 if official.status in TERMINAL and custody_complete:
                     local.reconciled_at = now
                 elif trade is not None:
                     local.reconciled_at = None
+                    pending_custody.append((local.id, trade.id))
                 local.last_error = local.http_status = local.next_retry_at = None
                 self.session.commit()
             except SQLAlchemyError:
@@ -553,6 +579,20 @@ class SurplusSalesService:
             except Exception as exc:
                 self._remember_failure(local, exc)
                 raise
+        return pending_custody
+
+    def _record_refreshed_custody(self, pending, synchronized):
+        observed_skus = set()
+        for offer_id, trade_id in pending:
+            trade = self.session.get(MarketTrade, trade_id)
+            if trade is None:
+                continue
+            observation = synchronized if trade.sku not in observed_skus else None
+            observed_skus.add(trade.sku)
+            if self.custody.record_synchronized_trade_units(trade, observation):
+                offer = self.session.get(MarketOffer, offer_id)
+                offer.reconciled_at = datetime.now(UTC)
+                self.session.commit()
 
     def _remember_failure(self, offer, exc):
         self.session.rollback()
@@ -673,7 +713,7 @@ class SurplusSalesService:
                     "reason": "Market rate/auth cooldown",
                     "participation": self.participation(),
                 }
-            await self._refresh_managed()
+            pending_custody = await self._refresh_managed()
             with production_lock(self.session):
                 if self._production_recovery_pending(datetime.now(UTC)):
                     return result | {
@@ -681,9 +721,10 @@ class SurplusSalesService:
                         "reason": "Production recovery pending",
                         "participation": self.participation(),
                     }
-                await InventorySyncService(self.inventory, self.session).synchronize(
-                    tolerate_changes=True
-                )
+                synchronized = await InventorySyncService(
+                    self.inventory, self.session
+                ).synchronize(tolerate_changes=True)
+                self._record_refreshed_custody(pending_custody, synchronized)
                 result["failed"] += await self._restore_released()
                 quotes, free, catalog, prices = await self._snapshot(synchronize=False)
                 result["quotes"] = [q.model_dump(mode="json") for q in quotes]
@@ -757,6 +798,16 @@ class SurplusSalesService:
                     return result | {
                         "deferred": 1,
                         "participation": self.participation(),
+                    }
+                participation = self.participation()
+                if (
+                    participation["sales"] + self._pending_sales()
+                    >= self.policy.target_sales
+                ):
+                    return result | {
+                        "deferred": 1,
+                        "reason": "Sales participation target reached or pending",
+                        "participation": participation,
                     }
                 if not any(
                     quote.quantity for quote in quotes
