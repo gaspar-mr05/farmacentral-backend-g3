@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
+from app.clients.shared_quota import SharedQuotaTransport
 from app.core.config import Settings, get_settings
 from app.models.billing import InvoiceSide, InvoiceStatus
 from app.schemas.billing import (
@@ -87,7 +88,10 @@ class BillingClient:
             config.effective_billing_rate_limit_file, config.billing_requests_per_minute
         )
         self._owns_http_client = http_client is None
-        self._http_client = http_client or httpx.AsyncClient(timeout=self._timeout)
+        self._http_client = http_client or httpx.AsyncClient(
+            timeout=self._timeout,
+            transport=SharedQuotaTransport(config.farma_central_group),
+        )
         self._actions: dict[str, str] | None = None
         self._wsdl_lock = asyncio.Lock()
 

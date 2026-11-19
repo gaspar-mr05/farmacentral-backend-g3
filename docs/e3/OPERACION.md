@@ -61,6 +61,15 @@ intencional de `BILLING_EMIT_SALES_ENABLED` y `BILLING_PAY_INVOICES_ENABLED`.
 Revisar los valores por defecto de facturación: 60 s de revisión, 600 s de
 sincronización completa y 45 requests/min compartidas.
 
+La cuota observada de 250 solicitudes/minuto se comparte entre inventario,
+mercado y órdenes. Los clientes HTTP del curso usan un transporte común que
+espacia solicitudes a 200/minuto por host y grupo entre procesos y comparte
+el `Retry-After` de los 429, sin repetir operaciones automáticamente. El estado
+se guarda en `/var/lib/farmacentral/gateway-*.rate`, fuera del `/tmp` privado
+de cada servicio systemd; en local se usa `/tmp` si ese directorio no existe.
+No requiere nuevas variables. Los logs `API quota observation` permiten
+comprobar consumo y límites; este control no resuelve faltantes de stock.
+
 ```bash
 export APP_ENV_FILE=/home/integracion/farmacentral-backend/.env
 .venv/bin/python -m scripts.check_e3_readiness \

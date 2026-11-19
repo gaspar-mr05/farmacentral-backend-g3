@@ -9,6 +9,7 @@ from urllib.parse import quote
 import httpx
 from pydantic import ValidationError
 
+from app.clients.shared_quota import SharedQuotaTransport
 from app.core.config import Settings, get_settings
 from app.schemas.messaging import (
     MessagingDiscardRequest,
@@ -46,6 +47,7 @@ class MessagingClient:
         self._auth_lock = asyncio.Lock()
         self._owns_http_client = http_client is None
         self._http_client = http_client or httpx.AsyncClient(
+            transport=SharedQuotaTransport(config.farma_central_group),
             base_url=f"{config.effective_messaging_base_url.rstrip('/')}/",
             headers={"Accept": "application/json"},
             timeout=config.messaging_timeout_seconds,

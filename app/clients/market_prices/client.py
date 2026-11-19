@@ -12,6 +12,7 @@ from app.clients.farma_central import (
     FarmaCentralTimeoutError,
 )
 from app.clients.rate_limit_diagnostics import RateLimitDiagnostics
+from app.clients.shared_quota import SharedQuotaTransport
 from app.core.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ class MarketPriceClient:
         self._cache_expires_at = 0.0
         self._refresh_lock = asyncio.Lock()
         self._http_client = http_client or httpx.AsyncClient(
+            transport=SharedQuotaTransport(config.farma_central_group),
             base_url=f"{str(config.farma_central_base_url).rstrip('/')}/",
             headers={"Accept": "application/json"},
             timeout=config.farma_central_timeout_seconds,

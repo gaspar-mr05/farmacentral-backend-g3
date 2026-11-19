@@ -11,6 +11,7 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from app.clients.rate_limit_diagnostics import RateLimitDiagnostics
+from app.clients.shared_quota import SharedQuotaTransport
 from app.core.config import Settings, get_settings
 from app.schemas.purchase_orders import (
     PurchaseOrder,
@@ -49,6 +50,7 @@ class PurchaseOrdersClient:
         self._next_request_at = 0.0
         self._owns_http_client = http_client is None
         self._http_client = http_client or httpx.AsyncClient(
+            transport=SharedQuotaTransport(config.farma_central_group),
             base_url=f"{config.effective_purchase_orders_base_url.rstrip('/')}/",
             headers={"Accept": "application/json"},
             timeout=config.purchase_orders_timeout_seconds,

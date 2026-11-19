@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from app.clients.rate_limit_diagnostics import RateLimitDiagnostics
+from app.clients.shared_quota import SharedQuotaTransport
 from app.core.config import Settings, get_settings
 from app.schemas.farma_central import (
     FarmaCentralChallengeRequest,
@@ -39,6 +40,7 @@ class FarmaCentralClient:
         self._authentication_lock = asyncio.Lock()
         self._owns_http_client = http_client is None
         self._http_client = http_client or httpx.AsyncClient(
+            transport=SharedQuotaTransport(config.farma_central_group),
             base_url=f"{str(config.farma_central_base_url).rstrip('/')}/",
             headers={"Accept": "application/json"},
             timeout=config.farma_central_timeout_seconds,

@@ -2,6 +2,7 @@ from typing import Any
 
 import httpx
 
+from app.clients.shared_quota import SharedQuotaTransport
 from app.core.config import Settings, get_settings
 
 from .exceptions import (
@@ -25,6 +26,7 @@ class CheckoutClient:
         self._token: str | None = None
         self._owns_http_client = http_client is None
         self._http_client = http_client or httpx.AsyncClient(
+            transport=SharedQuotaTransport(config.farma_central_group),
             base_url=f"{str(config.checkout_base_url).rstrip('/')}/",
             headers={"Accept": "application/json"},
             timeout=config.farma_central_timeout_seconds,
