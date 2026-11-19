@@ -93,8 +93,16 @@ class TradeReconciliationService:
                         "Official offer ID unavailable; requires verified association"
                     )
                 self.session.commit()
-                official = await self.trades.get_offer(offer.external_offer_id)
-                trade = await self.custody.reconcile_offer(official)
+                trade = self._known_closed_trade(offer)
+                if trade is None:
+                    official = await self.trades.get_offer(offer.external_offer_id)
+                    trade = await self.custody.reconcile_offer(official)
+                    official_status = official.status
+                else:
+                    # The official closure and purchase order were validated when
+                    # this immutable trade was inserted. Re-fetching them cannot
+                    # add unit-level custody evidence.
+                    official_status = "closed"
                 custody_complete = trade is None or self._trade_custody_complete(trade)
                 if trade and not custody_complete:
                     sync = None
@@ -109,7 +117,8 @@ class TradeReconciliationService:
                     custody_complete = self.custody.record_synchronized_trade_units(
                         trade, sync
                     )
-                if official.status in {"cancelled", "expired", "closed"}:
+                custody_pending = trade is not None and not custody_complete
+                if official_status in {"cancelled", "expired", "closed"}:
                     if trade is not None and not custody_complete:
                         offer.reconciled_at = None
                         result["pending"] += 1
@@ -118,13 +127,16 @@ class TradeReconciliationService:
                         result["closed" if trade else "released"] += 1
                 else:
                     result["pending"] += 1
-                offer.attempt_count = 0
                 offer.last_error = offer.http_status = None
-                offer.next_retry_at = (
-                    None
-                    if offer.reconciled_at
-                    else now + timedelta(seconds=self.interval)
-                )
+                if offer.reconciled_at:
+                    offer.attempt_count = 0
+                    offer.next_retry_at = None
+                elif custody_pending:
+                    delay = self.interval * 2 ** min(max(offer.attempt_count - 1, 0), 4)
+                    offer.next_retry_at = now + timedelta(seconds=delay)
+                else:
+                    offer.attempt_count = 0
+                    offer.next_retry_at = now + timedelta(seconds=self.interval)
                 self.session.commit()
             except SQLAlchemyError:
                 self.session.rollback()
@@ -158,6 +170,24 @@ class TradeReconciliationService:
                 if status in {401, 403, 429}:
                     break
         return result | {"blocked": 0, "custody_pending": self._custody_pending()}
+
+    def _known_closed_trade(self, offer: MarketOffer) -> MarketTrade | None:
+        if offer.status != "closed" or not offer.external_offer_id:
+            return None
+        trade = self.session.scalar(
+            select(MarketTrade).where(
+                MarketTrade.period_id == self.period.id,
+                MarketTrade.external_offer_id == offer.external_offer_id,
+            )
+        )
+        if trade is None or (
+            trade.external_order_id != offer.external_order_id
+            or trade.sku != offer.sku
+            or trade.quantity > offer.quantity
+            or trade.unit_price != offer.unit_price
+        ):
+            return None
+        return trade
 
     def _custody_pending(self):
         evidence_count = self._evidence_count()

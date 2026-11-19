@@ -432,9 +432,8 @@ class TradeCustodyService:
         if sync is None:
             return False
         complete = getattr(sync, "inventory_complete", False) is True
-        if not complete and not (
-            trade.role == MarketRole.BUYER
-            and trade.sku in getattr(sync, "complete_skus", frozenset())
+        if not complete and trade.sku not in getattr(
+            sync, "complete_skus", frozenset()
         ):
             logger.info(
                 "Market custody deferred: order_id=%s sku=%s "
@@ -446,6 +445,13 @@ class TradeCustodyService:
 
         if trade.role == MarketRole.SELLER:
             candidate_ids = self._trade_sku_unit_ids(trade, sync.missing_unit_ids)
+            if len(candidate_ids) != trade.quantity:
+                # A later snapshot reports every historical sale of the same SKU
+                # as missing.  The active, exclusive reservation identifies the
+                # units staged for this offer without relying on that mixed delta.
+                candidate_ids = self._reserved_missing_unit_ids(
+                    trade, sync.missing_unit_ids
+                )
         else:
             candidate_ids = self._trade_sku_unit_ids(trade, sync.created_unit_ids)
             if len(candidate_ids) != trade.quantity:
@@ -468,6 +474,34 @@ class TradeCustodyService:
             len(candidate_ids),
         )
         return True
+
+    def _reserved_missing_unit_ids(
+        self, trade: MarketTrade, missing_external_ids: Sequence[str]
+    ) -> list[str]:
+        missing = set(missing_external_ids)
+        if not missing:
+            return []
+        offer = self._get_offer(trade.external_offer_id)
+        active = [
+            reservation
+            for reservation in offer.reservations
+            if reservation.released_at is None
+        ]
+        if (
+            offer.sku != trade.sku
+            or offer.quantity != trade.quantity
+            or len(active) != trade.quantity
+            or any(
+                reservation.unit.status != "trade_reserved" for reservation in active
+            )
+        ):
+            return []
+        reserved_ids = sorted(
+            reservation.unit.external_unit_id for reservation in active
+        )
+        if all(unit_id in missing for unit_id in reserved_ids):
+            return reserved_ids
+        return []
 
     def _trade_sku_unit_ids(
         self, trade: MarketTrade, external_ids: Sequence[str]

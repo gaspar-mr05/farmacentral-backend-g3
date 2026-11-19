@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from math import ceil
 
@@ -55,26 +55,14 @@ def stock_targets(
 
 
 def schedule_key(priority, deadline, last_attempt, missing, sku, *, resume_ready=False):
-    now = datetime.now(UTC)
-    urgent = deadline is not None and deadline <= now + timedelta(minutes=15)
-    overdue_turn = (
-        priority == 1
-        and not resume_ready
-        and last_attempt is not None
-        and last_attempt <= now - timedelta(minutes=10)
-    )
     return (
-        # Accepted orders stay first. Recover ready operations before opening
-        # more procurement, including buffers already waiting on paid inputs.
+        # Accepted orders stay first. Finish operations whose output is already
+        # confirmed before opening new work, then order customer demand by its
+        # real deadline instead of a fixed urgency window.
         0 if priority == 0 else 1 if resume_ready else priority + 1,
-        # Repeated urgent but infeasible orders must not starve other recipes.
-        # This only changes turns for unaccepted customer demand, preserving orders
-        # and recovery of confirmed operations ahead of new procurement.
-        not overdue_turn,
-        last_attempt if overdue_turn else datetime.min.replace(tzinfo=UTC),
-        not urgent,
-        last_attempt or datetime.min.replace(tzinfo=UTC),
         deadline or datetime.max.replace(tzinfo=UTC),
+        # Round-robin only among work with the same business priority/deadline.
+        last_attempt or datetime.min.replace(tzinfo=UTC),
         -missing,
         sku,
     )

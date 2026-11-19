@@ -146,7 +146,34 @@ async def test_closed_trade_with_ambiguous_unit_delta_remains_retryable(
     assert first["custody_pending"] == second["custody_pending"] == 1
     assert db_session.scalar(select(MarketOffer)).reconciled_at is None
     assert synchronize.await_count == 2
+    service.trades.get_offer.assert_awaited_once()
     order_source.get_order.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_sale_uses_its_reservations_when_same_sku_missing_delta_is_mixed(
+    db_session, monkeypatch
+):
+    period, dispatch, units, closed = await published_sale(db_session)
+    synchronize = AsyncMock(
+        return_value=inventory_sync(missing=[unit.external_unit_id for unit in units])
+    )
+    monkeypatch.setattr(
+        "app.services.trades.reconciliation.InventorySyncService",
+        Mock(return_value=Mock(synchronize=synchronize)),
+    )
+
+    result = await reconciler(
+        db_session, period, dispatch, closed, order_source=OwnSaleOrders(closed)
+    ).poll()
+
+    assert result["closed"] == 1
+    trade = db_session.scalar(select(MarketTrade))
+    recorded = db_session.scalars(
+        select(CustodyEvent).where(CustodyEvent.market_trade_id == trade.id)
+    ).all()
+    assert len(recorded) == 2
+    assert {event.unit_id for event in recorded} == {unit.id for unit in units[:2]}
 
 
 @pytest.mark.anyio
@@ -336,9 +363,7 @@ async def test_buy_recovers_retained_receipts_when_only_its_sku_is_complete(
 
 
 @pytest.mark.anyio
-async def test_partial_global_inventory_does_not_confirm_seller_custody(
-    db_session, monkeypatch
-):
+async def test_complete_sku_inventory_confirms_seller_custody(db_session, monkeypatch):
     period, dispatch, units, closed = await published_sale(db_session)
     snapshot = InventorySyncResult(
         products=EntityChanges(),
@@ -356,8 +381,8 @@ async def test_partial_global_inventory_does_not_confirm_seller_custody(
     result = await reconciler(
         db_session, period, dispatch, closed, order_source=OwnSaleOrders(closed)
     ).poll()
-    assert result["closed"] == 0
-    assert result["custody_pending"] == 1
+    assert result["closed"] == 1
+    assert result["custody_pending"] == 0
 
 
 @pytest.mark.anyio

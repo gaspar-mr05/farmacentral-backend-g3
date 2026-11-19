@@ -10,14 +10,17 @@ async def run() -> None:
     with SessionLocal() as session:
         async with FarmaCentralClient() as client:
             sync_service = InventorySyncService(client, session)
-            result = await sync_service.synchronize()
+            # Production and trade workers also observe inventory. This periodic
+            # pass exists primarily for cold-chain recovery, so tolerate groups
+            # that change while the multi-request snapshot is being collected.
+            result = await sync_service.synchronize(tolerate_changes=True)
             movements = await ColdChainService(
                 client,
                 session,
             ).relocate_exposed_units()
 
             if movements:
-                await sync_service.synchronize()
+                await sync_service.synchronize(tolerate_changes=True)
 
     print(
         "Inventory synchronized: "

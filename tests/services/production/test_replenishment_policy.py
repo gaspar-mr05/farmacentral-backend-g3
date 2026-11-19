@@ -65,33 +65,33 @@ def test_same_priority_gives_other_kits_a_turn_without_overriding_urgent_orders(
     assert accepted < urgent < untouched < recent
 
 
-def test_ready_operation_gets_a_turn_before_new_demand_but_after_accepted_orders():
+def test_ready_operation_finishes_before_new_demand_and_buffers():
     now = datetime.now(UTC)
     deadline = now + timedelta(hours=1)
     confirmed = schedule_key(2, deadline, now, 1, "KIT-A", resume_ready=True)
     waiting = schedule_key(1, deadline, None, 1, "KIT-B")
     accepted = schedule_key(0, deadline, now, 1, "KIT-C")
-    assert accepted < confirmed < waiting
+    fresh_buffer = schedule_key(2, deadline, None, 1, "KIT-D")
+    assert accepted < confirmed < waiting < fresh_buffer
 
 
-def test_long_waiting_recipe_gets_turn_ahead_of_repeated_urgent_new_orders():
+def test_customer_orders_are_scheduled_by_deadline_before_retry_age():
     now = datetime.now(UTC)
     starved = schedule_key(
         1, now + timedelta(hours=2), now - timedelta(minutes=20), 2, "ATB"
     )
     urgent = schedule_key(1, now + timedelta(minutes=5), now, 1, "OTHER")
     accepted = schedule_key(0, now + timedelta(hours=2), now, 1, "ACCEPTED")
-    recovering = schedule_key(
+    recovering_buffer = schedule_key(
         2, now + timedelta(hours=2), now, 1, "READY", resume_ready=True
     )
-    assert accepted < recovering < starved < urgent
-    # After receiving a turn it gives way to the urgent demand again.
+    assert accepted < recovering_buffer < urgent < starved
     retried = schedule_key(1, now + timedelta(hours=2), now, 2, "ATB")
     assert urgent < retried
     old_urgent = schedule_key(
         1, now + timedelta(minutes=5), now - timedelta(minutes=12), 1, "OLD-URGENT"
     )
-    assert starved < old_urgent
+    assert old_urgent < starved
 
 
 def test_aging_does_not_reorder_accepted_order_deadlines():

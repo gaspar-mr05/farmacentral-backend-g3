@@ -3,7 +3,7 @@ Description=Run Farmacentral inventory synchronization periodically
 
 [Timer]
 OnActiveSec=30s
-OnUnitInactiveSec=60s
+OnUnitInactiveSec=300s
 AccuracySec=5s
 Unit=farmacentral-inventory-sync.service
 
