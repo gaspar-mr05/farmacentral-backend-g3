@@ -4,6 +4,7 @@ from typing import Any
 
 import httpx
 
+from app.clients.rate_limit_diagnostics import RateLimitDiagnostics
 from app.core.config import Settings, get_settings
 from app.schemas.farma_central import (
     FarmaCentralChallengeRequest,
@@ -31,6 +32,7 @@ class FarmaCentralClient:
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         config = settings or get_settings()
+        self._quota_diagnostics = RateLimitDiagnostics("farma_central")
         self._group = config.farma_central_group
         self._api_secret = config.farma_central_api_secret.get_secret_value()
         self._token: str | None = None
@@ -222,7 +224,11 @@ class FarmaCentralClient:
 
     async def _send(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         try:
-            return await self._http_client.request(method, path.lstrip("/"), **kwargs)
+            response = await self._http_client.request(
+                method, path.lstrip("/"), **kwargs
+            )
+            self._quota_diagnostics.observe(response)
+            return response
         except httpx.TimeoutException as exc:
             raise FarmaCentralTimeoutError(
                 "Farma Central did not respond within the configured timeout"

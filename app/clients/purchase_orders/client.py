@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
+from app.clients.rate_limit_diagnostics import RateLimitDiagnostics
 from app.core.config import Settings, get_settings
 from app.schemas.purchase_orders import (
     PurchaseOrder,
@@ -38,6 +39,7 @@ class PurchaseOrdersClient:
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         config = settings or get_settings()
+        self._quota_diagnostics = RateLimitDiagnostics("purchase_orders")
         self._group = config.farma_central_group
         self._secret = config.farma_central_api_secret.get_secret_value()
         self._token: str | None = None
@@ -183,7 +185,9 @@ class PurchaseOrdersClient:
         self, method: str, path: str, **kwargs: Any
     ) -> httpx.Response:
         try:
-            return await self._http_client.request(method, path, **kwargs)
+            response = await self._http_client.request(method, path, **kwargs)
+            self._quota_diagnostics.observe(response)
+            return response
         except httpx.TimeoutException as exc:
             logger.warning("Purchase order request timed out: %s %s", method, path)
             raise PurchaseOrdersTimeoutError(

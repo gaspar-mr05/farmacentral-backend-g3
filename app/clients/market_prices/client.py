@@ -11,6 +11,7 @@ from app.clients.farma_central import (
     FarmaCentralInvalidResponseError,
     FarmaCentralTimeoutError,
 )
+from app.clients.rate_limit_diagnostics import RateLimitDiagnostics
 from app.core.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ class MarketPriceClient:
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         config = settings or get_settings()
+        self._quota_diagnostics = RateLimitDiagnostics("market_prices")
         self._owns_http_client = http_client is None
         self._cache_ttl_seconds = config.market_price_cache_ttl_seconds
         self._max_retry_wait_seconds = config.market_price_max_retry_wait_seconds
@@ -105,7 +107,9 @@ class MarketPriceClient:
 
     async def _request_prices(self) -> httpx.Response:
         try:
-            return await self._http_client.get("market/prices")
+            response = await self._http_client.get("market/prices")
+            self._quota_diagnostics.observe(response)
+            return response
         except httpx.TimeoutException as exc:
             raise FarmaCentralTimeoutError(
                 "The market price service did not respond within the configured timeout"

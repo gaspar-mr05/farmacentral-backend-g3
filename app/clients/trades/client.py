@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
+from app.clients.rate_limit_diagnostics import RateLimitDiagnostics
 from app.core.config import Settings, get_settings
 from app.schemas.trades import (
     TradeOffer,
@@ -35,6 +36,7 @@ class TradesClient:
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         config = settings or get_settings()
+        self._quota_diagnostics = RateLimitDiagnostics("trades")
         self._group = config.farma_central_group
         self._secret = config.farma_central_api_secret.get_secret_value()
         self._token: str | None = None
@@ -211,9 +213,11 @@ class TradesClient:
     ) -> httpx.Response:
         headers = {"Authorization": f"Bearer {token}"} if token else None
         try:
-            return await self._http_client.request(
+            response = await self._http_client.request(
                 method, path, headers=headers, **kwargs
             )
+            self._quota_diagnostics.observe(response)
+            return response
         except (
             httpx.ReadTimeout,
             httpx.WriteTimeout,
