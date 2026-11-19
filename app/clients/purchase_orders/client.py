@@ -146,6 +146,34 @@ class PurchaseOrdersClient:
             finally:
                 self._next_request_at = time.monotonic() + self._request_interval
             if response.status_code == 429:
+                safe_headers = {
+                    name: response.headers[name]
+                    for name in (
+                        "retry-after",
+                        "date",
+                        "server",
+                        "via",
+                        "x-request-id",
+                        "ratelimit",
+                        "ratelimit-policy",
+                        "ratelimit-limit",
+                        "ratelimit-remaining",
+                        "ratelimit-reset",
+                        "x-ratelimit-limit",
+                        "x-ratelimit-remaining",
+                        "x-ratelimit-reset",
+                    )
+                    if name in response.headers
+                }
+                logger.warning(
+                    "Purchase order rate limit: method=%s path=%s host=%s "
+                    "group=%s headers=%s",
+                    method,
+                    response.request.url.path,
+                    response.request.url.host,
+                    self._group,
+                    safe_headers,
+                )
                 self._next_request_at = time.monotonic() + max(
                     self._request_interval, self._retry_after(response) or 60
                 )

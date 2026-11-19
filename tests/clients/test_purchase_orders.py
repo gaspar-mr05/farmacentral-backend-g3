@@ -88,7 +88,7 @@ async def test_get_to_decision_and_auth_refresh_are_spaced(paced_clock, refresh)
 
 
 @pytest.mark.anyio
-async def test_429_does_not_replay_post_and_delays_next_request(paced_clock):
+async def test_429_does_not_replay_post_and_delays_next_request(paced_clock, caplog):
     calls = []
 
     def handler(request):
@@ -96,7 +96,18 @@ async def test_429_does_not_replay_post_and_delays_next_request(paced_clock):
         if request.url.path.endswith("autenticar"):
             return httpx.Response(200, json={"token": "token"})
         if request.method == "POST":
-            return httpx.Response(429, headers={"Retry-After": "5"})
+            return httpx.Response(
+                429,
+                headers={
+                    "Retry-After": "5",
+                    "X-RateLimit-Limit": "250",
+                    "X-RateLimit-Remaining": "0",
+                    "X-Request-ID": "trace-123",
+                    "Authorization": "PRIVATE_RESPONSE_HEADER",
+                    "Set-Cookie": "PRIVATE_COOKIE",
+                },
+                json={"message": "PRIVATE_RESPONSE_BODY"},
+            )
         return httpx.Response(200, json=order_payload())
 
     async with (
@@ -112,6 +123,11 @@ async def test_429_does_not_replay_post_and_delays_next_request(paced_clock):
         await client.get_order(ORDER_ID)
     assert len(calls) == 4
     assert calls[-1][2] - calls[-2][2] >= 5
+    assert "Purchase order rate limit:" in caplog.text
+    assert "'x-ratelimit-limit': '250'" in caplog.text
+    assert "'retry-after': '5'" in caplog.text
+    assert "trace-123" in caplog.text
+    assert "PRIVATE_" not in caplog.text
 
 
 @pytest.mark.anyio
