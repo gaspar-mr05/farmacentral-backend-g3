@@ -33,6 +33,9 @@ def next_delay(interval, result):
 
 async def run(*, period_id=None, execute=False, once=False, interval=60, policy=None):
     settings = get_settings()
+    if execute and not settings.surplus_sales_enabled:
+        logger.info("Surplus sales are disabled by configuration")
+        return
     async with AsyncExitStack() as stack:
         inventory = await stack.enter_async_context(
             FarmaCentralClient(settings=settings)

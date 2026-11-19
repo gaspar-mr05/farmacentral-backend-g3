@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     replenishment_spending_limit: Decimal | None = Field(
         default=None, gt=0, allow_inf_nan=False
     )
+    surplus_sales_enabled: bool = False
     messaging_oidc_audience: AnyHttpUrl | None = None
     messaging_oidc_service_account: str = Field(
         default="mensajeria@taller-integracion-310700.iam.gserviceaccount.com",

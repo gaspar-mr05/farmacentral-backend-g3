@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -143,6 +144,79 @@ async def test_closed_trade_with_ambiguous_unit_delta_remains_retryable(
     assert first["custody_pending"] == second["custody_pending"] == 1
     assert db_session.scalar(select(MarketOffer)).reconciled_at is None
     assert synchronize.await_count == 2
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("same_sku", [False, True])
+async def test_one_inventory_observation_is_shared_safely_per_poll(
+    db_session, monkeypatch, same_sku
+):
+    period, dispatch, units, closed = await published_sale(db_session)
+    first_offer = db_session.scalar(select(MarketOffer))
+    first_trade = MarketTrade(
+        period_id=period.id,
+        external_offer_id=first_offer.external_offer_id,
+        external_order_id=closed.order_id,
+        role=MarketRole.BUYER,
+        counterparty_id="5",
+        sku=closed.sku,
+        quantity=2,
+        unit_price=closed.unit_price,
+        closed_at=closed.closed_at,
+    )
+    second_offer = MarketOffer(
+        period_id=period.id,
+        external_offer_id="c" * 24,
+        external_order_id="d" * 24,
+        side=first_offer.side,
+        publisher_group_id=3,
+        counterparty_group_id=5,
+        sku=closed.sku if same_sku else "OTHER-SKU",
+        quantity=1,
+        unit_price=closed.unit_price,
+        status="closed",
+    )
+    second_trade = MarketTrade(
+        period_id=period.id,
+        external_offer_id=second_offer.external_offer_id,
+        external_order_id=second_offer.external_order_id,
+        role=MarketRole.BUYER,
+        counterparty_id="5",
+        sku=second_offer.sku,
+        quantity=1,
+        unit_price=closed.unit_price,
+        closed_at=closed.closed_at,
+    )
+    first_offer.status = "closed"
+    db_session.add_all([first_trade, second_offer, second_trade])
+    db_session.commit()
+    service = reconciler(db_session, period, dispatch, closed)
+    service.trades.get_offer.side_effect = [
+        SimpleNamespace(status="closed"),
+        SimpleNamespace(status="closed"),
+    ]
+    service.custody.reconcile_offer = AsyncMock(side_effect=[first_trade, second_trade])
+    service.custody.record_synchronized_trade_units = Mock(return_value=False)
+    synchronize = AsyncMock(return_value=inventory_sync())
+    monkeypatch.setattr(
+        "app.services.trades.reconciliation.InventorySyncService",
+        Mock(return_value=Mock(synchronize=synchronize)),
+    )
+
+    result = await service.poll()
+
+    assert result["checked"] == 2
+    assert result["custody_pending"] == 2
+    synchronize.assert_awaited_once()
+    observations = [
+        call.args[1]
+        for call in service.custody.record_synchronized_trade_units.call_args_list
+    ]
+    assert observations[0] is not None
+    if same_sku:
+        assert observations[1] is None
+    else:
+        assert observations[1] is observations[0]
 
 
 @pytest.mark.anyio

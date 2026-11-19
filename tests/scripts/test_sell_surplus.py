@@ -44,6 +44,33 @@ def test_production_lock_contention_retries_sooner():
     assert module.next_delay(120, {"reason": "Market stocking receipt pending"}) == 120
 
 
+@pytest.mark.anyio
+async def test_execute_worker_exits_when_surplus_sales_are_disabled(monkeypatch):
+    monkeypatch.setattr(
+        module,
+        "get_settings",
+        lambda: make_settings(surplus_sales_enabled=False),
+    )
+    for name in (
+        "FarmaCentralClient",
+        "TradesClient",
+        "PurchaseOrdersClient",
+        "MarketPriceClient",
+    ):
+        client = AsyncMock()
+        monkeypatch.setattr(module, name, client)
+
+    await module.run(execute=True)
+
+    for name in (
+        "FarmaCentralClient",
+        "TradesClient",
+        "PurchaseOrdersClient",
+        "MarketPriceClient",
+    ):
+        getattr(module, name).assert_not_called()
+
+
 def test_policy_cannot_disable_operational_buffers(monkeypatch):
     monkeypatch.setattr(module, "get_settings", lambda: make_settings())
     monkeypatch.setattr("sys.argv", ["sell_surplus", "--kit-buffer", "0"])

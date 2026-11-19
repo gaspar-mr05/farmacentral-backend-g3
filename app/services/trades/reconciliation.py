@@ -66,6 +66,9 @@ class TradeReconciliationService:
         ).all()
         ids = [offer.id for offer in due]
         self.session.commit()
+        inventory_observation = None
+        inventory_observed = False
+        observed_custody_skus = set()
         for offer_id in ids:
             offer = self.session.get(MarketOffer, offer_id)
             result["checked"] += 1
@@ -84,9 +87,15 @@ class TradeReconciliationService:
                 trade = await self.custody.reconcile_offer(official)
                 custody_complete = trade is None or self._trade_custody_complete(trade)
                 if trade and not custody_complete:
-                    sync = await InventorySyncService(
-                        self.inventory, self.session
-                    ).synchronize(tolerate_changes=True)
+                    sync = None
+                    if trade.sku not in observed_custody_skus:
+                        if not inventory_observed:
+                            inventory_observation = await InventorySyncService(
+                                self.inventory, self.session
+                            ).synchronize(tolerate_changes=True)
+                            inventory_observed = True
+                        sync = inventory_observation
+                        observed_custody_skus.add(trade.sku)
                     custody_complete = self.custody.record_synchronized_trade_units(
                         trade, sync
                     )
