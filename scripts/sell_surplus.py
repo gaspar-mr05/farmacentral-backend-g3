@@ -23,6 +23,7 @@ from app.services.trades.surplus import SurplusSalesService
 
 logger = logging.getLogger(__name__)
 PRODUCTION_BUSY_REASON = "Producer currently holds the packaging lock"
+MIN_EXECUTION_INTERVAL_SECONDS = 300
 
 
 def next_delay(interval, result):
@@ -93,7 +94,7 @@ def main():
     parser.add_argument(
         "--sku", action="append", help="Override the three default direct-access inputs"
     )
-    parser.add_argument("--lot-size", type=int, default=20)
+    parser.add_argument("--lot-size", type=int, default=1)
     parser.add_argument("--target-sales", type=int, default=30)
     parser.add_argument(
         "--kit-buffer", type=int, default=settings.replenishment_minimum_stock
@@ -105,7 +106,7 @@ def main():
         action="store_true",
         help="Request profitable direct-access inputs until one sale lot is free",
     )
-    parser.add_argument("--interval-seconds", type=int, default=60)
+    parser.add_argument("--interval-seconds", type=int, default=300)
     args = parser.parse_args()
     if args.interval_seconds < 30:
         parser.error("Use an interval of at least 30 seconds")
@@ -136,7 +137,11 @@ def main():
                 period_id=args.period_id,
                 execute=args.execute,
                 once=args.once,
-                interval=args.interval_seconds,
+                interval=(
+                    max(args.interval_seconds, MIN_EXECUTION_INTERVAL_SECONDS)
+                    if args.execute
+                    else args.interval_seconds
+                ),
                 policy=policy,
             )
         )

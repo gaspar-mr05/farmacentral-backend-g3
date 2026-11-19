@@ -33,6 +33,21 @@ def test_market_stocking_requires_explicit_flag(monkeypatch):
     assert runner.await_args.kwargs["policy"].stock_market is True
 
 
+def test_execute_cli_enforces_safe_lot_and_interval(monkeypatch):
+    monkeypatch.setattr(module, "get_settings", lambda: make_settings())
+    runner = AsyncMock()
+    monkeypatch.setattr(module, "run", runner)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["sell_surplus", "--execute", "--interval-seconds", "120"],
+    )
+
+    module.main()
+
+    assert runner.await_args.kwargs["policy"].lot_size == 1
+    assert runner.await_args.kwargs["interval"] == 300
+
+
 def test_production_lock_contention_retries_sooner():
     assert (
         module.next_delay(
