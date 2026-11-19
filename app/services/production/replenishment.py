@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from time import perf_counter
 from uuid import UUID, uuid4
 
 from pydantic import TypeAdapter
@@ -128,9 +129,16 @@ class E3ReplenishmentService:
         self.session.commit()
         if cooldown and cooldown > now:
             return result | {"deferred": 1}
+        phase_started = perf_counter()
+        inventory_started_at = datetime.now(UTC)
         synchronized = await InventorySyncService(
             self.client, self.session
         ).synchronize(tolerate_changes=True)
+        logger.info(
+            "Replenishment timing: stage=inventory elapsed_seconds=%.2f",
+            perf_counter() - phase_started,
+        )
+        phase_started = perf_counter()
         catalog_data, spaces_data, prices_data = await asyncio.gather(
             self.client.get_available_products(),
             self.client.get_spaces(),
@@ -269,9 +277,15 @@ class E3ReplenishmentService:
         # valid until this cycle performs a market or packaging mutation. Direct
         # supplies do not change either, so later recipes can reuse the quotes.
         offer_cache = {}
+        logger.info(
+            "Replenishment timing: stage=planning elapsed_seconds=%.2f candidates=%s",
+            perf_counter() - phase_started,
+            len(candidates),
+        )
         for _, state, quantity, deadline, revenue, priority in sorted(
             candidates, key=lambda c: c[0]
         )[:3]:
+            turn_started = perf_counter()
             if deadline is not None and self.period.ends_at:
                 deadline = min(deadline, self.period.ends_at)
             state.last_attempt_at = datetime.now(UTC)
@@ -337,6 +351,9 @@ class E3ReplenishmentService:
                         request.request_key,
                         saved_demand,
                         retire=retarget,
+                        snapshot=(catalog, spaces, prices),
+                        inventory_observation=(inventory_started_at, synchronized),
+                        offer_cache=offer_cache,
                     )
                     if request.status == "acquired":
                         state.estimated_spend += Decimal(
@@ -763,6 +780,11 @@ class E3ReplenishmentService:
                 if getattr(exc, "status_code", None) in {401, 403, 429}:
                     break
             finally:
+                logger.info(
+                    "Replenishment timing: stage=kit sku=%s elapsed_seconds=%.2f",
+                    state.sku,
+                    perf_counter() - turn_started,
+                )
                 result["kits"].append(
                     {
                         "sku": state.sku,

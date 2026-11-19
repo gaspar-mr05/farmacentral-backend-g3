@@ -103,6 +103,97 @@ async def test_open_bid_is_a_wait_and_is_shared_instead_of_duplicated(db_session
 
 
 @pytest.mark.anyio
+async def test_existing_bid_reuses_cycle_quotes_only_for_observation(db_session):
+    period, _, _, _ = add_market_stock(db_session)
+    source = service(db_session, period)
+    opened = offer(RAW, 4, 2, publisher=3).model_copy(update={"side": "buy"})
+    source.trades.create_offer.return_value = opened
+    source.trades.get_offer.return_value = opened
+    need = demand(sku=RAW, quantity=4)
+    snapshot, cache = ({}, [], {}), {}
+    row = await source.ensure(
+        "reuse-quotes", need, snapshot=snapshot, offer_cache=cache
+    )
+    # Creating a new acquisition still replans without the cycle snapshot.
+    assert source.preview.await_args_list[0].kwargs == {}
+    row.next_retry_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.commit()
+    source.preview.reset_mock()
+    await source.ensure("reuse-quotes", need, snapshot=snapshot, offer_cache=cache)
+    source.preview.assert_awaited_once_with(
+        need,
+        replacing_offer_id=row.market_offer_id,
+        snapshot=snapshot,
+        offer_cache=cache,
+    )
+    source.trades.create_offer.assert_awaited_once()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("scan_after_close", [True, False])
+@pytest.mark.parametrize("after_cancellation", [True, False])
+async def test_receipt_observation_must_start_after_official_closure(
+    db_session, monkeypatch, scan_after_close, after_cancellation
+):
+    from tests.services.test_trade_custody import TradesStub
+
+    period, _, _, units = add_market_stock(db_session, quantity=4)
+    units[0].lot.product.sku = RAW
+    db_session.commit()
+    opened = offer(RAW, 4, 2)
+    if after_cancellation:
+        opened = opened.model_copy(update={"side": "buy", "publisher_group": 3})
+    closed = opened.model_copy(
+        update={
+            "status": "closed",
+            "counterparty_group": 5 if after_cancellation else 3,
+            "order_id": "b" * 24,
+            "closed_at": datetime.now(UTC),
+        }
+    )
+    source = service(db_session, period)
+    source.trades.get_offer.return_value = closed
+    if after_cancellation:
+        source.trades.get_offer.side_effect = [opened, closed]
+        source.preview.return_value = ProcurementPlan(status="ready")
+    source.custody._purchase_orders = TradesStub(closed)
+    if after_cancellation:
+        order = await source.custody._purchase_orders.get_order(closed.order_id)
+        source.custody._purchase_orders = Mock(
+            get_order=AsyncMock(
+                return_value=order.model_copy(update={"supplier_id": "5"})
+            )
+        )
+    local = source.custody._store_offer(opened, status="open")
+    need = demand(sku=RAW, quantity=4)
+    row = ProcurementRequest(
+        period_id=period.id,
+        request_key="existing-receipt",
+        demand=need.model_dump(mode="json"),
+        status="waiting",
+        market_offer_id=local.id,
+    )
+    db_session.add(row)
+    db_session.commit()
+    sync = completed_sync(units)
+    synchronize = AsyncMock(return_value=sync)
+    monkeypatch.setattr(
+        "app.services.supply.procurement.InventorySyncService",
+        Mock(return_value=Mock(synchronize=synchronize)),
+    )
+    observed_at = closed.closed_at + timedelta(seconds=1 if scan_after_close else -1)
+    row = await source.ensure(
+        row.request_key, need, inventory_observation=(observed_at, sync)
+    )
+    assert row.status == "acquired"
+    assert synchronize.await_count == (
+        0 if scan_after_close and not after_cancellation else 1
+    )
+    source.trades.accept_offer.assert_not_awaited()
+    source.trades.create_offer.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_retarget_retires_bid_only_after_confirmed_cancellation(db_session):
     period, _, _, _ = add_market_stock(db_session)
     source = service(db_session, period)

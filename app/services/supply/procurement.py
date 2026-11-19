@@ -394,7 +394,14 @@ class ScarcityProcurementService:
         return plan.model_copy(update={"protected_stock": protected})
 
     async def ensure(
-        self, request_key: str, demand: ProcurementDemand, *, retire=False
+        self,
+        request_key: str,
+        demand: ProcurementDemand,
+        *,
+        retire=False,
+        snapshot=None,
+        inventory_observation=None,
+        offer_cache=None,
     ) -> ProcurementRequest:
         if not request_key.strip() or len(request_key) > 128:
             raise ValueError(
@@ -443,7 +450,13 @@ class ScarcityProcurementService:
             self.session.commit()
             try:
                 if row.market_offer_id:
-                    return await self._observe(row, retire=retire)
+                    return await self._observe(
+                        row,
+                        retire=retire,
+                        snapshot=snapshot,
+                        inventory_observation=inventory_observation,
+                        offer_cache=offer_cache,
+                    )
                 if retire:
                     row.status = "superseded"
                     self.session.commit()
@@ -642,7 +655,16 @@ class ScarcityProcurementService:
                 self.session.commit()
                 return row
 
-    async def _observe(self, row, *, may_cancel=True, retire=False):
+    async def _observe(
+        self,
+        row,
+        *,
+        may_cancel=True,
+        retire=False,
+        snapshot=None,
+        inventory_observation=None,
+        offer_cache=None,
+    ):
         local = self.session.get(MarketOffer, row.market_offer_id)
         if not local.external_offer_id:
             row.status, row.last_error = (
@@ -654,11 +676,16 @@ class ScarcityProcurementService:
         official = await self.trades.get_offer(local.external_offer_id)
         trade = await self.custody.reconcile_offer(official)
         if trade:
-            sync = InventorySyncService(self.inventory, self.session)
-            if self.tolerant_inventory:
-                synchronized = await sync.synchronize(tolerate_changes=True)
+            # Reuse only a scan that began after this official closure. A trade
+            # closed during/after the scan needs a fresh receipt observation.
+            if inventory_observation and trade.closed_at <= inventory_observation[0]:
+                synchronized = inventory_observation[1]
             else:
-                synchronized = await sync.synchronize()
+                sync = InventorySyncService(self.inventory, self.session)
+                if self.tolerant_inventory:
+                    synchronized = await sync.synchronize(tolerate_changes=True)
+                else:
+                    synchronized = await sync.synchronize()
             if not self.custody.record_synchronized_trade_units(trade, synchronized):
                 local.reconciled_at = None
                 row.status = "custody_pending"
@@ -695,7 +722,12 @@ class ScarcityProcurementService:
                 plan = (
                     None
                     if expired or retire
-                    else await self.preview(demand, replacing_offer_id=local.id)
+                    else await self.preview(
+                        demand,
+                        replacing_offer_id=local.id,
+                        snapshot=snapshot,
+                        offer_cache=offer_cache,
+                    )
                 )
                 if plan is not None:
                     row.decision = (row.decision or {}) | {

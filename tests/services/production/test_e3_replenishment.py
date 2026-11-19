@@ -811,7 +811,9 @@ async def test_restricted_input_publishes_one_bid_without_direct_request(
         service = setup(session, pharmacy, trades=trades)
         await service.poll()
         next_turn(session)
+        reads = pharmacy.inventory_reads
         await service.poll()
+        assert pharmacy.inventory_reads - reads == len(pharmacy.spaces)
         assert pharmacy.posts == []
         trades.create_offer.assert_awaited_once()
         assert session.scalar(select(ProductionRun)) is None
