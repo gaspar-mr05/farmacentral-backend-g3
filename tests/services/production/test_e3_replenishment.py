@@ -57,6 +57,7 @@ class Pharmacy:
         ]
         self.units = {}
         self.posts = []
+        self.inventory_reads = 0
         self.lose_fabrication_response = False
 
     async def get_available_products(self):
@@ -69,6 +70,7 @@ class Pharmacy:
         ]
 
     async def get_space_inventory(self, space):
+        self.inventory_reads += 1
         return [
             {
                 "sku": sku,
@@ -934,6 +936,26 @@ async def test_partial_component_stock_is_completed_instead_of_restarting_recipe
             ("MID", 1),
             ("KIT-A", 2),
         ], totals
+
+
+@pytest.mark.anyio
+async def test_poll_reuses_its_inventory_snapshot_before_production(db_session):
+    pharmacy = Pharmacy()
+    pharmacy.receive("MID", 1, store="STORE")
+    service = setup(db_session, pharmacy)
+    db_session.add(
+        make_external_order(
+            status=OrderStatus.ACCEPTED,
+            items=[OrderItem(sku="KIT-A", quantity=1, unit_price=10)],
+        )
+    )
+    db_session.commit()
+
+    result = await service.poll()
+
+    assert result["produced"] == 1, result
+    assert pharmacy.posts == [("KIT-A", 1)]
+    assert pharmacy.inventory_reads == len(pharmacy.spaces)
 
 
 def test_waiting_orders_for_one_sku_are_aggregated_into_one_demand(db_session):

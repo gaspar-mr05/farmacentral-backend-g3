@@ -97,6 +97,7 @@ class E3ReplenishmentService:
             catalog,
             spaces,
             group_id=self.period.group_id,
+            inventory_fresh=True,
         )
 
     async def poll(self):

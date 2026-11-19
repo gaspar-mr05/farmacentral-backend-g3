@@ -39,7 +39,17 @@ class SupplyNeeded(ReplenishmentDeferred):
 
 
 class CooperativeKitProduction(KitProductionService):
-    def __init__(self, client, session, state, catalog, spaces, *, group_id):
+    def __init__(
+        self,
+        client,
+        session,
+        state,
+        catalog,
+        spaces,
+        *,
+        group_id,
+        inventory_fresh=False,
+    ):
         super().__init__(
             client,
             session,
@@ -50,6 +60,7 @@ class CooperativeKitProduction(KitProductionService):
         self.protected_stock = {}
         self.sourcing_skus = set()
         self._group_id = group_id
+        self._inventory_fresh = inventory_fresh
         self.state = state
         self._catalog = catalog
         self.spaces = spaces
@@ -70,6 +81,13 @@ class CooperativeKitProduction(KitProductionService):
         return units[keep:] if sku != self.state.sku else units
 
     async def _synchronize(self):
+        if self._inventory_fresh:
+            # The replenishment poll already took a complete snapshot before
+            # planning this turn. Movements performed since then update the
+            # local ledger transactionally, so repeating the remote scan here
+            # only delays manufacturing by several minutes under API pacing.
+            self._inventory_fresh = False
+            return
         await InventorySyncService(self._client, self._session).synchronize(
             tolerate_changes=True
         )
