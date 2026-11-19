@@ -177,9 +177,16 @@ async def test_sale_uses_its_reservations_when_same_sku_missing_delta_is_mixed(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("same_sku", [False, True])
+@pytest.mark.parametrize(
+    ("same_sku", "second_role"),
+    [
+        (False, MarketRole.BUYER),
+        (True, MarketRole.BUYER),
+        (True, MarketRole.SELLER),
+    ],
+)
 async def test_one_inventory_observation_is_shared_safely_per_poll(
-    db_session, monkeypatch, same_sku
+    db_session, monkeypatch, same_sku, second_role
 ):
     period, dispatch, units, closed = await published_sale(db_session)
     first_offer = db_session.scalar(select(MarketOffer))
@@ -210,7 +217,7 @@ async def test_one_inventory_observation_is_shared_safely_per_poll(
         period_id=period.id,
         external_offer_id=second_offer.external_offer_id,
         external_order_id=second_offer.external_order_id,
-        role=MarketRole.BUYER,
+        role=second_role,
         counterparty_id="5",
         sku=second_offer.sku,
         quantity=1,
@@ -243,7 +250,7 @@ async def test_one_inventory_observation_is_shared_safely_per_poll(
         for call in service.custody.record_synchronized_trade_units.call_args_list
     ]
     assert observations[0] is not None
-    if same_sku:
+    if same_sku and second_role == MarketRole.BUYER:
         assert observations[1] is None
     else:
         assert observations[1] is observations[0]

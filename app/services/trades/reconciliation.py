@@ -106,7 +106,10 @@ class TradeReconciliationService:
                 custody_complete = trade is None or self._trade_custody_complete(trade)
                 if trade and not custody_complete:
                     sync = None
-                    if trade.sku not in observed_custody_skus:
+                    if (
+                        trade.role == MarketRole.SELLER
+                        or trade.sku not in observed_custody_skus
+                    ):
                         if not inventory_observed:
                             inventory_observation = await InventorySyncService(
                                 self.inventory, self.session
