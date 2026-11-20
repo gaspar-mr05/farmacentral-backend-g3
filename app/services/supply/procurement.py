@@ -15,6 +15,7 @@ from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.clients.trades import TradesHTTPError
+from app.core.scarcity import GROUP3_MARKET
 from app.models import (
     Location,
     Lot,
@@ -740,13 +741,27 @@ class ScarcityProcurementService:
                 still_needs_bid = plan is not None and any(
                     a.kind == "bid" and a.sku == local.sku for a in plan.actions
                 )
-                available_same_input = plan is not None and next(
-                    (
-                        a.kind == "accept"
-                        for a in plan.actions
-                        if a.sku == local.sku and a.kind in {"accept", "bid"}
-                    ),
-                    False,
+                next_input = (
+                    next(
+                        (
+                            a
+                            for a in plan.actions
+                            if a.sku == local.sku and a.kind in {"accept", "bid"}
+                        ),
+                        None,
+                    )
+                    if plan is not None
+                    else None
+                )
+                available_same_input = (
+                    next_input is not None and next_input.kind == "accept"
+                )
+                smaller_bid = (
+                    next_input is not None
+                    and next_input.kind == "bid"
+                    and local.sku in GROUP3_MARKET
+                    and demand.max_outlay is not None
+                    and next_input.quantity < local.quantity
                 )
                 # Another input becoming purchasable does not replace this bid.
                 # Otherwise we cancel it only to publish it again next cycle.
@@ -756,12 +771,12 @@ class ScarcityProcurementService:
                         not still_needs_bid
                         or (
                             demand.includes_committed
-                            and demand.priority < 2
-                            and available_same_input
+                            and (available_same_input or smaller_bid)
                         )
                     )
                     and (
                         plan.status in {"ready", "produce", "direct"}
+                        or smaller_bid
                         or any(a.kind == "accept" for a in plan.actions)
                         or (
                             demand.includes_committed

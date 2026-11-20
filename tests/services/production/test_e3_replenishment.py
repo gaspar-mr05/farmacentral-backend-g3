@@ -186,6 +186,128 @@ def next_turn(session):
     session.commit()
 
 
+@pytest.mark.anyio
+async def test_market_price_changes_do_not_churn_buffer_without_customer_evidence(
+    db_session,
+):
+    service = setup(db_session, Pharmacy())
+    need = ProcurementDemand(
+        sku="KIT-A",
+        quantity=1,
+        expected_revenue=10,
+        deadline=datetime.now(UTC) + timedelta(hours=4),
+        includes_committed=True,
+        priority=2,
+    )
+    request = ProcurementRequest(
+        period_id=service.period.id,
+        request_key="stable-buffer",
+        demand=need.model_dump(mode="json"),
+        status="waiting",
+    )
+    db_session.add(request)
+    db_session.flush()
+    state = ReplenishmentState(
+        period_id=service.period.id,
+        sku="KIT-A",
+        procurement_id=request.id,
+        goal={
+            "quantity": 1,
+            "revenue": "10",
+            "priority": 2,
+            "deadline": need.deadline.isoformat(),
+            "spend_started": "0",
+        },
+    )
+    db_session.add(state)
+    db_session.commit()
+    service.prices.get_current_prices.return_value = [
+        {"sku": s, "price": 20 if s == "KIT-A" else 1} for s in ("RAW", "MID", "KIT-A")
+    ]
+    service.sourcing.ensure = AsyncMock(return_value=request)
+
+    result = await service.poll()
+
+    assert result["failed"] == 0
+    assert service.sourcing.ensure.call_args.kwargs["retire"] is False
+    assert state.goal["revenue"] == "10"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("existing_request", [False, True])
+async def test_buffer_uses_conservative_real_customer_price_without_booking_income(
+    db_session, existing_request
+):
+    from app.services.billing.metrics import BusinessMetricsService
+
+    pharmacy = Pharmacy()
+    pharmacy.catalog["KIT-A"].cost = Decimal(4)
+    pharmacy.catalog["MID"].cost = Decimal(2)
+    service = setup(db_session, pharmacy)
+    service.settings = service.settings.model_copy(
+        update={"replenishment_spending_limit": Decimal(100)}
+    )
+    service.prices.get_current_prices.return_value = [
+        {"sku": sku, "price": 2 if sku == "KIT-A" else 1} for sku in pharmacy.catalog
+    ]
+    for index, price in enumerate([20, 30]):
+        db_session.add(
+            make_external_order(
+                external_order_id=f"{index:024x}",
+                status=OrderStatus.REJECTED,
+                items=[OrderItem(sku="KIT-A", quantity=1, unit_price=price)],
+                delivery_deadline=datetime.now(UTC) - timedelta(minutes=1),
+            )
+        )
+    if existing_request:
+        need = ProcurementDemand(
+            sku="KIT-A",
+            quantity=1,
+            expected_revenue=2,
+            deadline=datetime.now(UTC) + timedelta(hours=4),
+            includes_committed=True,
+            priority=2,
+        )
+        request = ProcurementRequest(
+            period_id=service.period.id,
+            request_key="old-buffer",
+            demand=need.model_dump(mode="json"),
+            status="superseded",
+        )
+        db_session.add(request)
+        db_session.flush()
+        db_session.add(
+            ReplenishmentState(
+                period_id=service.period.id,
+                sku="KIT-A",
+                procurement_id=request.id,
+                goal={
+                    "quantity": 1,
+                    "revenue": "2",
+                    "priority": 2,
+                    "deadline": need.deadline.isoformat(),
+                    "spend_started": "0",
+                },
+            )
+        )
+        service.sourcing.ensure = AsyncMock(return_value=request)
+    db_session.commit()
+
+    result = await service.poll()
+
+    state = db_session.scalar(
+        select(ReplenishmentState).where(ReplenishmentState.sku == "KIT-A")
+    )
+    assert result["failed"] == 0 and result["supplied"] == 1
+    assert Decimal(state.goal["revenue"]) == 20 * state.goal["quantity"]
+    assert (
+        BusinessMetricsService(db_session, service.period).calculate().invoiced_income
+        == 0
+    )
+    if existing_request:
+        assert service.sourcing.ensure.call_args.kwargs["retire"] is True
+
+
 def test_due_production_forces_fresh_inventory_observation(db_session):
     service = setup(db_session, Pharmacy())
     service.settings.replenishment_inventory_max_age_seconds = 60

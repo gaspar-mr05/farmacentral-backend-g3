@@ -264,6 +264,23 @@ class E3ReplenishmentService:
             )
             goal_quantity = min(200, quantity) if quantity else state.target
             desired_quantity = goal_quantity
+            if priority == 2:
+                observed_price = self._recent_customer_price(kit.sku, now)
+                if observed_price is not None:
+                    revenue = (
+                        max(observed_price, prices.get(kit.sku, Decimal(0)))
+                        * desired_quantity
+                    )
+                elif (
+                    state.goal
+                    and state.goal.get("priority") == 2
+                    and state.goal["quantity"] == desired_quantity
+                ):
+                    # Keep an existing quote stable when there is no new customer
+                    # evidence; fluctuating market prices must not churn bids.
+                    revenue = Decimal(state.goal["revenue"])
+                else:
+                    revenue = prices.get(kit.sku, Decimal(0)) * desired_quantity
             if (
                 not state.goal
                 and not state.pending_operation
@@ -335,12 +352,14 @@ class E3ReplenishmentService:
                     request = self.session.get(ProcurementRequest, state.procurement_id)
                     saved_demand = ProcurementDemand.model_validate(request.demand)
                     recovery_goal = None
-                    retarget = saved_demand.priority != priority or (
+                    retarget = (
+                        saved_demand.priority != priority
+                        or saved_demand.quantity != quantity
+                        or saved_demand.expected_revenue != revenue
+                    ) or (
                         priority < 2
                         and (
-                            saved_demand.quantity != quantity
-                            or saved_demand.expected_revenue != revenue
-                            or deadline != saved_demand.deadline
+                            deadline != saved_demand.deadline
                             or saved_demand.maximum_loss_fraction
                             != self.settings.replenishment_order_loss_limit
                         )
@@ -495,11 +514,14 @@ class E3ReplenishmentService:
                     state.goal
                     and not state.procurement_id
                     and state.goal.get("priority", 2) == priority == 2
-                    and state.goal["quantity"] != quantity
+                    and (
+                        state.goal["quantity"] != quantity
+                        or Decimal(state.goal["revenue"]) != revenue
+                    )
                 ):
                     state.goal = state.goal | {
                         "quantity": quantity,
-                        "revenue": str(prices[state.sku] * quantity),
+                        "revenue": str(revenue),
                     }
                     self.session.commit()
                 if not state.goal:
@@ -940,7 +962,7 @@ class E3ReplenishmentService:
             "sku": state.sku,
             "quantity": quantity,
             "deadline": deadline.isoformat(),
-            "revenue": str(prices[state.sku] * quantity if priority == 2 else revenue),
+            "revenue": str(revenue),
             "priority": priority,
             "spend_started": str(state.estimated_spend),
         }
@@ -1142,6 +1164,24 @@ class E3ReplenishmentService:
             state.pending_operation = op | {"status": "uncertain"}
             self.session.commit()
         return True
+
+    def _recent_customer_price(self, sku, now):
+        return self.session.scalar(
+            select(func.min(OrderItem.unit_price))
+            .join(Order)
+            .where(
+                OrderItem.sku == sku,
+                OrderItem.unit_price > 0,
+                Order.external_order_id.is_not(None),
+                Order.source.in_(
+                    [OrderSource.SFTP, OrderSource.PUBSUB, OrderSource.MESSAGING]
+                ),
+                Order.status.not_in([OrderStatus.CANCELLED, OrderStatus.EXPIRED]),
+                Order.created_at
+                >= max(self.period.starts_at, now - timedelta(hours=6)),
+                Order.created_at <= now,
+            )
+        )
 
     def _procurement_demand(self, state, goal, room, prices):
         priority = goal.get("priority", 2)

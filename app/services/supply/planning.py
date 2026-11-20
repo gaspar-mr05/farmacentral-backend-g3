@@ -52,22 +52,7 @@ class ProcurementPlanner:
         self.budget = demand.budget
         self.outlay_budget = demand.outlay_budget
         self.allocate_costs = demand.max_outlay is not None
-        self.prefer_recipe = (
-            self.allocate_costs and demand.includes_committed and demand.priority < 2
-        )
-        uses = {}
-
-        def visit(sku, path=()):
-            if sku in path or sku not in self.catalog:
-                return
-            uses[sku] = uses.get(sku, 0) + 1
-            for component in self.catalog[sku].components:
-                visit(component.sku, (*path, sku))
-
-        visit(demand.sku)
-        # Keep the original combined batch when several recipe branches share
-        # an input; splitting that batch could introduce another hour of waiting.
-        self.partial_skus = {sku for sku, count in uses.items() if count == 1}
+        self.prefer_recipe = self.allocate_costs and demand.includes_committed
         self.blockers = []
         available = dict(self.stock)
         available.update(
@@ -101,7 +86,9 @@ class ProcurementPlanner:
     def _economic_cost(self, plan):
         return plan.consumed_cost if self.allocate_costs else plan.cost
 
-    def _market_options(self, sku, missing, free_cost, *, include_partial=False):
+    def _market_options(
+        self, sku, missing, free_cost, *, include_partial=False, stock=None
+    ):
         # Whole offers only. Keep the cheapest combination for each quantity;
         # the quantity ceiling bounds both purchases and planning work.
         lots = {0: (Decimal(0), ())}
@@ -111,6 +98,7 @@ class ProcurementPlanner:
         ):
             if (
                 offer.id in seen
+                or (stock or {}).get(("offer", offer.id))
                 or offer.side != "sell"
                 or offer.status != "open"
                 or offer.publisher_group in {None, self.group_id}
@@ -211,7 +199,7 @@ class ProcurementPlanner:
                 seconds=incoming_seconds,
                 reason="Confirmed supply/production pending",
             ), stock
-        options = self._market_options(sku, missing, free_cost)
+        options = self._market_options(sku, missing, free_cost, stock=stock)
         make = None
         branch_stock = stock
         batch_quantity = (
@@ -272,6 +260,7 @@ class ProcurementPlanner:
                 children.append(child)
             else:
                 pending = any(c.status == "waiting" for c in children)
+                actions, shared_wait = self._combine_bids(children)
                 make = ProcurementPlan(
                     status="waiting" if pending else "produce",
                     cost=product.cost * batch_quantity + sum(c.cost for c in children),
@@ -283,19 +272,23 @@ class ProcurementPlanner:
                     * Decimal(missing)
                     / batch_quantity,
                     seconds=60 * product.production.time
-                    + sum(c.seconds for c in children),
-                    actions=[a for c in children for a in c.actions],
+                    + sum(c.seconds for c in children)
+                    - shared_wait,
+                    actions=actions,
                 )
                 options.append(make)
         # A bid is a fallback, not confirmed stock or a faster viable route.
         price = self.prices.get(sku)
+        scarce = self.prefer_recipe and self.group_id == 3 and sku in GROUP3_MARKET
+        # Factory batches constrain manufacturing, not the quantity traded.
+        bid_quantity = missing if scarce else batch_quantity
         if price and self.allocate_costs:
             # Bid no more than the useful demand can afford, while respecting
             # the market's reference-price band and paying the whole lot.
             proposed = min(
                 price,
                 (budget - free_cost) / missing,
-                self.outlay_budget / batch_quantity,
+                self.outlay_budget / bid_quantity,
             ).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
             if proposed < price * Decimal("0.5"):
                 self.blockers.append(
@@ -305,36 +298,31 @@ class ProcurementPlanner:
                 price = None
             else:
                 price = proposed
-        if price and batch_quantity <= self.max_lot:
+        if price and bid_quantity <= self.max_lot:
             options.append(
                 ProcurementPlan(
                     status="waiting",
-                    cost=price * batch_quantity,
+                    cost=price * bid_quantity,
                     consumed_cost=free_cost + price * missing,
                     seconds=3600,
                     actions=[
                         ProcurementAction(
                             kind="bid",
                             sku=sku,
-                            quantity=batch_quantity,
+                            quantity=bid_quantity,
                             useful_quantity=missing,
-                            cost=price * batch_quantity,
+                            cost=price * bid_quantity,
                         )
                     ],
                     reason="No suitable supply; publish a buy offer",
                 )
             )
-            if (
-                self.prefer_recipe
-                and self.group_id == 3
-                and sku in GROUP3_MARKET
-                and sku in self.partial_skus
-            ):
+            if scarce:
                 # Scarce inputs can arrive in several whole public lots. Buy
                 # available lots now and reserve the missing remainder as a bid;
                 # neither part is confirmed stock before official receipt.
                 for partial in self._market_options(
-                    sku, missing, free_cost, include_partial=True
+                    sku, missing, free_cost, include_partial=True, stock=stock
                 ):
                     acquired = sum(a.quantity for a in partial.actions)
                     if acquired >= missing:
@@ -416,6 +404,9 @@ class ProcurementPlanner:
             ),
         )
         remaining = branch_stock if chosen is make else stock
+        for action in chosen.actions:
+            if action.kind == "accept":
+                remaining[("offer", action.offer_id)] = True
         if self.allocate_costs:
             acquired = (
                 batch_quantity
@@ -429,6 +420,34 @@ class ProcurementPlanner:
             remaining[sku] = remaining.get(sku, 0) + acquired - missing
             remaining[("unit_cost", sku)] = (chosen.consumed_cost - free_cost) / missing
         return chosen, remaining
+
+    def _combine_bids(self, children):
+        """One acquisition of a shared input can feed several recipe branches."""
+        actions = []
+        bids = {}
+        shared_wait = 0
+        for action in (a for child in children for a in child.actions):
+            mergeable = (
+                self.prefer_recipe
+                and self.group_id == 3
+                and action.kind == "bid"
+                and action.sku in GROUP3_MARKET
+            )
+            previous = bids.get(action.sku) if mergeable else None
+            if (
+                previous is not None
+                and previous.quantity + action.quantity <= self.max_lot
+            ):
+                previous.quantity += action.quantity
+                previous.useful_quantity += action.useful_quantity
+                previous.cost += action.cost
+                shared_wait += 3600
+            else:
+                copied = action.model_copy()
+                actions.append(copied)
+                if mergeable:
+                    bids[action.sku] = copied
+        return actions, shared_wait
 
     def _fits(self, plan):
         ids = [a.offer_id for a in plan.actions if a.offer_id]

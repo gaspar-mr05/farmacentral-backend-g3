@@ -236,7 +236,7 @@ def test_partial_scarce_plan_never_reuses_a_public_lot():
     ]
 
 
-def test_shared_recipe_input_keeps_one_batch_instead_of_serial_partial_bids():
+def test_shared_recipe_input_combines_net_remainder_without_reusing_public_lot():
     products = {
         RAW: product(RAW, batch=30),
         MID: product(MID, components=[(RAW, 4)]),
@@ -254,8 +254,75 @@ def test_shared_recipe_input_keeps_one_batch_instead_of_serial_partial_bids():
         )
     )
     assert result.status == "waiting"
-    assert [(a.kind, a.quantity) for a in result.actions] == [("bid", 30)]
-    assert result.seconds == 3780
+    assert [(a.kind, a.quantity) for a in result.actions] == [("accept", 3), ("bid", 5)]
+    assert result.seconds == 3840
+    assert result.cost == result.consumed_cost == 19
+
+
+@pytest.mark.parametrize("priority", [0, 1, 2])
+def test_scarce_bid_requests_net_need_not_supplier_factory_batch(priority):
+    result = planner(catalog={RAW: product(RAW, batch=50)}).plan(
+        demand(
+            sku=RAW,
+            quantity=12,
+            expected_revenue=200,
+            max_outlay=120,
+            includes_committed=True,
+            priority=priority,
+        )
+    )
+    assert [(a.kind, a.quantity) for a in result.actions] == [("bid", 12)]
+    assert result.cost == result.consumed_cost == 24
+
+
+def test_shared_syrup_branches_buy_available_lots_and_publish_one_remaining_bid():
+    products = {
+        RAW: product(RAW, batch=30),
+        MID: product(MID, batch=4, components=[(RAW, 10)]),
+        OTHER: product(OTHER, batch=3, components=[(RAW, 10)]),
+        KIT: product(KIT, components=[(MID, 1), (OTHER, 1)]),
+    }
+    result = planner(
+        catalog=products,
+        offers={RAW: [offer(RAW, 5, 2), offer(RAW, 10, 2, id="b" * 24)]},
+    ).plan(
+        demand(
+            quantity=1,
+            expected_revenue=1000,
+            max_outlay=1000,
+            includes_committed=True,
+            priority=1,
+        )
+    )
+    assert [(a.kind, a.quantity) for a in result.actions] == [
+        ("accept", 5),
+        ("accept", 10),
+        ("bid", 55),
+    ]
+    assert result.cost == 148
+    assert result.seconds == 3900
+    assert result.status == "waiting"
+
+
+def test_combining_bids_keeps_the_per_offer_quantity_limit():
+    products = {
+        RAW: product(RAW),
+        MID: product(MID, components=[(RAW, 4)]),
+        OTHER: product(OTHER, components=[(RAW, 4)]),
+        KIT: product(KIT, components=[(MID, 1), (OTHER, 1)]),
+    }
+    result = planner(catalog=products, max_lot=6).plan(
+        demand(
+            quantity=1,
+            expected_revenue=100,
+            max_outlay=100,
+            includes_committed=True,
+            priority=1,
+            deadline=datetime.now(UTC) + timedelta(hours=3),
+        )
+    )
+    assert [(a.kind, a.quantity) for a in result.actions] == [("bid", 4), ("bid", 4)]
+    assert result.seconds == 7380
 
 
 def test_larger_lot_is_valid_when_full_outlay_and_storage_fit():

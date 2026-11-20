@@ -355,6 +355,50 @@ async def test_unrelated_purchase_does_not_cancel_a_still_needed_input_bid(db_se
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("remaining", [2, 4])
+async def test_oversized_scarce_bid_is_replaced_only_when_net_need_shrinks(
+    db_session, remaining
+):
+    period, _, _, _ = add_market_stock(db_session)
+    source = service(db_session, period)
+    need = demand(
+        sku=RAW, quantity=4, includes_committed=True, priority=2, max_outlay=100
+    )
+    opened = offer(RAW, 4, 2, publisher=3).model_copy(update={"side": "buy"})
+    source.trades.create_offer.return_value = opened
+    source.trades.get_offer.return_value = opened
+    row = await source.ensure("net-bid", need)
+    row.next_retry_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.commit()
+    source.preview.return_value = ProcurementPlan(
+        status="waiting",
+        actions=[
+            ProcurementAction(
+                kind="bid",
+                sku=RAW,
+                quantity=remaining,
+                useful_quantity=remaining,
+                cost=2 * remaining,
+            )
+        ],
+    )
+    source.trades.get_offer.side_effect = [
+        opened,
+        opened.model_copy(update={"status": "cancelled"}),
+    ]
+
+    await source.ensure("net-bid", need)
+
+    if remaining < 4:
+        source.trades.cancel_offer.assert_awaited_once_with(opened.id)
+        assert row.market_offer_id is None
+    else:
+        source.trades.cancel_offer.assert_not_awaited()
+        assert row.market_offer_id is not None
+    source.trades.create_offer.assert_awaited_once()
+
+
+@pytest.mark.anyio
 async def test_customer_kit_bid_yields_to_feasible_waiting_recipe(db_session):
     period, _, _, _ = add_market_stock(db_session)
     need = demand(includes_committed=True, priority=1)
