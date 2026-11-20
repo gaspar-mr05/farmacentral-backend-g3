@@ -201,10 +201,18 @@ class CooperativeKitProduction(KitProductionService):
     def ready_final_quantity(self, quantity):
         product = self._catalog[self.state.sku]
         available = len(self._available_units(product.sku))
+        ready = self.ready_final_capacity(quantity)
+        return ready if available < ready < quantity else None
+
+    def ready_final_capacity(self, quantity):
+        """Return final stock that can exist after one ready-only production."""
+        product = self._catalog[self.state.sku]
+        available = len(self._available_units(product.sku))
         missing = quantity - available
         if missing <= 0 or not product.sellable or not product.components:
-            return None
+            return available
         ready = min(
+            missing,
             self._maximum_chunk_size(product),
             *(
                 len(self._available_units(c.sku)) // c.required_per_unit
@@ -212,7 +220,7 @@ class CooperativeKitProduction(KitProductionService):
             ),
         )
         ready -= ready % product.production.batch
-        return available + ready if 0 < ready < missing else None
+        return available + ready
 
     async def advance(self, sku, quantity, *, ready_only=False):
         with production_lock(self._session):

@@ -1370,6 +1370,36 @@ async def test_ready_complete_order_precedes_missing_components(
 
 
 @pytest.mark.anyio
+async def test_ready_final_inputs_batch_multiple_complete_customer_orders(db_session):
+    pharmacy = Pharmacy()
+    pharmacy.receive("MID", 5, store="STORE")
+    service = setup(db_session, pharmacy)
+    now = datetime.now(UTC)
+    db_session.add_all(
+        [
+            make_external_order(
+                external_order_id=f"{index:024x}",
+                items=[OrderItem(sku="KIT-A", quantity=quantity, unit_price=10)],
+                delivery_deadline=now + timedelta(hours=index + 1),
+            )
+            for index, quantity in enumerate((2, 2, 3), start=1)
+        ]
+    )
+    db_session.commit()
+
+    result = await service.poll()
+
+    state = db_session.scalar(select(ReplenishmentState))
+    assert result["produced"] == 1
+    assert result["supplied"] == result["purchased"] == result["failed"] == 0
+    assert pharmacy.posts == [("KIT-A", 4)]
+    # Procurement still represents one isolated OC; only the ready final
+    # production is consolidated, and no partial third OC is manufactured.
+    assert state.goal["quantity"] == 2
+    assert state.pending_operation["quantity"] == 4
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "blocker", ["protected", "changed", "pending", "incoming", "batch"]
 )

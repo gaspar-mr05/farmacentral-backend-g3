@@ -574,10 +574,23 @@ class E3ReplenishmentService:
                 execution_quantity = goal["quantity"]
                 partial = False
                 producer.protected_stock = plan.protected_stock
+                ready_batch = self._ready_order_batch_quantity(
+                    state, producer, plan, datetime.now(UTC)
+                )
+                if ready_batch is not None:
+                    execution_quantity = ready_batch
+                    partial = True
+                    logger.info(
+                        "Ready customer batch selected: sku=%s quantity=%s goal=%s",
+                        state.sku,
+                        ready_batch,
+                        goal["quantity"],
+                    )
                 ready_quantity = producer.ready_final_quantity(execution_quantity)
                 waiting_orders = self._order_demands(state.sku, datetime.now(UTC))
                 if (
-                    ready_quantity is not None
+                    ready_batch is None
+                    and ready_quantity is not None
                     and waiting_orders
                     and waiting_orders[0][1] <= ready_quantity
                 ):
@@ -1358,6 +1371,28 @@ class E3ReplenishmentService:
                 str(pair[0].order_id),
             ),
         )
+
+    def _ready_order_batch_quantity(self, state, producer, plan, now):
+        """Batch only complete customer orders whose final inputs already exist."""
+        goal = state.goal or {}
+        if (
+            goal.get("priority", 2) >= 2
+            or goal.get("buffer_recovery")
+            or plan.status != "produce"
+            or plan.actions
+        ):
+            return None
+        demands = self._order_demands(state.sku, now)
+        requested = min(200, sum(missing for _, missing in demands))
+        if requested <= goal["quantity"]:
+            return None
+        capacity = producer.ready_final_capacity(requested)
+        complete_quantity = 0
+        for _, missing in demands:
+            if complete_quantity + missing > capacity:
+                break
+            complete_quantity += missing
+        return complete_quantity if complete_quantity > goal["quantity"] else None
 
     def _demand(
         self,
