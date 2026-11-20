@@ -958,7 +958,7 @@ async def test_verified_recipe_can_proceed_without_fabricating_trade_custody(
         assert first["produced"] == 1
         assert first["supplied"] == first["purchased"] == first["failed"] == 0
         assert pharmacy.posts == [("KIT-A", 1)]
-        assert state.goal["quantity"] == 3
+        assert state.goal["quantity"] == 1
         assert state.pending_operation["quantity"] == 1
     elif blocked == "other_input":
         assert first["supplied"] == 1
@@ -1202,8 +1202,8 @@ async def test_partial_component_stock_is_completed_instead_of_restarting_recipe
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("batch,raw,expected", [(1, 8, 4), (2, 6, 2), (1, 8, 0)])
-async def test_ready_partial_final_kits_precede_missing_components(
+@pytest.mark.parametrize("batch,raw,expected", [(1, 8, 2), (2, 6, 2), (1, 8, 0)])
+async def test_ready_complete_order_precedes_missing_components(
     db_session, batch, raw, expected
 ):
     pharmacy = Pharmacy()
@@ -1237,7 +1237,7 @@ async def test_ready_partial_final_kits_precede_missing_components(
     assert result["produced"] == (1 if expected else 0)
     assert result["supplied"] == result["purchased"] == result["failed"] == 0
     assert pharmacy.posts == ([("KIT-A", expected)] if expected else [])
-    assert state.goal["quantity"] == 5
+    assert state.goal["quantity"] == 2
     if expected:
         assert state.pending_operation["quantity"] == expected
     else:
@@ -1350,7 +1350,7 @@ async def test_poll_supplies_independent_recipes_in_one_cycle(db_session):
     )
 
 
-def test_waiting_orders_for_one_sku_are_aggregated_into_one_demand(db_session):
+def test_waiting_orders_keep_independent_quantities_and_deadlines(db_session):
     pharmacy = Pharmacy()
     now = datetime.now(UTC)
     service = setup(db_session, pharmacy)
@@ -1367,9 +1367,9 @@ def test_waiting_orders_for_one_sku_are_aggregated_into_one_demand(db_session):
 
     quantity, deadline, revenue, priority = service._demand("KIT-A", Decimal(10), now)
 
-    assert quantity == 4
+    assert quantity == 1
     assert deadline == now + timedelta(hours=1)
-    assert revenue == 40
+    assert revenue == 10
     assert priority == 1
 
     grouped = service._demand(
@@ -1378,7 +1378,7 @@ def test_waiting_orders_for_one_sku_are_aggregated_into_one_demand(db_session):
         now,
         preferred_order_ids=[str(orders[1].id), str(orders[2].id)],
     )
-    assert grouped == (3, now + timedelta(hours=2), Decimal(30), 1)
+    assert grouped == (2, now + timedelta(hours=2), Decimal(20), 1)
 
 
 @pytest.mark.anyio
@@ -1418,11 +1418,11 @@ async def test_preferred_future_order_does_not_hide_new_urgent_arrivals(
         if selection
         else None,
     )
-    assert quantity == (3 if include_urgent else 1)
+    assert quantity == (2 if include_urgent else 1)
     assert deadline == (
         urgent.delivery_deadline if include_urgent else future.delivery_deadline
     )
-    assert revenue == (30 if include_urgent else 10)
+    assert revenue == (20 if include_urgent else 10)
 
 
 @pytest.mark.anyio
@@ -1733,9 +1733,9 @@ async def test_later_demand_search_is_bounded_and_keeps_budget_constraints(
         service.sourcing.preview = AsyncMock(wraps=service.sourcing.preview)
         result = await service.poll()
         assert result["failed"] == 0
-        assert (
-            service.sourcing.preview.await_count == 5
-        )  # Current + three alternatives + one buffer recovery preview.
+        assert service.sourcing.preview.await_count == 6
+        # Current order, three individual alternatives, buffer recovery and
+        # the execution preflight. The search remains bounded as the queue grows.
         for call in service.sourcing.preview.await_args_list:
             assert call.args[0].maximum_loss_fraction == 0
             assert call.args[0].max_outlay <= 10

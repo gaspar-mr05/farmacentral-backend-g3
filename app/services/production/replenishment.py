@@ -1234,7 +1234,7 @@ class E3ReplenishmentService:
         _, _, prices = snapshot
         tried = 0
         demands = self._order_demands(state.sku, datetime.now(UTC))
-        for index, (item, _) in enumerate(demands):
+        for item, missing in demands:
             if (
                 item.order.status != OrderStatus.RECEIVED
                 or item.order.delivery_deadline is None
@@ -1245,26 +1245,15 @@ class E3ReplenishmentService:
                 deadline = min(deadline, self.period.ends_at)
             if deadline <= datetime.fromisoformat(goal["deadline"]):
                 continue
-            quantity = 0
-            revenue = Decimal(0)
-            order_ids = []
-            for later_item, missing in demands[index:]:
-                if later_item.order.status != OrderStatus.RECEIVED:
-                    continue
-                take = min(missing, 200 - quantity)
-                if take <= 0:
-                    break
-                quantity += take
-                revenue += later_item.unit_price * take
-                order_ids.append(str(later_item.order_id))
+            quantity = min(missing, 200)
             candidate = goal | {
                 "order_id": str(item.order_id),
-                "order_ids": order_ids,
                 "selected_at": datetime.now(UTC).isoformat(),
                 "quantity": quantity,
                 "deadline": deadline.isoformat(),
-                "revenue": str(revenue),
+                "revenue": str(item.unit_price * quantity),
             }
+            candidate.pop("order_ids", None)
             demand = self._procurement_demand(state, candidate, room, prices)
             plan = await self.sourcing.preview(
                 demand, snapshot=snapshot, offer_cache=offer_cache
@@ -1356,40 +1345,30 @@ class E3ReplenishmentService:
                         else max(pair[0].order.created_at for pair in preferred)
                     )
                     chosen_deadline = preferred[0][0].order.delivery_deadline
-                    # Keep previously assessed infeasible work skipped, but do
-                    # not hide a newly arrived OC with an earlier promise.
-                    selected = [
+                    # Keep the previously selected viable order across cycles,
+                    # unless a newly arrived order has a tighter deadline.
+                    urgent = [
                         pair
                         for pair in selected
-                        if str(pair[0].order_id) in wanted
-                        or (
-                            pair[0].order.created_at > chosen_at
-                            and pair[0].order.delivery_deadline is not None
-                            and (
-                                chosen_deadline is None
-                                or pair[0].order.delivery_deadline < chosen_deadline
-                            )
+                        if pair[0].order.created_at > chosen_at
+                        and pair[0].order.delivery_deadline is not None
+                        and (
+                            chosen_deadline is None
+                            or pair[0].order.delivery_deadline < chosen_deadline
                         )
                     ]
-            # A production turn has a mostly fixed lead time. Consolidate all
-            # demand at the same priority so one recipe run can cover the
-            # waiting queue instead of rebuilding the same component chain for
-            # every individual order. The nearest deadline remains the bound;
-            # later promises never extend the earliest customer's deadline.
-            quantity = 0
-            revenue = Decimal(0)
-            for item, missing in selected:
-                take = min(missing, 200 - quantity)
-                if take <= 0:
-                    break
-                quantity += take
-                revenue += item.unit_price * take
-            first = selected[0][0]
+                    selected = urgent[:1] or preferred[:1]
+            # One replenishment goal represents one complete customer promise.
+            # Official production batches can still create reusable surplus,
+            # but unrelated orders must not inherit the earliest order's
+            # deadline or become one oversized all-or-nothing plan.
+            item, missing = selected[0]
+            quantity = min(missing, 200)
             return (
                 quantity,
-                first.order.delivery_deadline,
-                revenue,
-                1 if first.order.status == OrderStatus.RECEIVED else 0,
+                item.order.delivery_deadline,
+                item.unit_price * quantity,
+                1 if item.order.status == OrderStatus.RECEIVED else 0,
             )
         return (
             0,
