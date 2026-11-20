@@ -817,6 +817,12 @@ class E3ReplenishmentService:
                     )
             except ReplenishmentDeferred as exc:
                 state.last_error = str(exc)
+                if state.last_error == (
+                    "Shared packaging has production pending recovery/availability"
+                ):
+                    state.next_retry_at = self._shared_packaging_retry_at(
+                        datetime.now(UTC), state.next_retry_at
+                    )
                 result["deferred"] += 1
                 if (
                     state.pending_operation
@@ -925,6 +931,19 @@ class E3ReplenishmentService:
             ):
                 break
         return result
+
+    def _shared_packaging_retry_at(self, now, scheduled_retry):
+        """Retry urgent work as soon as the active packaging run can finish."""
+        available_at = self.session.scalar(
+            select(func.min(ProductionRun.available_at)).where(
+                ProductionRun.completed_at.is_(None),
+                ProductionRun.available_at.is_not(None),
+            )
+        )
+        if available_at is None:
+            return scheduled_retry
+        packaging_retry = max(now, available_at)
+        return min(scheduled_retry, packaging_retry)
 
     def _inventory_max_age(self, now: datetime) -> float:
         """Never delay recovery of an operation that can already be available."""

@@ -330,6 +330,26 @@ def test_due_production_forces_fresh_inventory_observation(db_session):
     assert service._inventory_max_age(now) == 0
 
 
+def test_shared_packaging_retries_when_active_run_becomes_available(db_session):
+    service = setup(db_session, Pharmacy())
+    now = datetime.now(UTC)
+    available_at = now + timedelta(seconds=20)
+    db_session.add(
+        ProductionRun(
+            operation_key=uuid4(),
+            requested_at=now,
+            expected_sku="MID",
+            expected_quantity=1,
+            available_at=available_at,
+        )
+    )
+    db_session.commit()
+
+    retry_at = service._shared_packaging_retry_at(now, now + timedelta(seconds=60))
+
+    assert retry_at == available_at
+
+
 def test_due_or_uncertain_supply_forces_fresh_inventory_observation(db_session):
     service = setup(db_session, Pharmacy())
     service.settings.replenishment_inventory_max_age_seconds = 60
