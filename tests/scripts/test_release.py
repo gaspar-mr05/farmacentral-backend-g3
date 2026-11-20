@@ -42,11 +42,18 @@ def test_deploy_reports_exact_failed_restart_and_checks_health_only_after_both(
         'if [[ "${!#}" == "$FAILED_UNIT" ]]; then\n'
         '  echo "sudo: a password is required" >&2; exit 1\nfi\n',
     )
-    for name in ("python", "alembic"):
-        executable(
-            venv_bin / name,
-            f'printf "{name} %s\\n" "$*" >> "$COMMAND_LOG"\n',
-        )
+    executable(
+        venv_bin / "python",
+        'printf "python %s\\n" "$*" >> "$COMMAND_LOG"\n'
+        'if [[ "$*" == "-m scripts.restart_workers_safely" ]]; then\n'
+        f'  exec sudo -n "{bin_dir / "systemctl"}" '
+        "restart farmacentral-workers.target\n"
+        "fi\n",
+    )
+    executable(
+        venv_bin / "alembic",
+        'printf "alembic %s\\n" "$*" >> "$COMMAND_LOG"\n',
+    )
     executable(bin_dir / "curl", 'echo "health" >> "$COMMAND_LOG"\n')
     executable(
         bin_dir / "systemctl",

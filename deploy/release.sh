@@ -19,7 +19,11 @@ export APP_ENV_FILE="$APP_DIR/.env"
 
 restart_service() {
     local unit="$1"
-    if ! sudo -n /usr/bin/systemctl restart "$unit"; then
+    local -a restart_command=(sudo -n /usr/bin/systemctl restart "$unit")
+    if [[ "$unit" == "farmacentral-workers.target" ]]; then
+        restart_command=(.venv/bin/python -m scripts.restart_workers_safely)
+    fi
+    if ! "${restart_command[@]}"; then
         printf 'Deployment failed: could not restart %s.\n' "$unit" >&2
         printf 'Check the service error above and the NOPASSWD rule for:\n' >&2
         printf '  /usr/bin/systemctl restart %s\n' "$unit" >&2
