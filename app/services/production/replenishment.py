@@ -139,6 +139,9 @@ class E3ReplenishmentService:
             path=self.settings.effective_inventory_observation_file,
             max_age_seconds=self._inventory_max_age(now),
             tolerate_changes=True,
+            # Large stock groups are truncated conservatively by the collector.
+            # Mutations still preflight, and due/uncertain operations disable reuse.
+            allow_incomplete=True,
         )
         inventory_started_at = observation.started_at
         synchronized = observation.result

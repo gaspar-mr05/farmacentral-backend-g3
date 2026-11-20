@@ -143,6 +143,28 @@ async def test_incomplete_observation_is_not_reused(db_session, tmp_path):
 
 
 @pytest.mark.anyio
+async def test_incomplete_observation_can_be_reused_when_caller_allows_it(
+    db_session, tmp_path
+):
+    client = FakeInventorySource()
+    service = InventorySyncService(client, db_session)
+    path = tmp_path / "inventory-observation.json"
+    await service.observe_recent(path=path, max_age_seconds=60, allow_incomplete=True)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["result"]["inventory_complete"] = False
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    requests_after_first = len(client.requested_limits)
+
+    reused = await service.observe_recent(
+        path=path, max_age_seconds=60, allow_incomplete=True
+    )
+
+    assert reused.reused
+    assert not reused.result.inventory_complete
+    assert len(client.requested_limits) == requests_after_first
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("missing_from_snapshot", [False, True])
 async def test_old_snapshot_cannot_undo_a_move_confirmed_during_collection(
     db_session, missing_from_snapshot

@@ -112,14 +112,15 @@ class InventorySyncService:
         path: Path,
         max_age_seconds: float,
         tolerate_changes: bool = False,
+        allow_incomplete: bool = False,
     ) -> InventoryObservation:
-        """Reuse a recent complete scan while retaining its actual start time."""
+        """Reuse a recent validated scan while retaining its actual start time."""
         now = datetime.now(UTC)
         if max_age_seconds > 0:
             cached = _read_observation(path)
             if (
                 cached is not None
-                and cached.result.inventory_complete
+                and (cached.result.inventory_complete or allow_incomplete)
                 and all(
                     value.utcoffset() is not None
                     for value in (cached.started_at, cached.completed_at)
@@ -136,7 +137,7 @@ class InventorySyncService:
             completed_at=datetime.now(UTC),
             result=result,
         )
-        if max_age_seconds > 0 and result.inventory_complete:
+        if max_age_seconds > 0 and (result.inventory_complete or allow_incomplete):
             try:
                 _write_observation(path, observation)
             except OSError as exc:
