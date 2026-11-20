@@ -232,6 +232,11 @@ class E3ReplenishmentService:
                 preferred_order_ids=(state.goal or {}).get("order_ids"),
                 preferred_selected_at=(state.goal or {}).get("selected_at"),
             )
+            # Buffer recovery deliberately gives the production plan a longer
+            # horizon, but it must not erase the real customer's place in the
+            # queue. Keep that deadline for scheduling while the extended one
+            # remains available to the planner below.
+            schedule_deadline = deadline
             if (
                 state.goal
                 and state.goal.get("buffer_recovery")
@@ -271,8 +276,14 @@ class E3ReplenishmentService:
                 continue
             if state.goal:
                 goal_quantity = state.goal["quantity"]
-            schedule_deadline = deadline or (
-                datetime.fromisoformat(state.goal["deadline"]) if state.goal else None
+            schedule_deadline = (
+                schedule_deadline
+                or deadline
+                or (
+                    datetime.fromisoformat(state.goal["deadline"])
+                    if state.goal
+                    else None
+                )
             )
             candidates.append(
                 (

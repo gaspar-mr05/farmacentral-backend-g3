@@ -36,6 +36,9 @@ from app.services.production.cooperative import (
 from app.services.production.locking import production_lock
 from app.services.production.orchestration import ProductionInputsUnavailableError
 from app.services.production.replenishment import E3ReplenishmentService
+from app.services.production.replenishment_policy import (
+    schedule_key as policy_schedule_key,
+)
 from tests.models.test_e2_migration import migration_database as migration_database
 from tests.models.test_e2_migration import run_migration
 from tests.services.test_procurement_planning import product
@@ -1519,7 +1522,7 @@ async def test_infeasible_customer_bid_builds_future_buffer_instead(
 
 @pytest.mark.anyio
 async def test_buffer_recovery_keeps_customer_sized_profitable_recipe(
-    migration_database,
+    migration_database, monkeypatch
 ):
     run_migration(migration_database, "upgrade", "head")
     pharmacy = Pharmacy()
@@ -1537,12 +1540,11 @@ async def test_buffer_recovery_keeps_customer_sized_profitable_recipe(
             {"sku": sku, "price": Decimal(3) if sku == "KIT-A" else 2}
             for sku in pharmacy.catalog
         ]
-        session.add(
-            make_external_order(
-                items=[OrderItem(sku="KIT-A", quantity=1, unit_price=30)],
-                delivery_deadline=now + timedelta(hours=2),
-            )
+        order = make_external_order(
+            items=[OrderItem(sku="KIT-A", quantity=1, unit_price=30)],
+            delivery_deadline=now + timedelta(hours=2),
         )
+        session.add(order)
         session.commit()
 
         result = await service.poll()
@@ -1555,6 +1557,24 @@ async def test_buffer_recovery_keeps_customer_sized_profitable_recipe(
         assert state.goal["buffer_recovery"] is True
         assert state.goal["quantity"] == 1
         assert state.goal["revenue"] == "30"
+
+        scheduled_deadlines = {}
+
+        def record_schedule(priority, deadline, last_attempt, missing, sku, **kwargs):
+            scheduled_deadlines[sku] = deadline
+            return policy_schedule_key(
+                priority, deadline, last_attempt, missing, sku, **kwargs
+            )
+
+        monkeypatch.setattr(
+            "app.services.production.replenishment.schedule_key", record_schedule
+        )
+        next_turn(session)
+
+        await service.poll()
+
+        assert datetime.fromisoformat(state.goal["deadline"]) > order.delivery_deadline
+        assert scheduled_deadlines["KIT-A"] == order.delivery_deadline
 
 
 @pytest.mark.anyio
