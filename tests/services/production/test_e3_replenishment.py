@@ -1858,9 +1858,7 @@ async def test_recovery_horizon_does_not_protect_later_orders_ahead_of_customer(
             )
         )
         session.commit()
-        await InventorySyncService(pharmacy, session).synchronize(
-            tolerate_changes=True
-        )
+        await InventorySyncService(pharmacy, session).synchronize(tolerate_changes=True)
 
         plan = await service.sourcing.preview(
             ProcurementDemand(
