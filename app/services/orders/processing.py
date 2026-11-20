@@ -136,10 +136,15 @@ class OrderProcessingService:
             production = self._confirmed_production(sku, now, order.delivery_deadline)
             committed = self._committed_quantity(sku, order.id)
             capacity = max(stock + production - committed, 0)
+            queued = self._earlier_waiting_quantity(
+                sku, order, now, capacity, committed
+            )
+            capacity -= queued
             details.append(
                 f"{sku}: need {requested}, capacity {capacity} "
                 f"(stock {stock}, confirmed production {production}, "
                 f"committed {committed})"
+                + (f"; earlier ready orders {queued}" if queued else "")
             )
             if capacity < requested:
                 can_fulfill = False
@@ -223,6 +228,39 @@ class OrderProcessingService:
             )
         )
         return int(quantity or 0)
+
+    def _earlier_waiting_quantity(self, sku, order, now, capacity, committed):
+        reserved = 0
+        earlier = self._session.scalars(
+            select(Order)
+            .where(
+                Order.status == OrderStatus.RECEIVED,
+                Order.external_order_id.is_not(None),
+                Order.delivery_deadline > now,
+                Order.delivery_deadline < order.delivery_deadline,
+                Order.items.any(OrderItem.sku == sku),
+            )
+            .order_by(Order.delivery_deadline, Order.created_at, Order.id)
+        )
+        for waiting in earlier:
+            # Official external OCs have one SKU. Reserve complete viable OCs,
+            # so an oversized earlier request cannot block smaller useful work.
+            if any(item.sku != sku for item in waiting.items):
+                continue
+            needed = sum(
+                max(0, item.quantity - len(item.assigned_units))
+                for item in waiting.items
+            )
+            available = max(
+                self._available_stock(sku, waiting.delivery_deadline)
+                + self._confirmed_production(sku, now, waiting.delivery_deadline)
+                - committed
+                - reserved,
+                0,
+            )
+            if needed <= min(capacity - reserved, available):
+                reserved += needed
+        return reserved
 
     def _get_for_update(self, order_id: uuid.UUID) -> Order:
         order = self._session.scalar(

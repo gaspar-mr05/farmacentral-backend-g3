@@ -237,6 +237,62 @@ async def test_existing_commitment_prevents_promising_the_same_stock_twice(db_se
 
 
 @pytest.mark.anyio
+async def test_later_message_cannot_take_capacity_for_an_earlier_ready_ftp_order(
+    db_session,
+):
+    now = datetime.now(UTC)
+    product = add_product(db_session, "KIT-QUEUE")
+    add_stock(db_session, product, 3, now + timedelta(days=1))
+    earlier = add_order(db_session, product.sku, 2, now + timedelta(hours=1), "a" * 24)
+    later = add_order(db_session, product.sku, 2, now + timedelta(hours=4), "b" * 24)
+    service = OrderProcessingService(
+        FakeOrders(),
+        db_session,
+        settings=make_settings(external_order_stock_wait_seconds=172800),
+    )
+
+    await service.process_order(later.id, now=now)
+    assert later.status == OrderStatus.RECEIVED
+    assert "earlier ready orders 2" in later.decision_reason
+    await service.process_order(earlier.id, now=now)
+    assert earlier.status == OrderStatus.ACCEPTED
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("blocker", ["quantity", "late_production"])
+async def test_unfulfillable_earlier_order_does_not_block_a_viable_later_order(
+    db_session, blocker
+):
+    now = datetime.now(UTC)
+    product = add_product(db_session, "KIT-QUEUE")
+    if blocker == "quantity":
+        add_stock(db_session, product, 2, now + timedelta(days=1))
+    else:
+        db_session.add(
+            ProductionRun(
+                expected_sku=product.sku,
+                expected_quantity=2,
+                requested_at=now,
+                available_at=now + timedelta(minutes=90),
+            )
+        )
+    add_order(
+        db_session,
+        product.sku,
+        4 if blocker == "quantity" else 2,
+        now + timedelta(hours=1),
+        "a" * 24,
+    )
+    later = add_order(db_session, product.sku, 1, now + timedelta(hours=2), "b" * 24)
+
+    await OrderProcessingService(FakeOrders(), db_session).process_order(
+        later.id, now=now
+    )
+
+    assert later.status == OrderStatus.ACCEPTED
+
+
+@pytest.mark.anyio
 async def test_reprocessing_an_order_does_not_send_a_second_decision(db_session):
     now = datetime(2026, 10, 21, 12, tzinfo=UTC)
     order = add_order(

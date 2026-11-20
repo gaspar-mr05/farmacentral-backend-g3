@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import exists, func, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.clients.farma_central import FarmaCentralClient
@@ -456,9 +456,15 @@ class TradeCustodyService:
                     trade, sync.missing_unit_ids
                 )
         else:
-            candidate_ids = self._trade_sku_unit_ids(trade, sync.created_unit_ids)
+            # A newer acquisition cannot supply evidence for an older purchase.
+            before = self._next_purchase_at(trade)
+            candidate_ids = (
+                self._trade_sku_unit_ids(trade, sync.created_unit_ids)
+                if before is None
+                else []
+            )
             if len(candidate_ids) != trade.quantity:
-                candidate_ids = self._unlinked_receipt_ids(trade)
+                candidate_ids = self._unlinked_receipt_ids(trade, before=before)
 
         if len(candidate_ids) != trade.quantity:
             logger.info(
@@ -548,7 +554,28 @@ class TradeCustodyService:
             )
         )
 
-    def _unlinked_receipt_ids(self, trade: MarketTrade) -> list[str]:
+    def _next_purchase_at(self, trade):
+        return self._session.scalar(
+            select(func.min(MarketOffer.created_at)).where(
+                MarketOffer.period_id == trade.period_id,
+                MarketOffer.sku == trade.sku,
+                MarketOffer.external_offer_id != trade.external_offer_id,
+                MarketOffer.created_at > trade.closed_at,
+                MarketOffer.status.not_in(["cancelled", "expired", "failed"]),
+                or_(
+                    and_(
+                        MarketOffer.side == MarketOfferSide.BUY,
+                        MarketOffer.publisher_group_id == self._group_id,
+                    ),
+                    and_(
+                        MarketOffer.side == MarketOfferSide.SELL,
+                        MarketOffer.publisher_group_id != self._group_id,
+                    ),
+                ),
+            )
+        )
+
+    def _unlinked_receipt_ids(self, trade: MarketTrade, *, before=None) -> list[str]:
         linked_event = aliased(CustodyEvent)
         linked_to_market = exists().where(
             linked_event.unit_id == Unit.id,
@@ -565,6 +592,7 @@ class TradeCustodyService:
                     CustodyEvent.event_type == CustodyEventType.RECEIVED,
                     CustodyEvent.market_trade_id.is_(None),
                     CustodyEvent.occurred_at >= trade.closed_at,
+                    CustodyEvent.occurred_at < before if before else True,
                     ~linked_to_market,
                 )
                 .distinct()

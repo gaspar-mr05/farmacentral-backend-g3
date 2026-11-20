@@ -6,7 +6,14 @@ import pytest
 from sqlalchemy import select
 
 from app.clients.trades import TradesHTTPError
-from app.models import MarketOffer, ProcurementRequest, ReplenishmentState
+from app.models import (
+    MarketOffer,
+    MarketRole,
+    MarketTrade,
+    ProcurementRequest,
+    ReplenishmentState,
+)
+from app.queries.market import accounted_deliveries
 from app.schemas.procurement import ProcurementAction, ProcurementPlan
 from app.services.inventory.sync import EntityChanges, InventorySyncResult
 from app.services.supply.procurement import ScarcityProcurementService
@@ -48,6 +55,101 @@ def completed_sync(units):
         inventory_complete=True,
         created_unit_ids=tuple(unit.external_unit_id for unit in units),
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("proof", ["delivered", "no_trade", "not_accounted", "open"])
+async def test_historical_delivered_purchase_does_not_block_new_supply(
+    db_session, monkeypatch, proof
+):
+    period, storage, _, units = add_market_stock(db_session, quantity=3)
+    units[0].lot.product.sku = RAW
+    old = MarketOffer(
+        period_id=period.id,
+        external_offer_id="d" * 24,
+        external_order_id="e" * 24,
+        side="buy",
+        publisher_group_id=3,
+        sku=RAW,
+        quantity=2,
+        unit_price=2,
+        status="open" if proof == "open" else "closed",
+    )
+    db_session.add(old)
+    db_session.flush()
+    db_session.add(
+        ProcurementRequest(
+            period_id=period.id,
+            request_key="historical-purchase",
+            market_offer_id=old.id,
+            demand={},
+            status="custody_pending",
+            decision={"replenishment_accounted": proof != "not_accounted"},
+        )
+    )
+    if proof != "no_trade":
+        db_session.add(
+            MarketTrade(
+                period_id=period.id,
+                external_offer_id=old.external_offer_id,
+                external_order_id=old.external_order_id,
+                role=MarketRole.BUYER,
+                counterparty_id="5",
+                sku=RAW,
+                quantity=2,
+                unit_price=2,
+                closed_at=datetime.now(UTC) - timedelta(minutes=1),
+            )
+        )
+    db_session.commit()
+    source = ScarcityProcurementService(
+        Mock(
+            get_available_products=AsyncMock(
+                return_value=[product(RAW).model_dump(by_alias=True)]
+            ),
+            get_spaces=AsyncMock(
+                return_value=[
+                    {
+                        "_id": storage.code,
+                        "totalSpace": 100,
+                        "usedSpace": 3,
+                        "cold": True,
+                    }
+                ]
+            ),
+        ),
+        Mock(list_offers=AsyncMock(return_value=[offer(RAW, 2, 2)])),
+        Mock(),
+        Mock(get_current_prices=AsyncMock(return_value=[])),
+        db_session,
+        period,
+        tolerant_inventory=True,
+    )
+    monkeypatch.setattr(
+        "app.services.supply.procurement.InventorySyncService",
+        Mock(return_value=Mock(synchronize=AsyncMock())),
+    )
+
+    quote = await source.preview(demand(sku=RAW, quantity=5))
+
+    assert list(db_session.scalars(accounted_deliveries(period.id))) == (
+        [old.id] if proof == "delivered" else []
+    )
+    if proof in {"delivered", "open"}:
+        assert [(a.kind, a.quantity) for a in quote.actions] == [("accept", 2)]
+    else:
+        assert quote.status == "waiting" and quote.actions == []
+    assert old.reconciled_at is None
+    if proof == "delivered":
+        source.preview = AsyncMock(return_value=quote)
+        source.trades.get_offer = AsyncMock(return_value=offer(RAW, 2, 2))
+        source.custody.accept_sell = AsyncMock()
+        current = await source.ensure(
+            "new-supply-after-delivery", demand(sku=RAW, quantity=5)
+        )
+        source.custody.accept_sell.assert_awaited_once()
+        assert current.market_offer_id != old.id
+        assert old.status == "closed" and old.reconciled_at is None
 
 
 @pytest.mark.anyio
@@ -290,6 +392,63 @@ async def test_customer_kit_bid_yields_to_feasible_waiting_recipe(db_session):
     assert row.market_offer_id is None
     source.trades.accept_offer.assert_not_awaited()
     assert row.decision["latest_preview"]["actions"][0]["sku"] == RAW
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("accept_first", [False, True])
+async def test_customer_bid_yields_to_available_lots_of_same_scarce_input(
+    db_session, accept_first
+):
+    period, _, _, _ = add_market_stock(db_session)
+    source = service(db_session, period)
+    need = demand(sku=RAW, quantity=4, includes_committed=True, priority=1)
+    opened = offer(RAW, 4, 2, publisher=3).model_copy(update={"side": "buy"})
+    source.trades.create_offer.return_value = opened
+    source.trades.get_offer.return_value = opened
+    row = await source.ensure("partial-input-handoff", need)
+    row.next_retry_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.commit()
+    source.preview.return_value = ProcurementPlan(
+        status="waiting",
+        cost=8,
+        consumed_cost=8,
+        seconds=3660,
+        actions=[
+            ProcurementAction(
+                kind="accept",
+                sku=RAW,
+                quantity=2,
+                useful_quantity=2,
+                cost=4,
+                offer_id="b" * 24,
+            ),
+            ProcurementAction(
+                kind="bid",
+                sku=RAW,
+                quantity=2,
+                useful_quantity=2,
+                cost=4,
+            ),
+        ],
+    )
+    if not accept_first:
+        source.preview.return_value.actions.reverse()
+    source.trades.get_offer.side_effect = [
+        opened,
+        opened.model_copy(update={"status": "cancelled"}),
+    ]
+
+    row = await source.ensure("partial-input-handoff", need)
+
+    if not accept_first:
+        source.trades.cancel_offer.assert_not_awaited()
+        assert row.market_offer_id is not None
+        return
+    source.trades.cancel_offer.assert_awaited_once_with(opened.id)
+    assert row.market_offer_id is None
+    assert row.status == "waiting"
+    source.trades.accept_offer.assert_not_awaited()
+    assert row.decision["latest_preview"]["actions"][-1]["quantity"] == 2
 
 
 @pytest.mark.anyio

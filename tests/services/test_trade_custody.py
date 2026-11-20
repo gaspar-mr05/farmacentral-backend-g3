@@ -301,6 +301,77 @@ async def test_accept_buy_records_sale_without_dispatching_again(
     assert traceability.market_transfers[0].counterparty_id == "5"
 
 
+def test_old_purchase_cannot_claim_units_received_for_a_newer_purchase(db_session):
+    from app.services.inventory.sync import EntityChanges, InventorySyncResult
+
+    period, _, dispatch, units = add_market_stock(db_session, quantity=1)
+    unit = units[0]
+    now = datetime.now(UTC)
+    old = MarketTrade(
+        period_id=period.id,
+        external_offer_id="b" * 24,
+        external_order_id="c" * 24,
+        role=MarketRole.BUYER,
+        counterparty_id="5",
+        sku=unit.lot.product.sku,
+        quantity=1,
+        unit_price=2,
+        closed_at=now - timedelta(minutes=30),
+    )
+    newer = MarketTrade(
+        period_id=period.id,
+        external_offer_id="d" * 24,
+        external_order_id="e" * 24,
+        role=MarketRole.BUYER,
+        counterparty_id="6",
+        sku=unit.lot.product.sku,
+        quantity=1,
+        unit_price=2,
+        closed_at=now - timedelta(minutes=1),
+    )
+    db_session.add_all(
+        [
+            old,
+            newer,
+            MarketOffer(
+                period_id=period.id,
+                external_offer_id=newer.external_offer_id,
+                side="sell",
+                publisher_group_id=6,
+                sku=unit.lot.product.sku,
+                quantity=1,
+                unit_price=2,
+                status="closed",
+                created_at=now - timedelta(minutes=2),
+            ),
+            CustodyEvent(
+                unit_id=unit.id, event_type=CustodyEventType.RECEIVED, occurred_at=now
+            ),
+        ]
+    )
+    db_session.commit()
+    service = make_service(
+        db_session,
+        farma_central=FarmaCentralStub(dispatch.code),
+        trades=TradesStub(RuntimeError()),
+        period=period,
+    )
+    snapshot = InventorySyncResult(
+        products=EntityChanges(),
+        locations=EntityChanges(),
+        lots=EntityChanges(),
+        units=EntityChanges(),
+        inventory_complete=True,
+        created_unit_ids=(unit.external_unit_id,),
+    )
+
+    assert not service.record_synchronized_trade_units(old, snapshot)
+    assert service.record_synchronized_trade_units(newer, snapshot)
+    assert not db_session.scalar(
+        select(CustodyEvent.id).where(CustodyEvent.market_trade_id == old.id)
+    )
+
+
 def test_purchase_receipt_preserves_lot_and_supports_reentry(
     db_session: Session,
 ) -> None:

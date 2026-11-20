@@ -235,6 +235,88 @@ def test_due_or_uncertain_supply_forces_fresh_inventory_observation(db_session):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("period_ends", [False, True])
+async def test_retry_clock_is_refreshed_after_inventory_observation(
+    db_session, monkeypatch, period_ends
+):
+    pharmacy = Pharmacy()
+    service = setup(db_session, pharmacy)
+    started = datetime.now(UTC)
+    clock = {"now": started}
+    if period_ends:
+        service.period.ends_at = started + timedelta(seconds=45)
+    state = ReplenishmentState(
+        period_id=service.period.id,
+        sku="KIT-A",
+        next_retry_at=started + timedelta(seconds=30),
+    )
+    db_session.add(state)
+    db_session.commit()
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock["now"]
+
+    synchronize = InventorySyncService.synchronize
+
+    async def delayed_observation(instance, **kwargs):
+        observed = await synchronize(instance, **kwargs)
+        clock["now"] = started + timedelta(seconds=60)
+        return observed
+
+    monkeypatch.setattr("app.services.production.replenishment.datetime", Clock)
+    monkeypatch.setattr(InventorySyncService, "synchronize", delayed_observation)
+
+    result = await service.poll()
+
+    assert result["failed"] == 0
+    assert pharmacy.posts == ([] if period_ends else [("RAW", 1)])
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("ready", [False, True])
+async def test_verified_receipt_can_resume_before_scheduled_retry(db_session, ready):
+    pharmacy = Pharmacy()
+    service = setup(db_session, pharmacy)
+    now = datetime.now(UTC)
+    if ready:
+        pharmacy.receive("RAW", 1)
+    state = ReplenishmentState(
+        period_id=service.period.id,
+        sku="KIT-A",
+        next_retry_at=now + timedelta(minutes=2),
+        goal={
+            "quantity": 1,
+            "deadline": (now + timedelta(hours=3)).isoformat(),
+            "priority": 2,
+            "revenue": "10",
+            "spend_started": "0",
+        },
+        pending_operation={
+            "kind": "supply",
+            "key": str(uuid4()),
+            "sku": "RAW",
+            "quantity": 1,
+            "needed": 1,
+            "status": "confirmed",
+            "cost": "1",
+            "available_at": (
+                now - timedelta(minutes=1) if ready else now + timedelta(hours=1)
+            ).isoformat(),
+        },
+    )
+    db_session.add(state)
+    db_session.commit()
+
+    result = await service.poll()
+
+    assert result["failed"] == 0
+    assert pharmacy.posts == ([("MID", 1)] if ready else [])
+    assert state.estimated_spend == (1 if ready else 0)
+
+
+@pytest.mark.anyio
 async def test_missing_staged_inputs_are_deferred_without_inventing_production(
     db_session, monkeypatch, caplog
 ):

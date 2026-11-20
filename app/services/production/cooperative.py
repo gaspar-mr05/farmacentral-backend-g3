@@ -19,6 +19,7 @@ from app.models import (
     ReplenishmentState,
     Unit,
 )
+from app.queries.market import accounted_deliveries
 from app.queries.recalls import blocked_lots
 from app.schemas.farma_central import FarmaCentralSpace
 from app.services.inventory.movements import ProductMovementService
@@ -249,6 +250,7 @@ class CooperativeKitProduction(KitProductionService):
                 MarketOffer.period_id == self.state.period_id,
                 MarketOffer.sku == product.sku,
                 MarketOffer.reconciled_at.is_(None),
+                MarketOffer.id.not_in(accounted_deliveries(self.state.period_id)),
                 MarketOffer.status.not_in(["cancelled", "expired", "failed"]),
                 or_(
                     and_(

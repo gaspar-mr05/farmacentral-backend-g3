@@ -55,6 +55,19 @@ class ProcurementPlanner:
         self.prefer_recipe = (
             self.allocate_costs and demand.includes_committed and demand.priority < 2
         )
+        uses = {}
+
+        def visit(sku, path=()):
+            if sku in path or sku not in self.catalog:
+                return
+            uses[sku] = uses.get(sku, 0) + 1
+            for component in self.catalog[sku].components:
+                visit(component.sku, (*path, sku))
+
+        visit(demand.sku)
+        # Keep the original combined batch when several recipe branches share
+        # an input; splitting that batch could introduce another hour of waiting.
+        self.partial_skus = {sku for sku, count in uses.items() if count == 1}
         self.blockers = []
         available = dict(self.stock)
         available.update(
@@ -88,7 +101,7 @@ class ProcurementPlanner:
     def _economic_cost(self, plan):
         return plan.consumed_cost if self.allocate_costs else plan.cost
 
-    def _market_options(self, sku, missing, free_cost):
+    def _market_options(self, sku, missing, free_cost, *, include_partial=False):
         # Whole offers only. Keep the cheapest combination for each quantity;
         # the quantity ceiling bounds both purchases and planning work.
         lots = {0: (Decimal(0), ())}
@@ -116,7 +129,7 @@ class ProcurementPlanner:
                     lots[total] = (full_cost, (*selected, offer))
         options = []
         for quantity, (cost, selected) in lots.items():
-            if quantity < missing:
+            if not quantity or (quantity < missing and not include_partial):
                 continue
             remaining = missing
             actions = []
@@ -140,7 +153,8 @@ class ProcurementPlanner:
                     cost=cost,
                     # Estimate consumption at the combined lot's average cost;
                     # cost still charges every purchased unit against outlay.
-                    consumed_cost=free_cost + cost * Decimal(missing) / quantity,
+                    consumed_cost=free_cost
+                    + cost * Decimal(min(missing, quantity)) / quantity,
                     actions=actions,
                 )
             )
@@ -310,6 +324,41 @@ class ProcurementPlanner:
                     reason="No suitable supply; publish a buy offer",
                 )
             )
+            if (
+                self.prefer_recipe
+                and self.group_id == 3
+                and sku in GROUP3_MARKET
+                and sku in self.partial_skus
+            ):
+                # Scarce inputs can arrive in several whole public lots. Buy
+                # available lots now and reserve the missing remainder as a bid;
+                # neither part is confirmed stock before official receipt.
+                for partial in self._market_options(
+                    sku, missing, free_cost, include_partial=True
+                ):
+                    acquired = sum(a.quantity for a in partial.actions)
+                    if acquired >= missing:
+                        continue
+                    remainder = missing - acquired
+                    options.append(
+                        ProcurementPlan(
+                            status="waiting",
+                            cost=partial.cost + price * remainder,
+                            consumed_cost=partial.consumed_cost + price * remainder,
+                            seconds=partial.seconds + 3600,
+                            actions=partial.actions
+                            + [
+                                ProcurementAction(
+                                    kind="bid",
+                                    sku=sku,
+                                    quantity=remainder,
+                                    useful_quantity=remainder,
+                                    cost=price * remainder,
+                                )
+                            ],
+                            reason="Acquire available lots; remainder unconfirmed",
+                        )
+                    )
         if incoming:
             for option in options:
                 option.status = "waiting"
@@ -352,7 +401,15 @@ class ProcurementPlanner:
             key=lambda p: (
                 p.status == "waiting",
                 self.prefer_recipe
-                and any(a.kind == "bid" and a.sku == sku for a in p.actions),
+                and any(a.kind == "bid" and a.sku == sku for a in p.actions)
+                and not any(a.kind == "accept" and a.sku == sku for a in p.actions),
+                -sum(
+                    a.useful_quantity
+                    for a in p.actions
+                    if a.kind == "accept" and a.sku == sku
+                )
+                if self.prefer_recipe and p.status == "waiting"
+                else 0,
                 self._economic_cost(p),
                 p.cost,
                 p.seconds,

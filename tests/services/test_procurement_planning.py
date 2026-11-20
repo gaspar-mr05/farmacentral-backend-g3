@@ -165,6 +165,99 @@ def test_combines_whole_small_lots_before_publishing_a_buy_bid():
     assert result.seconds == 120
 
 
+def test_customer_accumulates_scarce_lots_without_claiming_confirmed_stock():
+    p = planner(
+        catalog={RAW: product(RAW, batch=60)},
+        offers={
+            RAW: [
+                offer(RAW, 5, 2),
+                offer(RAW, 5, 2, id="b" * 24),
+                offer(RAW, 10, 2, id="c" * 24),
+            ]
+        },
+    )
+    result = p.plan(
+        demand(
+            sku=RAW,
+            quantity=24,
+            expected_revenue=200,
+            max_outlay=120,
+            includes_committed=True,
+            priority=1,
+        )
+    )
+    assert result.status == "waiting"
+    assert result.cost == result.consumed_cost == 48
+    assert [(a.kind, a.quantity) for a in result.actions] == [
+        ("accept", 5),
+        ("accept", 5),
+        ("accept", 10),
+        ("bid", 4),
+    ]
+    assert result.seconds == 3780
+
+
+@pytest.mark.parametrize("constraint", ["budget", "capacity", "deadline", "legacy"])
+def test_partial_scarce_acquisition_keeps_all_existing_limits(constraint):
+    p = planner(
+        offers={RAW: [offer(RAW, 3, 50 if constraint == "budget" else 2)]},
+        free_space=4 if constraint == "capacity" else 100,
+    )
+    result = p.plan(
+        demand(
+            sku=RAW,
+            quantity=5,
+            expected_revenue=100,
+            max_outlay=20,
+            includes_committed=constraint != "legacy",
+            priority=1,
+            deadline=datetime.now(UTC)
+            + timedelta(seconds=3600 if constraint == "deadline" else 7200),
+        )
+    )
+    assert not any(a.kind == "accept" for a in result.actions)
+
+
+def test_partial_scarce_plan_never_reuses_a_public_lot():
+    one = offer(RAW, 3, 2)
+    result = planner(offers={RAW: [one, one]}).plan(
+        demand(
+            sku=RAW,
+            quantity=5,
+            expected_revenue=100,
+            max_outlay=20,
+            includes_committed=True,
+            priority=1,
+        )
+    )
+    assert [(a.kind, a.quantity) for a in result.actions] == [
+        ("accept", 3),
+        ("bid", 2),
+    ]
+
+
+def test_shared_recipe_input_keeps_one_batch_instead_of_serial_partial_bids():
+    products = {
+        RAW: product(RAW, batch=30),
+        MID: product(MID, components=[(RAW, 4)]),
+        OTHER: product(OTHER, components=[(RAW, 4)]),
+        KIT: product(KIT, components=[(MID, 1), (OTHER, 1)]),
+    }
+    result = planner(catalog=products, offers={RAW: [offer(RAW, 3, 2)]}).plan(
+        demand(
+            quantity=1,
+            expected_revenue=200,
+            max_outlay=200,
+            includes_committed=True,
+            priority=1,
+            deadline=datetime.now(UTC) + timedelta(hours=3),
+        )
+    )
+    assert result.status == "waiting"
+    assert [(a.kind, a.quantity) for a in result.actions] == [("bid", 30)]
+    assert result.seconds == 3780
+
+
 def test_larger_lot_is_valid_when_full_outlay_and_storage_fit():
     result = planner(offers={RAW: [offer(RAW, 13, 2)]}).plan(
         demand(sku=RAW, quantity=2, expected_revenue=10, max_outlay=26)

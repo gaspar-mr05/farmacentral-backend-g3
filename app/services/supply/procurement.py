@@ -30,6 +30,7 @@ from app.models import (
     ReplenishmentState,
     Unit,
 )
+from app.queries.market import accounted_deliveries
 from app.queries.recalls import blocked_lots
 from app.schemas.farma_central import FarmaCentralProduct, FarmaCentralSpace
 from app.schemas.procurement import ProcurementDemand, ProcurementPlan
@@ -282,6 +283,7 @@ class ScarcityProcurementService:
                 MarketOffer.period_id == self.period.id,
                 incoming_role,
                 MarketOffer.reconciled_at.is_(None),
+                MarketOffer.id.not_in(accounted_deliveries(self.period.id)),
                 MarketOffer.status.not_in(["cancelled", "expired", "failed"]),
             )
         ).all()
@@ -519,6 +521,7 @@ class ScarcityProcurementService:
                         ),
                         MarketOffer.sku == action.sku,
                         MarketOffer.reconciled_at.is_(None),
+                        MarketOffer.id.not_in(accounted_deliveries(self.period.id)),
                         MarketOffer.status.not_in(["cancelled", "expired", "failed"]),
                     )
                     .order_by(MarketOffer.created_at)
@@ -736,11 +739,26 @@ class ScarcityProcurementService:
                 still_needs_bid = plan is not None and any(
                     a.kind == "bid" and a.sku == local.sku for a in plan.actions
                 )
+                available_same_input = plan is not None and next(
+                    (
+                        a.kind == "accept"
+                        for a in plan.actions
+                        if a.sku == local.sku and a.kind in {"accept", "bid"}
+                    ),
+                    False,
+                )
                 # Another input becoming purchasable does not replace this bid.
                 # Otherwise we cancel it only to publish it again next cycle.
                 better_route = (
                     plan is not None
-                    and not still_needs_bid
+                    and (
+                        not still_needs_bid
+                        or (
+                            demand.includes_committed
+                            and demand.priority < 2
+                            and available_same_input
+                        )
+                    )
                     and (
                         plan.status in {"ready", "produce", "direct"}
                         or any(a.kind == "accept" for a in plan.actions)

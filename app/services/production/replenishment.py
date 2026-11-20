@@ -169,6 +169,11 @@ class E3ReplenishmentService:
             if Decimal(str(p.get("price", 0))).is_finite()
             and Decimal(str(p.get("price", 0))) > 0
         }
+        # Inventory observations may take minutes. Schedule against the current
+        # time, including receipts that became available during that observation.
+        now = datetime.now(UTC)
+        if self.period.ends_at and now >= self.period.ends_at:
+            return result
         candidates = []
         for kit in catalog.values():
             if not kit.sellable or kit.production.at != "packaging":
@@ -183,7 +188,9 @@ class E3ReplenishmentService:
                 state = ReplenishmentState(period_id=self.period.id, sku=kit.sku)
                 self.session.add(state)
                 self.session.flush()
-            if state.next_retry_at and state.next_retry_at > now:
+            producer = self._producer(state, catalog, spaces)
+            resume_ready = self._operation_ready(state, producer, now)
+            if state.next_retry_at and state.next_retry_at > now and not resume_ready:
                 continue
             recent = (
                 self.session.scalar(
@@ -241,7 +248,6 @@ class E3ReplenishmentService:
                 deadline = datetime.fromisoformat(state.goal["deadline"])
                 revenue = Decimal(state.goal["revenue"])
                 priority = state.goal["priority"]
-            producer = self._producer(state, catalog, spaces)
             lifetime = self.settings.replenishment_minimum_lifetime_seconds
             if kit.obsolescence:
                 lifetime = min(lifetime, kit.obsolescence * 1800)
@@ -276,7 +282,7 @@ class E3ReplenishmentService:
                         state.last_attempt_at,
                         goal_quantity - stock,
                         kit.sku,
-                        resume_ready=self._operation_ready(state, producer, now),
+                        resume_ready=resume_ready,
                     ),
                     state,
                     desired_quantity,
