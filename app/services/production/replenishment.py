@@ -211,6 +211,7 @@ class E3ReplenishmentService:
                 now,
                 preferred_order_id=(state.goal or {}).get("order_id"),
                 preferred_order_ids=(state.goal or {}).get("order_ids"),
+                preferred_selected_at=(state.goal or {}).get("selected_at"),
             )
             if (
                 state.goal
@@ -908,7 +909,29 @@ class E3ReplenishmentService:
             offer_cache=offer_cache,
         )
         if not self._can_advance_with_pending_custody(plan):
-            return False
+            # Unresolved custody must not prevent a whole customer order that
+            # can be finished using only verified components already on hand.
+            producer = self._producer(state, catalog, snapshot[1])
+            producer.protected_stock = plan.protected_stock
+            ready = producer.ready_final_quantity(goal["quantity"])
+            orders = self._order_demands(state.sku, datetime.now(UTC))
+            if ready is None or not orders or orders[0][1] > ready:
+                return False
+            partial_demand = self._procurement_demand(state, goal, room, prices)
+            partial_plan = await self.sourcing.preview(
+                partial_demand.model_copy(
+                    update={
+                        "quantity": ready,
+                        "expected_revenue": partial_demand.expected_revenue
+                        * ready
+                        / partial_demand.quantity,
+                    }
+                ),
+                snapshot=snapshot,
+                offer_cache=offer_cache,
+            )
+            if partial_plan.status != "produce" or partial_plan.actions:
+                return False
         state.goal = goal
         self.session.commit()
         return True
@@ -1123,6 +1146,7 @@ class E3ReplenishmentService:
             candidate = goal | {
                 "order_id": str(item.order_id),
                 "order_ids": order_ids,
+                "selected_at": datetime.now(UTC).isoformat(),
                 "quantity": quantity,
                 "deadline": deadline.isoformat(),
                 "revenue": str(revenue),
@@ -1200,6 +1224,7 @@ class E3ReplenishmentService:
         *,
         preferred_order_id=None,
         preferred_order_ids=None,
+        preferred_selected_at=None,
     ):
         selected = self._order_demands(sku, now)
         if selected:
@@ -1211,7 +1236,27 @@ class E3ReplenishmentService:
                     pair for pair in selected if str(pair[0].order_id) in wanted
                 ]
                 if preferred:
-                    selected = preferred
+                    chosen_at = (
+                        datetime.fromisoformat(preferred_selected_at)
+                        if preferred_selected_at
+                        else max(pair[0].order.created_at for pair in preferred)
+                    )
+                    chosen_deadline = preferred[0][0].order.delivery_deadline
+                    # Keep previously assessed infeasible work skipped, but do
+                    # not hide a newly arrived OC with an earlier promise.
+                    selected = [
+                        pair
+                        for pair in selected
+                        if str(pair[0].order_id) in wanted
+                        or (
+                            pair[0].order.created_at > chosen_at
+                            and pair[0].order.delivery_deadline is not None
+                            and (
+                                chosen_deadline is None
+                                or pair[0].order.delivery_deadline < chosen_deadline
+                            )
+                        )
+                    ]
             # A production turn has a mostly fixed lead time. Consolidate all
             # demand at the same priority so one recipe run can cover the
             # waiting queue instead of rebuilding the same component chain for

@@ -705,12 +705,15 @@ async def test_manufacturing_does_not_relocate_unrelated_receiving_stock(db_sess
         "budget",
         "stock_changed",
         "other_input",
+        "partial_kit",
     ],
 )
 async def test_verified_recipe_can_proceed_without_fabricating_trade_custody(
     db_session, blocked
 ):
     pharmacy = Pharmacy()
+    if blocked == "partial_kit":
+        pharmacy.receive("MID", 1, store="STORE")
     if blocked == "other_input":
         pharmacy.catalog["OTHER"] = product("OTHER", cost=1, time=0)
         pharmacy.catalog["MID"] = product(
@@ -726,6 +729,21 @@ async def test_verified_recipe_can_proceed_without_fabricating_trade_custody(
         db_session.scalar(select(Unit)).status = "quarantined"
     now = datetime.now(UTC)
     deadline = now + timedelta(hours=4)
+    if blocked == "partial_kit":
+        db_session.add_all(
+            [
+                make_external_order(
+                    external_order_id="c" * 24,
+                    items=[OrderItem(sku="KIT-A", quantity=1, unit_price=10)],
+                    delivery_deadline=now + timedelta(hours=2),
+                ),
+                make_external_order(
+                    external_order_id="d" * 24,
+                    items=[OrderItem(sku="KIT-A", quantity=2, unit_price=10)],
+                    delivery_deadline=now + timedelta(hours=3),
+                ),
+            ]
+        )
     offer = MarketOffer(
         period_id=service.period.id,
         external_offer_id="a" * 24,
@@ -800,6 +818,12 @@ async def test_verified_recipe_can_proceed_without_fabricating_trade_custody(
         assert pharmacy.posts == [("MID", 1), ("KIT-A", 1)]
         assert state.estimated_spend == 2  # Manufacturing only; purchase still held.
         assert any(u["sku"] == "KIT-A" for u in pharmacy.units.values())
+    elif blocked == "partial_kit":
+        assert first["produced"] == 1
+        assert first["supplied"] == first["purchased"] == first["failed"] == 0
+        assert pharmacy.posts == [("KIT-A", 1)]
+        assert state.goal["quantity"] == 3
+        assert state.pending_operation["quantity"] == 1
     elif blocked == "other_input":
         assert first["supplied"] == 1
         assert first["produced"] == first["failed"] == 0
@@ -1219,6 +1243,50 @@ def test_waiting_orders_for_one_sku_are_aggregated_into_one_demand(db_session):
         preferred_order_ids=[str(orders[1].id), str(orders[2].id)],
     )
     assert grouped == (3, now + timedelta(hours=2), Decimal(30), 1)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "selection,created_minutes,include_urgent",
+    [
+        (None, 5, True),
+        (10, 5, True),
+        (10, 15, False),
+    ],
+)
+async def test_preferred_future_order_does_not_hide_new_urgent_arrivals(
+    db_session, selection, created_minutes, include_urgent
+):
+    service = setup(db_session, Pharmacy())
+    now = datetime.now(UTC)
+    future = make_external_order(
+        external_order_id="a" * 24,
+        created_at=now - timedelta(hours=2),
+        delivery_deadline=now + timedelta(hours=12),
+        items=[OrderItem(sku="KIT-A", quantity=1, unit_price=10)],
+    )
+    urgent = make_external_order(
+        external_order_id="b" * 24,
+        created_at=now - timedelta(minutes=created_minutes),
+        delivery_deadline=now + timedelta(hours=1),
+        items=[OrderItem(sku="KIT-A", quantity=2, unit_price=10)],
+    )
+    db_session.add_all([future, urgent])
+    db_session.commit()
+    quantity, deadline, revenue, _ = service._demand(
+        "KIT-A",
+        Decimal(10),
+        now,
+        preferred_order_id=str(future.id),
+        preferred_selected_at=(now - timedelta(minutes=selection)).isoformat()
+        if selection
+        else None,
+    )
+    assert quantity == (3 if include_urgent else 1)
+    assert deadline == (
+        urgent.delivery_deadline if include_urgent else future.delivery_deadline
+    )
+    assert revenue == (30 if include_urgent else 10)
 
 
 @pytest.mark.anyio
