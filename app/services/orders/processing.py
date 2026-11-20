@@ -188,12 +188,15 @@ class OrderProcessingService:
         return int(quantity or 0)
 
     def _confirmed_production(self, sku: str, now: datetime, deadline: datetime) -> int:
+        dispatch_cutoff = deadline - timedelta(
+            seconds=self._settings.external_order_dispatch_margin_seconds
+        )
         quantity = self._session.scalar(
             select(func.coalesce(func.sum(ProductionRun.expected_quantity), 0)).where(
                 ProductionRun.expected_sku == sku,
                 ProductionRun.completed_at.is_(None),
                 ProductionRun.available_at >= now,
-                ProductionRun.available_at <= deadline,
+                ProductionRun.available_at <= dispatch_cutoff,
             )
         )
         return int(quantity or 0)

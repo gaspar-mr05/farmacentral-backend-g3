@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     external_order_stock_retry_seconds: int = Field(default=30, ge=1)
     external_order_dispatch_margin_seconds: int = Field(default=300, ge=0)
     replenishment_poll_interval_seconds: float = Field(default=60, gt=0)
+    replenishment_inventory_max_age_seconds: float = Field(default=60, ge=0)
+    inventory_observation_file: Path | None = None
     replenishment_minimum_stock: int = Field(default=2, ge=1)
     replenishment_target_stock: int = Field(default=6, ge=1)
     replenishment_minimum_lifetime_seconds: float = Field(default=14400, ge=0)
@@ -171,6 +173,14 @@ class Settings(BaseSettings):
         if not directory.is_dir():
             directory = Path(tempfile.gettempdir()) / f"farmacentral-{os.getuid()}"
         return directory / f"llm-{self.farma_central_group}-{scope}.rate"
+
+    @property
+    def effective_inventory_observation_file(self) -> Path:
+        if self.inventory_observation_file is not None:
+            return self.inventory_observation_file
+        shared = Path("/var/lib/farmacentral")
+        directory = shared if shared.is_dir() else Path(tempfile.gettempdir())
+        return directory / f"inventory-observation-{os.getuid()}.json"
 
     @property
     def effective_messaging_oidc_audience(self) -> str:

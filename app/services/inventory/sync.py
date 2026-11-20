@@ -1,5 +1,11 @@
-from dataclasses import dataclass
+import json
+import logging
+import os
+import tempfile
+from contextlib import suppress
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -20,6 +26,7 @@ from app.services.inventory.normalization import normalize_inventory
 from app.services.production.runs import link_production_run_to_existing_lot
 
 INVENTORY_SYNC_LOCK_ID = 0x4641524D
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -39,6 +46,14 @@ class InventorySyncResult:
     missing_unit_ids: tuple[str, ...] = ()
     complete_skus: frozenset[str] = frozenset()
     incomplete_groups: frozenset[tuple[str, str]] = frozenset()
+
+
+@dataclass(frozen=True)
+class InventoryObservation:
+    started_at: datetime
+    completed_at: datetime
+    result: InventorySyncResult
+    reused: bool = False
 
 
 class InventorySyncService:
@@ -90,6 +105,111 @@ class InventorySyncService:
         except Exception:
             self._session.rollback()
             raise
+
+    async def observe_recent(
+        self,
+        *,
+        path: Path,
+        max_age_seconds: float,
+        tolerate_changes: bool = False,
+    ) -> InventoryObservation:
+        """Reuse a recent complete scan while retaining its actual start time."""
+        now = datetime.now(UTC)
+        if max_age_seconds > 0:
+            cached = _read_observation(path)
+            if (
+                cached is not None
+                and cached.result.inventory_complete
+                and all(
+                    value.utcoffset() is not None
+                    for value in (cached.started_at, cached.completed_at)
+                )
+            ):
+                age = (now - cached.completed_at).total_seconds()
+                if 0 <= age <= max_age_seconds:
+                    return cached
+
+        started_at = now
+        result = await self.synchronize(tolerate_changes=tolerate_changes)
+        observation = InventoryObservation(
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+            result=result,
+        )
+        if max_age_seconds > 0 and result.inventory_complete:
+            try:
+                _write_observation(path, observation)
+            except OSError as exc:
+                logger.warning(
+                    "Inventory observation cache unavailable: error_type=%s",
+                    type(exc).__name__,
+                )
+        return observation
+
+
+def _read_observation(path: Path) -> InventoryObservation | None:
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        result = payload["result"]
+        return InventoryObservation(
+            started_at=datetime.fromisoformat(payload["started_at"]),
+            completed_at=datetime.fromisoformat(payload["completed_at"]),
+            result=InventorySyncResult(
+                products=EntityChanges(**result["products"]),
+                locations=EntityChanges(**result["locations"]),
+                lots=EntityChanges(**result["lots"]),
+                units=EntityChanges(**result["units"]),
+                inventory_complete=result["inventory_complete"],
+                created_unit_ids=tuple(result["created_unit_ids"]),
+                missing_unit_ids=tuple(result["missing_unit_ids"]),
+                complete_skus=frozenset(result["complete_skus"]),
+                incomplete_groups=frozenset(
+                    tuple(group) for group in result["incomplete_groups"]
+                ),
+            ),
+            reused=True,
+        )
+    except (
+        FileNotFoundError,
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
+        return None
+
+
+def _write_observation(path: Path, observation: InventoryObservation) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    result = asdict(observation.result)
+    result["complete_skus"] = sorted(observation.result.complete_skus)
+    result["incomplete_groups"] = sorted(
+        [list(group) for group in observation.result.incomplete_groups]
+    )
+    payload = {
+        "started_at": observation.started_at.isoformat(),
+        "completed_at": observation.completed_at.isoformat(),
+        "result": result,
+    }
+    descriptor, temporary = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        with suppress(OSError):
+            os.close(descriptor)
+        with suppress(FileNotFoundError):
+            os.unlink(temporary)
+        raise
 
 
 def sync_inventory(

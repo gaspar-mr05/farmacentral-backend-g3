@@ -183,6 +183,57 @@ def next_turn(session):
     session.commit()
 
 
+def test_due_production_forces_fresh_inventory_observation(db_session):
+    service = setup(db_session, Pharmacy())
+    service.settings.replenishment_inventory_max_age_seconds = 60
+    now = datetime.now(UTC)
+    run = ProductionRun(
+        operation_key=uuid4(),
+        requested_at=now,
+        expected_sku="KIT-A",
+        expected_quantity=1,
+        available_at=now + timedelta(minutes=1),
+    )
+    db_session.add(run)
+    db_session.commit()
+
+    assert service._inventory_max_age(now) == 60
+
+    run.available_at = now
+    db_session.commit()
+
+    assert service._inventory_max_age(now) == 0
+
+
+def test_due_or_uncertain_supply_forces_fresh_inventory_observation(db_session):
+    service = setup(db_session, Pharmacy())
+    service.settings.replenishment_inventory_max_age_seconds = 60
+    now = datetime.now(UTC)
+    state = ReplenishmentState(
+        period_id=service.period.id,
+        sku="KIT-A",
+        pending_operation={
+            "kind": "supply",
+            "status": "confirmed",
+            "available_at": (now + timedelta(minutes=1)).isoformat(),
+        },
+    )
+    db_session.add(state)
+    db_session.commit()
+
+    assert service._inventory_max_age(now) == 60
+
+    state.pending_operation = state.pending_operation | {
+        "available_at": now.isoformat()
+    }
+    db_session.commit()
+    assert service._inventory_max_age(now) == 0
+
+    state.pending_operation = {"kind": "supply", "status": "uncertain"}
+    db_session.commit()
+    assert service._inventory_max_age(now) == 0
+
+
 @pytest.mark.anyio
 async def test_missing_staged_inputs_are_deferred_without_inventing_production(
     db_session, monkeypatch, caplog

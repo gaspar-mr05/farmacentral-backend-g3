@@ -12,7 +12,7 @@ from time import perf_counter
 from uuid import UUID, uuid4
 
 from pydantic import TypeAdapter
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.clients.farma_central import FarmaCentralHTTPError
@@ -133,13 +133,19 @@ class E3ReplenishmentService:
         if cooldown and cooldown > now:
             return result | {"deferred": 1}
         phase_started = perf_counter()
-        inventory_started_at = datetime.now(UTC)
-        synchronized = await InventorySyncService(
+        observation = await InventorySyncService(
             self.client, self.session
-        ).synchronize(tolerate_changes=True)
+        ).observe_recent(
+            path=self.settings.effective_inventory_observation_file,
+            max_age_seconds=self._inventory_max_age(now),
+            tolerate_changes=True,
+        )
+        inventory_started_at = observation.started_at
+        synchronized = observation.result
         logger.info(
-            "Replenishment timing: stage=inventory elapsed_seconds=%.2f",
+            "Replenishment timing: stage=inventory elapsed_seconds=%.2f reused=%s",
             perf_counter() - phase_started,
+            observation.reused,
         )
         phase_started = perf_counter()
         catalog_data, spaces_data, prices_data = await asyncio.gather(
@@ -864,6 +870,40 @@ class E3ReplenishmentService:
             ):
                 break
         return result
+
+    def _inventory_max_age(self, now: datetime) -> float:
+        """Never delay recovery of an operation that can already be available."""
+        due_production = self.session.scalar(
+            select(ProductionRun.id)
+            .where(
+                ProductionRun.completed_at.is_(None),
+                or_(
+                    ProductionRun.available_at.is_(None),
+                    ProductionRun.available_at <= now,
+                ),
+            )
+            .limit(1)
+        )
+        if due_production is not None:
+            return 0
+
+        pending_operations = self.session.scalars(
+            select(ReplenishmentState.pending_operation).where(
+                ReplenishmentState.period_id == self.period.id,
+                ReplenishmentState.pending_operation.is_not(None),
+            )
+        )
+        for operation in pending_operations:
+            operation = operation or {}
+            status = operation.get("status")
+            if status in {"in_flight", "uncertain"}:
+                return 0
+            available_at = operation.get("available_at")
+            if status == "confirmed" and (
+                not available_at or datetime.fromisoformat(available_at) <= now
+            ):
+                return 0
+        return self.settings.replenishment_inventory_max_age_seconds
 
     def _new_goal(self, state, catalog, prices, quantity, deadline, revenue, priority):
         if revenue is None or revenue <= 0:

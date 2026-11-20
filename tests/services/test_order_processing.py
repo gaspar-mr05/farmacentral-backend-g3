@@ -177,6 +177,35 @@ async def test_accepts_only_production_already_confirmed_before_deadline(db_sess
     assert "confirmed production 2" in result.decision_reason
 
 
+def test_production_inside_dispatch_margin_is_not_promised(db_session):
+    now = datetime(2026, 10, 21, 12, tzinfo=UTC)
+    deadline = now + timedelta(hours=2)
+    db_session.add_all(
+        [
+            ProductionRun(
+                requested_at=now,
+                expected_sku="KIT-PRODUCTION",
+                expected_quantity=2,
+                available_at=deadline - timedelta(minutes=5),
+            ),
+            ProductionRun(
+                requested_at=now,
+                expected_sku="KIT-PRODUCTION",
+                expected_quantity=4,
+                available_at=deadline - timedelta(minutes=4),
+            ),
+        ]
+    )
+    db_session.flush()
+    service = OrderProcessingService(
+        FakeOrders(),
+        db_session,
+        settings=make_settings(external_order_dispatch_margin_seconds=300),
+    )
+
+    assert service._confirmed_production("KIT-PRODUCTION", now, deadline) == 2
+
+
 @pytest.mark.anyio
 async def test_existing_commitment_prevents_promising_the_same_stock_twice(db_session):
     now = datetime(2026, 10, 21, 12, tzinfo=UTC)

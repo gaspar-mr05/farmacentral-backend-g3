@@ -1,4 +1,5 @@
 import asyncio
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
@@ -81,6 +82,64 @@ class FakeInventorySource:
         if self.include_batch:
             unit["batch"] = self.lot_id
         return [unit]
+
+
+@pytest.mark.anyio
+async def test_recent_observation_reuses_complete_snapshot(db_session, tmp_path):
+    client = FakeInventorySource()
+    service = InventorySyncService(client, db_session)
+    path = tmp_path / "inventory-observation.json"
+
+    first = await service.observe_recent(
+        path=path, max_age_seconds=60, tolerate_changes=True
+    )
+    requests_after_first = len(client.requested_limits)
+    second = await service.observe_recent(
+        path=path, max_age_seconds=60, tolerate_changes=True
+    )
+
+    assert not first.reused
+    assert second.reused
+    assert second.started_at == first.started_at
+    assert second.result.complete_skus == first.result.complete_skus
+    assert second.result.created_unit_ids == first.result.created_unit_ids
+    assert len(client.requested_limits) == requests_after_first
+
+
+@pytest.mark.anyio
+async def test_invalid_or_expired_observation_is_refreshed(db_session, tmp_path):
+    client = FakeInventorySource()
+    service = InventorySyncService(client, db_session)
+    path = tmp_path / "inventory-observation.json"
+    path.write_text("not json", encoding="utf-8")
+
+    invalid = await service.observe_recent(path=path, max_age_seconds=60)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["completed_at"] = (datetime.now(UTC) - timedelta(minutes=2)).isoformat()
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    requests_after_invalid = len(client.requested_limits)
+    expired = await service.observe_recent(path=path, max_age_seconds=60)
+
+    assert not invalid.reused
+    assert not expired.reused
+    assert len(client.requested_limits) > requests_after_invalid
+
+
+@pytest.mark.anyio
+async def test_incomplete_observation_is_not_reused(db_session, tmp_path):
+    client = FakeInventorySource()
+    service = InventorySyncService(client, db_session)
+    path = tmp_path / "inventory-observation.json"
+    await service.observe_recent(path=path, max_age_seconds=60)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["result"]["inventory_complete"] = False
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    requests_after_first = len(client.requested_limits)
+
+    refreshed = await service.observe_recent(path=path, max_age_seconds=60)
+
+    assert not refreshed.reused
+    assert len(client.requested_limits) > requests_after_first
 
 
 @pytest.mark.anyio

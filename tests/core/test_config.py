@@ -13,6 +13,7 @@ from tests.support.farma_central import make_settings
         "external_order_stock_wait_seconds",
         "external_order_stock_retry_seconds",
         "external_order_dispatch_margin_seconds",
+        "replenishment_inventory_max_age_seconds",
     ],
 )
 def test_stock_wait_settings_reject_negative_values(field):
