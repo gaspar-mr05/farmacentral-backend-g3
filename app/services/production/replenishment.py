@@ -18,6 +18,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.clients.farma_central import FarmaCentralHTTPError
 from app.clients.trades import TradesHTTPError
 from app.models import (
+    MarketOffer,
+    MarketRole,
+    MarketTrade,
     Order,
     OrderItem,
     OrderSource,
@@ -382,6 +385,14 @@ class E3ReplenishmentService:
                             revenue = Decimal(recovery_goal["revenue"])
                             priority = recovery_goal["priority"]
                         self.session.commit()
+                    elif (
+                        request.status == "custody_pending"
+                        and request.http_status is None
+                        and self._account_confirmed_custody_purchase(state, request)
+                    ):
+                        # Physical sourcing can continue. The independent trade
+                        # reconciler still owns the unresolved unit association.
+                        result["purchased"] += 1
                     elif (
                         request.status == "custody_pending"
                         and request.http_status is None
@@ -873,6 +884,47 @@ class E3ReplenishmentService:
             "priority": priority,
             "spend_started": str(state.estimated_spend),
         }
+
+    def _account_confirmed_custody_purchase(self, state, request):
+        trade = self.session.scalar(
+            select(MarketTrade)
+            .join(
+                MarketOffer,
+                (MarketOffer.external_offer_id == MarketTrade.external_offer_id)
+                & (MarketOffer.period_id == MarketTrade.period_id),
+            )
+            .where(
+                MarketOffer.id == request.market_offer_id,
+                MarketOffer.status == "closed",
+                MarketTrade.period_id == self.period.id,
+                MarketTrade.role == MarketRole.BUYER,
+            )
+        )
+        if trade is None:
+            return False
+        decision = request.decision or {}
+        accounted = self.session.scalar(
+            select(ProcurementRequest.id)
+            .where(
+                ProcurementRequest.period_id == self.period.id,
+                ProcurementRequest.market_offer_id == request.market_offer_id,
+                ProcurementRequest.decision["replenishment_accounted"]
+                .as_boolean()
+                .is_(True),
+            )
+            .limit(1)
+        )
+        if accounted is None:
+            state.estimated_spend += trade.total
+        request.decision = decision | {"replenishment_accounted": True}
+        state.procurement_id = None
+        self.session.commit()
+        logger.info(
+            "Closed purchase accounted; custody recovery retained: kit=%s trade=%s",
+            state.sku,
+            trade.id,
+        )
+        return True
 
     async def _can_use_verified_stock(
         self, state, snapshot, offer_cache, *, quantity, deadline, revenue, priority

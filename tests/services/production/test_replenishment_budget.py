@@ -8,9 +8,13 @@ from app.models import (
     BillingSyncState,
     InvoiceSide,
     MarketOffer,
+    MarketRole,
+    MarketTrade,
+    ProcurementRequest,
     ReplenishmentState,
 )
 from app.services.billing.metrics import BusinessMetricsService
+from app.services.production.replenishment import E3ReplenishmentService
 from app.services.production.replenishment_budget import spending_room
 from tests.services.test_procurement_planning import product
 from tests.support.billing import make_invoice, make_period
@@ -56,6 +60,76 @@ def test_full_past_and_pending_costs_reduce_period_budget(db_session):
     assert amount == 45
     assert detail["period_spent"] == "30"
     assert detail["pending_outlay"] == "25"
+
+
+@pytest.mark.parametrize("proof", ["missing", "open", "closed"])
+def test_closed_custody_purchase_is_charged_once_without_releasing_budget(
+    db_session, proof
+):
+    period = setup(db_session)
+    state = db_session.scalar(select(ReplenishmentState))
+    offer = db_session.scalar(select(MarketOffer))
+    offer.external_offer_id = "a" * 24
+    offer.status = "closed" if proof == "closed" else "open"
+    request = ProcurementRequest(
+        period_id=period.id,
+        request_key="replenish:old-purchase",
+        demand={},
+        status="custody_pending",
+        market_offer_id=offer.id,
+    )
+    db_session.add(request)
+    db_session.flush()
+    state.procurement_id = request.id
+    if proof != "missing":
+        db_session.add(
+            MarketTrade(
+                period_id=period.id,
+                external_offer_id=offer.external_offer_id,
+                external_order_id="b" * 24,
+                role=MarketRole.BUYER,
+                counterparty_id="5",
+                sku=offer.sku,
+                quantity=offer.quantity,
+                unit_price=offer.unit_price,
+                closed_at=datetime.now(UTC),
+            )
+        )
+    db_session.commit()
+    service = E3ReplenishmentService(
+        None, None, None, None, db_session, period, settings=make_settings()
+    )
+    assert room(db_session, period)[0] == 45
+    assert service._account_confirmed_custody_purchase(state, request) == (
+        proof == "closed"
+    )
+    assert room(db_session, period)[0] == 45
+    if proof == "closed":
+        assert state.estimated_spend == 45
+        assert state.procurement_id is None
+        assert request.status == "custody_pending"
+        assert offer.reconciled_at is None
+        # Reconciliation may finish later; past cost still cannot disappear.
+        offer.reconciled_at = datetime.now(UTC)
+        db_session.commit()
+        assert room(db_session, period)[0] == 45
+        assert service._account_confirmed_custody_purchase(state, request)
+        assert state.estimated_spend == 45
+        shared = ProcurementRequest(
+            period_id=period.id,
+            request_key="replenish:shared-purchase",
+            demand={},
+            status="custody_pending",
+            market_offer_id=offer.id,
+        )
+        db_session.add(shared)
+        db_session.commit()
+        assert service._account_confirmed_custody_purchase(state, shared)
+        assert state.estimated_spend == 45
+        assert room(db_session, period)[0] == 45
+    else:
+        assert state.estimated_spend == 30
+        assert state.procurement_id == request.id
 
 
 def test_replacement_preview_releases_only_the_known_open_bid(db_session):

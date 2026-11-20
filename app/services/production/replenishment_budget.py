@@ -7,6 +7,7 @@ from sqlalchemy import and_, or_, select
 from app.models import (
     MarketOffer,
     MarketOfferSide,
+    ProcurementRequest,
     ReplenishmentState,
 )
 from app.services.billing.metrics import BusinessMetricsService
@@ -44,6 +45,17 @@ def spending_room(
     for offer in session.scalars(
         select(MarketOffer).where(
             MarketOffer.period_id == period.id,
+            # A confirmed closed purchase may have been charged to its
+            # replenishment state while its unit trace is still recovering.
+            MarketOffer.id.not_in(
+                select(ProcurementRequest.market_offer_id).where(
+                    ProcurementRequest.period_id == period.id,
+                    ProcurementRequest.market_offer_id.is_not(None),
+                    ProcurementRequest.decision["replenishment_accounted"]
+                    .as_boolean()
+                    .is_(True),
+                )
+            ),
             MarketOffer.reconciled_at.is_(None),
             MarketOffer.status.not_in(["cancelled", "expired", "failed"]),
             or_(
