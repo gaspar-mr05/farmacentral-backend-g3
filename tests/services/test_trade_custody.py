@@ -27,6 +27,7 @@ from app.models import (
 from app.schemas.purchase_orders import PurchaseOrder
 from app.schemas.trades import TradeOffer, TradeOfferCreate
 from app.schemas.units import UnitData
+from app.services.inventory.sync import EntityChanges, InventorySyncResult
 from app.services.traceability import TraceabilityService
 from app.services.trades import TradeCustodyService
 from app.services.trades.custody import InvalidTradeStateError
@@ -499,6 +500,75 @@ async def test_actual_transfer_ids_supersede_unconfirmed_selection(db_session):
     assert {event.unit_id for event in events} == {unit.id for unit in units[2:]}
     assert all(unit.status == "available" for unit in units[:2])
     assert all(unit.status == "dispatched" for unit in units[2:])
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_buyer_receipts_allow_narrow_clock_skew_without_selecting_a_subset(
+    db_session, ambiguous
+):
+    quantity = 5 if ambiguous else 4
+    period, _, dispatch, units = add_market_stock(db_session, quantity=quantity)
+    closed_at = datetime.now(UTC)
+    offer = MarketOffer(
+        period_id=period.id,
+        external_offer_id="c" * 24,
+        external_order_id="d" * 24,
+        side="sell",
+        publisher_group_id=5,
+        counterparty_group_id=period.group_id,
+        sku=units[0].lot.product.sku,
+        quantity=4,
+        unit_price=2,
+        status="closed",
+        opened_at=closed_at - timedelta(minutes=1),
+        expires_at=closed_at + timedelta(minutes=1),
+    )
+    trade = MarketTrade(
+        period_id=period.id,
+        external_offer_id=offer.external_offer_id,
+        external_order_id=offer.external_order_id,
+        role=MarketRole.BUYER,
+        counterparty_id="5",
+        sku=offer.sku,
+        quantity=offer.quantity,
+        unit_price=offer.unit_price,
+        closed_at=closed_at,
+    )
+    db_session.add_all([offer, trade])
+    db_session.flush()
+    for index, unit in enumerate(units):
+        db_session.add(
+            CustodyEvent(
+                unit_id=unit.id,
+                event_type=CustodyEventType.RECEIVED,
+                from_location_id=None,
+                to_location_id=dispatch.id,
+                occurred_at=closed_at
+                + timedelta(milliseconds=-500 if index == 0 else 100),
+            )
+        )
+    db_session.commit()
+    service = make_service(
+        db_session,
+        farma_central=FarmaCentralStub(dispatch.code),
+        trades=TradesStub(RuntimeError()),
+        period=period,
+    )
+    sync = InventorySyncResult(
+        products=EntityChanges(),
+        locations=EntityChanges(),
+        lots=EntityChanges(),
+        units=EntityChanges(),
+        inventory_complete=True,
+    )
+
+    recorded = service.record_synchronized_trade_units(trade, sync)
+
+    assert recorded is (not ambiguous)
+    linked = db_session.scalars(
+        select(CustodyEvent).where(CustodyEvent.market_trade_id == trade.id)
+    ).all()
+    assert len(linked) == (4 if not ambiguous else 0)
 
 
 @pytest.mark.anyio

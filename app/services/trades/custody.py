@@ -40,6 +40,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Farma Central can expose received units a few milliseconds before the market
+# service publishes its closure timestamp. Keep the allowance deliberately
+# narrow; _unlinked_receipt_ids still requires the complete candidate set to
+# equal the official trade quantity and never chooses an arbitrary subset.
+RECEIPT_CLOCK_SKEW = timedelta(seconds=1)
+
 
 class InvalidTradeStateError(Exception):
     pass
@@ -591,7 +597,7 @@ class TradeCustodyService:
                     Product.sku == trade.sku,
                     CustodyEvent.event_type == CustodyEventType.RECEIVED,
                     CustodyEvent.market_trade_id.is_(None),
-                    CustodyEvent.occurred_at >= trade.closed_at,
+                    CustodyEvent.occurred_at >= trade.closed_at - RECEIPT_CLOCK_SKEW,
                     CustodyEvent.occurred_at < before if before else True,
                     ~linked_to_market,
                 )
