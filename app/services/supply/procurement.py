@@ -176,10 +176,11 @@ class ScarcityProcurementService:
         protected = {}
         if self.tolerant_inventory and demand.includes_committed:
             commitments = defaultdict(int)
+            commitment_deadline = demand.commitment_deadline or demand.deadline
 
             def ahead(priority, deadline):
                 return priority < demand.priority or (
-                    priority == demand.priority and deadline < demand.deadline
+                    priority == demand.priority and deadline < commitment_deadline
                 )
 
             for item in self.session.scalars(
@@ -200,7 +201,7 @@ class ScarcityProcurementService:
                 if (
                     item.sku != demand.sku
                     and (deadline is None or deadline > now)
-                    and ahead(priority, deadline or demand.deadline)
+                    and ahead(priority, deadline or commitment_deadline)
                 ):
                     commitments[item.sku] += max(
                         0, item.quantity - len(item.assigned_units)

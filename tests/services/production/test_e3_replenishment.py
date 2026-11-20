@@ -1557,6 +1557,11 @@ async def test_buffer_recovery_keeps_customer_sized_profitable_recipe(
         assert state.goal["buffer_recovery"] is True
         assert state.goal["quantity"] == 1
         assert state.goal["revenue"] == "30"
+        recovery_demand = service._procurement_demand(
+            state, state.goal, Decimal(1000), {"KIT-A": Decimal(3)}
+        )
+        assert recovery_demand.deadline > order.delivery_deadline
+        assert recovery_demand.commitment_deadline == order.delivery_deadline
 
         scheduled_deadlines = {}
 
@@ -1833,6 +1838,45 @@ async def test_shared_inputs_are_protected_for_earlier_accepted_commitments(
         assert plan.protected_stock["RAW"] == 1
         assert any(a.sku == "RAW" and a.kind == "direct" for a in plan.actions)
         assert pharmacy.posts == []
+
+
+@pytest.mark.anyio
+async def test_recovery_horizon_does_not_protect_later_orders_ahead_of_customer(
+    migration_database,
+):
+    run_migration(migration_database, "upgrade", "head")
+    pharmacy = Pharmacy()
+    pharmacy.catalog["KIT-B"] = product("KIT-B", components=[("RAW", 1)])
+    pharmacy.receive("RAW", 1, store="STORE")
+    now = datetime.now(UTC)
+    with Session(migration_database, expire_on_commit=False) as session:
+        service = setup(session, pharmacy)
+        session.add(
+            make_external_order(
+                items=[OrderItem(sku="KIT-A", quantity=1, unit_price=10)],
+                delivery_deadline=now + timedelta(hours=3),
+            )
+        )
+        session.commit()
+        await InventorySyncService(pharmacy, session).synchronize(
+            tolerate_changes=True
+        )
+
+        plan = await service.sourcing.preview(
+            ProcurementDemand(
+                sku="KIT-B",
+                quantity=1,
+                expected_revenue=10,
+                deadline=now + timedelta(hours=6),
+                commitment_deadline=now + timedelta(hours=2),
+                includes_committed=True,
+                priority=1,
+            )
+        )
+
+        assert plan.status == "produce"
+        assert plan.actions == []
+        assert plan.protected_stock.get("RAW", 0) == 0
 
 
 @pytest.mark.anyio

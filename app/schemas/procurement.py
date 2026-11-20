@@ -10,6 +10,10 @@ class ProcurementDemand(BaseModel):
     priority: int = Field(default=2, ge=0, le=2)
     buffer: int = Field(default=0, ge=0, le=200, strict=True)
     deadline: AwareDatetime
+    # A recovery plan may need a longer technical horizon than the customer's
+    # promise. Keep the real promise separately so shared inputs are protected
+    # by customer priority, not by the extended manufacturing horizon.
+    commitment_deadline: AwareDatetime | None = None
     expected_revenue: Decimal = Field(gt=0, allow_inf_nan=False)
     # Include incurred/committed costs not represented by the new acquisition plan.
     other_costs: Decimal = Field(default=Decimal(0), ge=0, allow_inf_nan=False)

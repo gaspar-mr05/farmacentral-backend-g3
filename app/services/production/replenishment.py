@@ -1145,6 +1145,7 @@ class E3ReplenishmentService:
 
     def _procurement_demand(self, state, goal, room, prices):
         priority = goal.get("priority", 2)
+        recovery_for = goal.get("buffer_recovery_for") or {}
         loss_limit = (
             self.settings.replenishment_order_loss_limit if priority < 2 else Decimal(0)
         )
@@ -1156,6 +1157,7 @@ class E3ReplenishmentService:
             sku=state.sku,
             quantity=goal["quantity"],
             deadline=goal["deadline"],
+            commitment_deadline=recovery_for.get("deadline"),
             expected_revenue=goal["revenue"],
             # This quote describes the remaining recipe, not its historical
             # purchases. Owned inputs already carry their consumption cost in
