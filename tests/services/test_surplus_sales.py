@@ -709,22 +709,36 @@ async def test_near_expiry_units_are_excluded_from_the_reserved_offer(
 
 
 @pytest.mark.anyio
-async def test_producer_lock_defers_sales_without_moving_stock(db_session, monkeypatch):
-    from contextlib import contextmanager
+async def test_market_cycle_does_not_hold_or_wait_for_packaging_lock(
+    db_session, monkeypatch
+):
+    from sqlalchemy.orm import Session
 
-    from app.services.production.locking import ProductionBusyError
+    from app.services.production.locking import production_lock
 
     service, units, _, _ = setup_sales(db_session, monkeypatch)
 
-    @contextmanager
-    def occupied(_session):
-        raise ProductionBusyError()
-        yield
+    with Session(db_session.get_bind()) as producer, production_lock(producer):
+        result = await service.cycle(execute=True)
 
-    monkeypatch.setattr("app.services.trades.surplus.production_lock", occupied)
-    result = await service.cycle(execute=True)
+    assert result["published"] == 1
+    service.trades.create_offer.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_concurrent_market_cycle_is_still_serialized(db_session, monkeypatch):
+    from sqlalchemy.orm import Session
+
+    from app.db.operation_locks import operation_lock
+
+    service, _, _, _ = setup_sales(db_session, monkeypatch)
+    key = f"surplus-cycle:{service.period.id}"
+
+    with Session(db_session.get_bind()) as other, operation_lock(other, key):
+        result = await service.cycle(execute=True)
+
     assert result["deferred"] == 1
-    service.inventory.move_product.assert_not_awaited()
+    assert result["reason"] == "Another surplus cycle is already running"
     service.trades.create_offer.assert_not_awaited()
 
 

@@ -12,6 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.clients.farma_central import FarmaCentralHTTPError
 from app.clients.trades import TradesHTTPError
+from app.db.operation_locks import operation_lock
 from app.models import (
     CustodyEvent,
     Invoice,
@@ -39,7 +40,6 @@ from app.schemas.surplus import SurplusPolicy, SurplusQuote
 from app.schemas.trades import TradeOfferCreate
 from app.services.inventory.movements import ProductMovementService
 from app.services.inventory.sync import InventorySyncService
-from app.services.production.locking import ProductionBusyError, production_lock
 from app.services.production.replenishment_budget import spending_room
 from app.services.supply.planning import direct_allowed
 from app.services.supply.requests import (
@@ -60,6 +60,10 @@ from .surplus_planning import (
 STRATEGY = "surplus"
 TERMINAL = {"cancelled", "expired", "closed", "failed"}
 PARTIAL_RECEIPT_GRACE = timedelta(minutes=2)
+
+
+class SurplusCycleBusy(Exception):
+    """Another worker already owns this market maintenance cycle."""
 
 
 class SurplusSalesService:
@@ -713,8 +717,17 @@ class SurplusSalesService:
                     "reason": "Market rate/auth cooldown",
                     "participation": self.participation(),
                 }
-            pending_custody = await self._refresh_managed()
-            with production_lock(self.session):
+            # Market reconciliation and publication can spend minutes waiting
+            # on remote APIs. Serialize those cycles with their own lock so
+            # they never reserve the shared packaging line while doing no
+            # manufacturing. Unit row locks and reservation guards still
+            # arbitrate any stock race with the producer.
+            with operation_lock(
+                self.session, f"surplus-cycle:{self.period.id}"
+            ) as acquired:
+                if not acquired:
+                    raise SurplusCycleBusy
+                pending_custody = await self._refresh_managed()
                 if self._production_recovery_pending(datetime.now(UTC)):
                     return result | {
                         "deferred": 1,
@@ -941,7 +954,7 @@ class SurplusSalesService:
                             self.session.commit()
                         result["failed"] += 1
                     break
-        except ProductionBusyError:
+        except SurplusCycleBusy:
             result["deferred"] += 1
-            result["reason"] = "Producer currently holds the packaging lock"
+            result["reason"] = "Another surplus cycle is already running"
         return result | {"participation": self.participation()}
